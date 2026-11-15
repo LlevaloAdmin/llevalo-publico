@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Bike, MapPin, ArrowRight, User, Eye, EyeOff, Clock, Send, Power, Star, Moon, Sun, DollarSign, XCircle, Navigation } from 'lucide-react';
+import { Bike, MapPin, ArrowRight, User, Eye, EyeOff, Clock, Send, Power, Star, Moon, Sun, DollarSign, XCircle, Navigation, CheckCircle2, Circle } from 'lucide-react';
 import MapaMapbox from './MapaMapbox';
 
 interface PedidoReal {
@@ -84,7 +84,7 @@ export default function App() {
   const [nombre, setNombre] = useState('');
   const [email, setEmail] = useState('');
   const [telefono, setTelefono] = useState('');
-  const [cedula, setCedula] = useState('');
+  const [cedulaNumero, setCedulaNumero] = useState(''); // Solo los dígitos de la cédula
   const [fotoLocal, setFotoLocal] = useState('');
   const [fotoVehiculoLocal, setFotoVehiculoLocal] = useState('');
   const [tipoVehiculo, setTipoVehiculo] = useState('Moto Suzuki GN 125');
@@ -92,8 +92,15 @@ export default function App() {
   const [password, setPassword] = useState('');
   const [mostrarPassword, setMostrarPassword] = useState(false);
 
-  const [errorCedula, setErrorCedula] = useState('');
   const [errorPlaca, setErrorPlaca] = useState('');
+
+  // Validadores de contraseña en tiempo real
+  const tieneMinLength = password.length >= 8;
+  const tieneMayuscula = /[A-Z]/.test(password);
+  const tieneMinuscula = /[a-z]/.test(password);
+  const tieneNumero = /\d/.test(password);
+  const tieneSigno = /[^A-Za-z0-9]/.test(password);
+  const passwordCompleta = tieneMinLength && tieneMayuscula && tieneMinuscula && tieneNumero && tieneSigno;
 
   const [descripcionPedido, setDescripcionPedido] = useState('');
   const [enviandoPedido, setEnviandoPedido] = useState(false);
@@ -154,7 +161,10 @@ export default function App() {
         if (parsed && parsed.id) {
           setUsuario(parsed);
           if (parsed.foto) setFotoLocal(parsed.foto);
-          if (parsed.cedula) setCedula(parsed.cedula);
+          if (parsed.cedula) {
+            const numLimpias = parsed.cedula.replace(/^[VvEe]-/, '');
+            setCedulaNumero(numLimpias);
+          }
           if (parsed.vehiculo) setTipoVehiculo(parsed.vehiculo);
           if (parsed.placa) setPlacaVehiculo(parsed.placa);
           if (parsed.vehiculo_foto) setFotoVehiculoLocal(parsed.vehiculo_foto);
@@ -250,16 +260,6 @@ export default function App() {
       img.src = event.target?.result as string;
     };
     reader.readAsDataURL(file);
-  };
-
-  const validarCedulaFormato = (val: string) => {
-    setCedula(val);
-    const regex = /^[VvEe]-\d{6,8}$/;
-    if (val && !regex.test(val.trim())) {
-      setErrorCedula('Formato inválido. Usa ej: V-28123456');
-    } else {
-      setErrorCedula('');
-    }
   };
 
   const validarPlacaFormato = (val: string) => {
@@ -463,17 +463,23 @@ export default function App() {
 
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (errorCedula || errorPlaca) {
-      alert('Por favor corrige los errores en cédula o placa antes de continuar.');
+    if (authMode === 'register' && !passwordCompleta) {
+      alert('Por favor cumple con todos los requisitos de seguridad para la contraseña.');
+      return;
+    }
+    if (errorPlaca) {
+      alert('Por favor corrige los errores en la placa antes de continuar.');
       return;
     }
     setErrorAuth('');
+
+    const cedulaCompleta = `V-${cedulaNumero.trim()}`;
 
     const payload = authMode === 'login' 
       ? { email, password }
       : { 
           nombre, email, telefono, 
-          cedula: cedula || 'V-00000000', foto: fotoLocal, 
+          cedula: cedulaNumero ? cedulaCompleta : 'V-00000000', foto: fotoLocal, 
           vehiculo: tipoVehiculo, placa: placaVehiculo || 'ABC-123', 
           vehiculo_foto: fotoVehiculoLocal, calificacion: 4.9,
           password, rol: authRoleSelection 
@@ -502,7 +508,8 @@ export default function App() {
   const guardarPerfil = (e: React.FormEvent) => {
     e.preventDefault();
     if (!usuario) return;
-    const actualizado = { ...usuario, cedula, foto: fotoLocal, vehiculo: tipoVehiculo, placa: placaVehiculo, vehiculo_foto: fotoVehiculoLocal };
+    const cedulaCompleta = `V-${cedulaNumero.trim()}`;
+    const actualizado = { ...usuario, cedula: cedulaCompleta, foto: fotoLocal, vehiculo: tipoVehiculo, placa: placaVehiculo, vehiculo_foto: fotoVehiculoLocal };
     setUsuario(actualizado);
     localStorage.setItem('llevalo_usuario', JSON.stringify(actualizado));
     alert('✓ Perfil actualizado con éxito');
@@ -650,8 +657,12 @@ export default function App() {
                     </div>
                     <div>
                       <label className={`text-xs font-bold ${darkMode ? 'text-slate-300' : 'text-slate-700'}`}>Cédula de Identidad</label>
-                      <input type="text" required value={cedula} onChange={e => validarCedulaFormato(e.target.value)} placeholder="Ej. V-28123456" className={`w-full border rounded-xl px-4 py-2 text-sm mt-1 ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
-                      {errorCedula && <p className="text-[10px] text-red-600 font-bold mt-1">{errorCedula}</p>}
+                      <div className="flex mt-1">
+                        <span className={`inline-flex items-center px-3 rounded-l-xl border border-r-0 text-xs font-bold ${darkMode ? 'bg-slate-800 border-slate-700 text-slate-300' : 'bg-orange-100 border-orange-200 text-[#FF5722]'}`}>
+                          V-
+                        </span>
+                        <input type="text" required value={cedulaNumero} onChange={e => setCedulaNumero(e.target.value.replace(/\D/g, ''))} placeholder="28123456" maxLength={8} className={`w-full border rounded-r-xl px-4 py-2 text-sm ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
+                      </div>
                     </div>
                   </>
                 )}
@@ -669,9 +680,35 @@ export default function App() {
                       {mostrarPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                     </button>
                   </div>
+                  
+                  {authMode === 'register' && (
+                    <div className="mt-2.5 p-2.5 rounded-xl border space-y-1.5 text-[11px] bg-slate-50 dark:bg-slate-950 border-slate-200 dark:border-slate-800">
+                      <p className="font-bold text-slate-500 mb-1">Requisitos de seguridad:</p>
+                      <div className={`flex items-center space-x-1.5 ${tieneMinLength ? 'text-emerald-600 dark:text-emerald-400 font-bold' : 'text-slate-400'}`}>
+                        {tieneMinLength ? <CheckCircle2 size={13} /> : <Circle size={13} />}
+                        <span>Mínimo 8 caracteres</span>
+                      </div>
+                      <div className={`flex items-center space-x-1.5 ${tieneMayuscula ? 'text-emerald-600 dark:text-emerald-400 font-bold' : 'text-slate-400'}`}>
+                        {tieneMayuscula ? <CheckCircle2 size={13} /> : <Circle size={13} />}
+                        <span>Al menos una letra mayúscula (A-Z)</span>
+                      </div>
+                      <div className={`flex items-center space-x-1.5 ${tieneMinuscula ? 'text-emerald-600 dark:text-emerald-400 font-bold' : 'text-slate-400'}`}>
+                        {tieneMinuscula ? <CheckCircle2 size={13} /> : <Circle size={13} />}
+                        <span>Al menos una letra minúscula (a-z)</span>
+                      </div>
+                      <div className={`flex items-center space-x-1.5 ${tieneNumero ? 'text-emerald-600 dark:text-emerald-400 font-bold' : 'text-slate-400'}`}>
+                        {tieneNumero ? <CheckCircle2 size={13} /> : <Circle size={13} />}
+                        <span>Al menos un número (0-9)</span>
+                      </div>
+                      <div className={`flex items-center space-x-1.5 ${tieneSigno ? 'text-emerald-600 dark:text-emerald-400 font-bold' : 'text-slate-400'}`}>
+                        {tieneSigno ? <CheckCircle2 size={13} /> : <Circle size={13} />}
+                        <span>Al menos un signo o carácter especial (!@#$...)</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
-                <button type="submit" className="w-full bg-[#FF5722] hover:bg-[#F4511E] text-white font-bold py-3 rounded-2xl transition shadow-md cursor-pointer mt-2">
+                <button type="submit" disabled={authMode === 'register' && !passwordCompleta} className={`w-full font-bold py-3 rounded-2xl transition shadow-md cursor-pointer mt-2 ${authMode === 'register' && !passwordCompleta ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-[#FF5722] hover:bg-[#F4511E] text-white'}`}>
                   {authMode === 'login' ? 'Iniciar Sesión' : 'Registrarse'}
                 </button>
               </form>
@@ -1019,8 +1056,12 @@ export default function App() {
               <form onSubmit={guardarPerfil} className="space-y-4">
                 <div>
                   <label className="text-xs font-bold">Cédula</label>
-                  <input type="text" value={cedula} onChange={e => validarCedulaFormato(e.target.value)} className={`w-full border rounded-xl px-3 py-2 text-xs mt-1 ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
-                  {errorCedula && <p className="text-[10px] text-red-600 font-bold mt-1">{errorCedula}</p>}
+                  <div className="flex mt-1">
+                    <span className={`inline-flex items-center px-3 rounded-l-xl border border-r-0 text-xs font-bold ${darkMode ? 'bg-slate-800 border-slate-700 text-slate-300' : 'bg-orange-100 border-orange-200 text-[#FF5722]'}`}>
+                      V-
+                    </span>
+                    <input type="text" value={cedulaNumero} onChange={e => setCedulaNumero(e.target.value.replace(/\D/g, ''))} maxLength={8} className={`w-full border rounded-r-xl px-3 py-2 text-xs ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
+                  </div>
                 </div>
 
                 {usuario.rol === 'repartidor' && (
