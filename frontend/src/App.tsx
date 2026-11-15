@@ -446,7 +446,7 @@ export default function App() {
       await fetch(`${API_URL}/api/pedidos/${pedidoId}/estado`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nuevo_estado })
+        body: JSON.stringify({ nuevoEstado })
       });
       if (nuevoEstado === 'completado') {
         setCoordsOrigen(null); setCoordsDestino(null);
