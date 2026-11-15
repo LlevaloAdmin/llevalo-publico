@@ -31,10 +31,11 @@ const initTables = async () => {
         tiempo_min INTEGER NOT NULL,
         tarifa NUMERIC(10, 2) NOT NULL,
         estado VARCHAR(30) DEFAULT 'pendiente',
+        repartidor_lat DOUBLE PRECISION,
+        repartidor_lon DOUBLE PRECISION,
         creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
 
-      -- Autoparches absolutos para la tabla pedidos
       ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS cliente_cedula VARCHAR(30);
       ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS cliente_foto TEXT;
       ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS repartidor_id INTEGER;
@@ -44,6 +45,8 @@ const initTables = async () => {
       ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS repartidor_foto TEXT;
       ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS repartidor_vehiculo_foto TEXT;
       ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS repartidor_calificacion NUMERIC(3,2) DEFAULT 5.0;
+      ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS repartidor_lat DOUBLE PRECISION;
+      ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS repartidor_lon DOUBLE PRECISION;
 
       CREATE TABLE IF NOT EXISTS postulaciones (
         id SERIAL PRIMARY KEY,
@@ -58,7 +61,6 @@ const initTables = async () => {
         creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
 
-      -- Autoparches para la tabla postulaciones
       ALTER TABLE postulaciones ADD COLUMN IF NOT EXISTS placa VARCHAR(30);
       ALTER TABLE postulaciones ADD COLUMN IF NOT EXISTS vehiculo_foto TEXT;
       ALTER TABLE postulaciones ADD COLUMN IF NOT EXISTS calificacion NUMERIC(3,2) DEFAULT 5.0;
@@ -93,26 +95,15 @@ router.post('/', async (req: Request, res: Response): Promise<any> => {
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'pendiente')
       RETURNING *`,
       [
-        cliente_id, 
-        cliente_nombre || 'Cliente', 
-        cliente_cedula || 'V-00000000', 
-        cliente_foto || '', 
-        tipo_servicio || 'comida', 
-        descripcion || 'Servicio estándar', 
-        origen_texto || 'Origen', 
-        Number(origen_lat) || 10.2291, 
-        Number(origen_lon) || -68.0055, 
-        destino_texto || 'Destino', 
-        Number(destino_lat) || 10.2491, 
-        Number(destino_lon) || -68.0255, 
-        Number(distancia_km) || 3.5, 
-        Number(tiempo_min) || 10, 
-        Number(tarifa) || 3.50
+        cliente_id, cliente_nombre || 'Cliente', cliente_cedula || 'V-00000000', cliente_foto || '',
+        tipo_servicio || 'comida', descripcion || 'Servicio estándar', origen_texto || 'Origen',
+        Number(origen_lat) || 10.2291, Number(origen_lon) || -68.0055,
+        destino_texto || 'Destino', Number(destino_lat) || 10.2491, Number(destino_lon) || -68.0255,
+        Number(distancia_km) || 3.5, Number(tiempo_min) || 10, Number(tarifa) || 3.50
       ]
     );
     res.status(201).json({ mensaje: 'Pedido publicado', pedido: result.rows[0] });
   } catch (error: any) {
-    console.error("❌ ERROR REAL AL CREAR PEDIDO EN BACKEND:", error.message || error);
     res.status(500).json({ error: error.message || 'Error en servidor' });
   }
 });
@@ -147,8 +138,22 @@ router.post('/:id/postular', async (req: Request, res: Response): Promise<any> =
     await pool.query("UPDATE pedidos SET estado = 'postulado' WHERE id = $1 AND estado = 'pendiente'", [id]);
     res.json({ mensaje: 'Postulación enviada', postulacion: nueva.rows[0] });
   } catch (error: any) {
-    console.error("❌ ERROR AL POSTULARSE:", error.message);
     res.status(500).json({ error: 'Error al postularse' });
+  }
+});
+
+// Cancelar postulación individual del repartidor
+router.delete('/:id/postular/:repartidor_id', async (req: Request, res: Response): Promise<any> => {
+  const { id, repartidor_id } = req.params;
+  try {
+    await pool.query("DELETE FROM postulaciones WHERE pedido_id = $1 AND repartidor_id = $2", [id, repartidor_id]);
+    const restantes = await pool.query("SELECT * FROM postulaciones WHERE pedido_id = $1", [id]);
+    if (restantes.rows.length === 0) {
+      await pool.query("UPDATE pedidos SET estado = 'pendiente' WHERE id = $1 AND estado = 'postulado'", [id]);
+    }
+    res.json({ mensaje: 'Postulación cancelada' });
+  } catch (error: any) {
+    res.status(500).json({ error: 'Error al cancelar postulación' });
   }
 });
 
@@ -169,8 +174,19 @@ router.put('/:id/aceptar-postulacion', async (req: Request, res: Response): Prom
 
     res.json({ mensaje: 'Repartidor seleccionado', pedido: pedidoActualizado.rows[0] });
   } catch (error: any) {
-    console.error("❌ ERROR AL ACEPTAR POSTULACIÓN:", error.message);
     res.status(500).json({ error: 'Error al aceptar' });
+  }
+});
+
+// Actualizar ubicación GPS en tiempo real del repartidor
+router.put('/:id/ubicacion-repartidor', async (req: Request, res: Response): Promise<any> => {
+  const { id } = req.params;
+  const { lat, lon } = req.body;
+  try {
+    await pool.query("UPDATE pedidos SET repartidor_lat = $1, repartidor_lon = $2 WHERE id = $3", [lat, lon, id]);
+    res.json({ mensaje: 'Ubicación actualizada' });
+  } catch (error) {
+    res.status(500).json({ error: 'Error al actualizar ubicación' });
   }
 });
 
@@ -192,45 +208,15 @@ router.post('/:id/chat', async (req: Request, res: Response): Promise<any> => {
 
 router.put('/:id/estado', async (req: Request, res: Response): Promise<any> => {
   const { id } = req.params;
-  const { nuevo_estado, rol_usuario } = req.body;
+  const { nuevo_estado } = req.body;
 
   try {
-    // Obtenemos el pedido actual
-    const pedidoActual = await pool.query("SELECT * FROM pedidos WHERE id = $1", [id]);
-    if (pedidoActual.rows.length === 0) return res.status(404).json({ error: 'Pedido no encontrado' });
-    
-    let p = pedidoActual.rows[0];
-    let estadoFinal = p.estado;
-
-    if (nuevo_estado === 'completar_solicitado') {
-      if (rol_usuario === 'repartidor') {
-        await pool.query("UPDATE pedidos SET repartidor_quiere_finalizar = TRUE WHERE id = $1", [id]);
-      } else {
-        await pool.query("UPDATE pedidos SET cliente_quiere_finalizar = TRUE WHERE id = $1", [id]);
-      }
-      
-      // Verificamos si ambos ya querían finalizar
-      const actualizado = await pool.query("SELECT * FROM pedidos WHERE id = $1", [id]);
-      p = actualizado.rows[0];
-      
-      if (p.repartidor_quiere_finalizar && p.cliente_quiere_finalizar) {
-        estadoFinal = 'completado';
-        await pool.query("UPDATE pedidos SET estado = 'completado' WHERE id = $1", [id]);
-      } else {
-        estadoFinal = 'esperando_confirmacion_mutua';
-        await pool.query("UPDATE pedidos SET estado = 'esperando_confirmacion_mutua' WHERE id = $1", [id]);
-      }
-    } else {
-      estadoFinal = nuevo_estado;
-      await pool.query("UPDATE pedidos SET estado = $1 WHERE id = $2", [nuevo_estado, id]);
-    }
-
+    await pool.query("UPDATE pedidos SET estado = $1 WHERE id = $2", [nuevo_estado, id]);
     const resultadoFinal = await pool.query("SELECT * FROM pedidos WHERE id = $1", [id]);
     res.json({ mensaje: `Estado actualizado`, pedido: resultadoFinal.rows[0] });
   } catch (error: any) {
     res.status(500).json({ error: 'Error al actualizar estado' });
   }
 });
-
 
 export default router;
