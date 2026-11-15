@@ -6,23 +6,10 @@ import { pool } from '../db';
 
 const router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'llevalo_clave_secreta_2026';
-const codigosSMS: Record<string, string> = {};
 
-// Enviar SMS simulado
-router.post('/enviar-sms', async (req: Request, res: Response): Promise<any> => {
-  const { telefono } = req.body;
-  if (!telefono || telefono.length < 10) {
-    return res.status(400).json({ error: 'Ingresa un número de teléfono válido.' });
-  }
-  const codigo = Math.floor(100000 + Math.random() * 900000).toString();
-  codigosSMS[telefono] = codigo;
-  console.log(`📲 [SMS Llévalo] Código para ${telefono}: ${codigo}`);
-  res.json({ mensaje: 'Código enviado', codigoPrueba: codigo });
-});
-
-// REGISTRO CON VALIDACIÓN ESTRICTA DE CORREO Y ROL ÚNICO
+// REGISTRO DIRECTO (Sin verificación SMS)
 router.post('/register', async (req: Request, res: Response): Promise<any> => {
-  const { nombre, email, telefono, codigoSms, password, rol } = req.body;
+  const { nombre, email, telefono, password, rol } = req.body;
 
   try {
     // 1. Validar dominio de correo real (MX)
@@ -36,15 +23,7 @@ router.post('/register', async (req: Request, res: Response): Promise<any> => {
       return res.status(400).json({ error: `El dominio "@${dominio}" no puede recibir correos.` });
     }
 
-    // 2. Validar código SMS si se proporcionó teléfono
-    if (telefono) {
-      if (!codigoSms || codigosSMS[telefono] !== codigoSms) {
-        return res.status(400).json({ error: 'Código de verificación SMS incorrecto o expirado.' });
-      }
-      delete codigosSMS[telefono];
-    }
-
-    // 3. Verificar si el correo ya existe en la base de datos
+    // 2. Verificar si el correo ya existe en la base de datos
     const userCheck = await pool.query('SELECT * FROM usuarios WHERE email = $1', [email]);
     
     if (userCheck.rows.length > 0) {
@@ -56,7 +35,7 @@ router.post('/register', async (req: Request, res: Response): Promise<any> => {
       }
     }
 
-    // 4. Crear usuario
+    // 3. Crear usuario (Hasheando la contraseña)
     const salt = await bcrypt.genSalt(10);
     const passwordHash = await bcrypt.hash(password, salt);
 
