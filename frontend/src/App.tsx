@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Bike, MapPin, ArrowRight, User, Eye, EyeOff, Clock, Send, Power, Star, CheckCircle, Moon, Sun, DollarSign, XCircle, Navigation } from 'lucide-react';
+import { Bike, MapPin, ArrowRight, User, Eye, EyeOff, Clock, Send, Power, Star, Moon, Sun, DollarSign, XCircle, Navigation } from 'lucide-react';
 import MapaMapbox from './MapaMapbox';
 
 interface PedidoReal {
@@ -372,7 +372,7 @@ export default function App() {
       await fetch(`${API_URL}/api/pedidos/${pedidoId}/estado`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nuevo_estado: 'cancelado' })
+        body: JSON.stringify({ nuevoEstado: 'cancelado' })
       });
       setCoordsOrigen(null); setCoordsDestino(null);
       setOrigenInput(''); setDestinoInput('');
@@ -439,7 +439,7 @@ export default function App() {
       await fetch(`${API_URL}/api/pedidos/${pedidoId}/estado`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nuevo_estado })
+        body: JSON.stringify({ nuevoEstado })
       });
       if (nuevoEstado === 'completado') {
         setCoordsOrigen(null); setCoordsDestino(null);
@@ -599,7 +599,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Imagen del menú principal actualizada acorde a la solicitud del cliente y referencia estilo profesional */}
             <div className="relative">
               <div className={`rounded-3xl overflow-hidden shadow-xl border p-2 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-orange-100 border-orange-200'}`}>
                 <img src="https://images.unsplash.com/photo-1568772585407-9361f9bf3a87?auto=format&fit=crop&w=1000&q=80" alt="Moto y servicio premium" className="rounded-2xl object-cover w-full h-[420px]" />
@@ -848,7 +847,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Contenedor corregido para que el mapa llene perfectamente el espacio vertical sin cortes */}
             <div className="lg:col-span-7 h-[600px] lg:h-[calc(100vh-140px)] rounded-3xl overflow-hidden border shadow-sm sticky top-20">
               <MapaMapbox
                 coordsOrigen={coordsOrigen}
@@ -890,7 +888,6 @@ export default function App() {
                   <span>{repartidorOnline ? 'Conectado (Recibiendo Pedidos)' : 'Desconectado'}</span>
                 </div>
                 
-                {/* Botón de power bloqueado si tiene trabajo activo o postulación pendiente */}
                 <button 
                   disabled={tieneTrabajoActivoOPostulacionRepartidor} 
                   onClick={() => {
@@ -979,7 +976,6 @@ export default function App() {
                 )}
               </div>
 
-              {/* Mapa expandido y manipulable en la perspectiva del repartidor al tener carrera activa */}
               <div className="lg:col-span-7 h-[600px] lg:h-[calc(100vh-140px)] rounded-3xl overflow-hidden border shadow-sm sticky top-20">
                 <MapaMapbox
                   coordsOrigen={
