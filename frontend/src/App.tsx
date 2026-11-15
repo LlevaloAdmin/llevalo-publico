@@ -166,24 +166,26 @@ export default function App() {
         (pos) => {
           const nuevaPos = { lat: pos.coords.latitude, lng: pos.coords.longitude };
           setCoordsUsuarioGPS(nuevaPos);
-
-          // Si es repartidor online con pedido asignado, actualizamos su GPS en el servidor
-          if (usuario?.rol === 'repartidor') {
-            const pedidoAsignado = pedidosReales.find(p => p.repartidor_id === usuario.id && (p.estado === 'aceptado' || p.estado === 'entregado_repartidor'));
-            if (pedidoAsignado) {
-              fetch(`${API_URL}/api/pedidos/${pedidoAsignado.id}/ubicacion-repartidor`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ lat: nuevaPos.lat, lon: nuevaPos.lng })
-              }).catch(() => {});
-            }
-          }
         },
         (err) => console.warn('GPS error:', err),
         { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
       );
     }
-  }, [usuario?.id]);
+  }, []);
+
+  // Actualizar GPS del repartidor al servidor si tiene pedido asignado
+  useEffect(() => {
+    if (usuario?.rol === 'repartidor' && coordsUsuarioGPS) {
+      const pedidoAsignado = pedidosReales.find(p => p.repartidor_id === usuario.id && (p.estado === 'aceptado' || p.estado === 'entregado_repartidor'));
+      if (pedidoAsignado) {
+        fetch(`${API_URL}/api/pedidos/${pedidoAsignado.id}/ubicacion-repartidor`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ lat: coordsUsuarioGPS.lat, lon: coordsUsuarioGPS.lng })
+        }).catch(() => {});
+      }
+    }
+  }, [coordsUsuarioGPS, pedidosReales, usuario]);
 
   const toggleDarkMode = () => {
     const nuevo = !darkMode;
@@ -684,7 +686,6 @@ export default function App() {
               <div className={`border p-6 rounded-3xl shadow-sm space-y-4 ${darkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-orange-100'}`}>
                 <div className="flex justify-between items-center">
                   <h3 className={`text-lg font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Nuevo Pedido</h3>
-                  {/* Botón de Modo Oscuro reubicado discretamente aquí */}
                   <button onClick={toggleDarkMode} title="Cambiar Tema" className={`p-2 rounded-xl border transition cursor-pointer ${darkMode ? 'bg-slate-800 border-slate-700 text-amber-400' : 'bg-orange-50 border-orange-200 text-slate-700'}`}>
                     {darkMode ? <Sun size={16} /> : <Moon size={16} />}
                   </button>
@@ -721,7 +722,6 @@ export default function App() {
                       )}
                     </div>
 
-                    {/* Postulaciones de Repartidores con opción de aceptar */}
                     {pedidoActivoCliente.estado === 'postulado' && postulacionesPedidoActual.length > 0 && (
                       <div className="space-y-3">
                         <h4 className="text-xs font-black uppercase text-slate-400 tracking-wider">Postulaciones de Repartidores</h4>
@@ -748,7 +748,6 @@ export default function App() {
                       </div>
                     )}
 
-                    {/* Chat y Estado de Repartidor Asignado en vivo */}
                     {(pedidoActivoCliente.estado === 'aceptado' || pedidoActivoCliente.estado === 'entregado_repartidor') && (
                       <div className="space-y-4 pt-2">
                         <div className={`p-4 rounded-2xl border space-y-2 ${darkMode ? 'bg-slate-950 border-slate-800' : 'bg-emerald-50/50 border-emerald-200'}`}>
@@ -771,7 +770,6 @@ export default function App() {
                           </div>
                         </div>
 
-                        {/* Chat en vivo */}
                         <div className={`border rounded-2xl p-3 space-y-2 h-44 overflow-y-auto ${darkMode ? 'bg-slate-950 border-slate-800' : 'bg-slate-50 border-slate-200'}`}>
                           <p className="text-[10px] font-black uppercase text-slate-400 tracking-wider text-center">Chat con Repartidor</p>
                           {mensajesChat.filter(m => m.pedido_id === pedidoActivoCliente.id).map(m => (
@@ -860,7 +858,7 @@ export default function App() {
               <MapaMapbox
                 coordsOrigen={coordsOrigen}
                 coordsDestino={coordsDestino}
-                coordsUsuario={coordsUsuarioGPS || pedidoActivoCliente?.repartidor_lat ? { lat: pedidoActivoCliente.repartidor_lat!, lng: pedidoActivoCliente.repartidor_lon! } : null}
+                coordsUsuario={coordsUsuarioGPS || (pedidoActivoCliente?.repartidor_lat ? { lat: pedidoActivoCliente.repartidor_lat, lng: pedidoActivoCliente.repartidor_lon! } : null)}
                 modoSeleccion={modoSeleccionMapa}
                 onMapClick={manejarClicEnMapa}
                 onRutaCalculada={(km, min) => { setDistanciaKm(km); setTiempoEstimadoMin(min); }}
@@ -894,7 +892,6 @@ export default function App() {
                 <button onClick={() => setRepartidorOnline(!repartidorOnline)} className={`p-2 rounded-xl border transition cursor-pointer ${repartidorOnline ? 'bg-red-50 text-red-600 border-red-200' : 'bg-emerald-50 text-emerald-600 border-emerald-200'}`}>
                   <Power size={18} />
                 </button>
-                {/* Botón modo oscuro para repartidor */}
                 <button onClick={toggleDarkMode} title="Cambiar Tema" className={`p-2 rounded-xl border transition cursor-pointer ${darkMode ? 'bg-slate-800 border-slate-700 text-amber-400' : 'bg-orange-50 border-orange-200 text-slate-700'}`}>
                   {darkMode ? <Sun size={18} /> : <Moon size={18} />}
                 </button>
@@ -972,7 +969,6 @@ export default function App() {
                 )}
               </div>
 
-              {/* Mapa dual de repartidor: Ruta a Punto A o Ruta a Punto B en tiempo real */}
               <div className="lg:col-span-7 h-[450px] lg:h-auto rounded-3xl overflow-hidden border shadow-sm">
                 <MapaMapbox
                   coordsOrigen={
@@ -982,8 +978,8 @@ export default function App() {
                   }
                   coordsDestino={
                     pedidoAsignadoRepartidor?.estado === 'aceptado'
-                      ? { lat: pedidoAsignadoRepartidor.origen_lat, lng: pedidoAsignadoRepartidor.origen_lon } // Ruta al Punto A
-                      : (pedidoAsignadoRepartidor?.estado === 'entregado_repartidor' ? { lat: pedidoAsignadoRepartidor.destino_lat, lng: pedidoAsignadoRepartidor.destino_lon } : null) // Ruta al Punto B una vez llegado al A
+                      ? { lat: pedidoAsignadoRepartidor.origen_lat, lng: pedidoAsignadoRepartidor.origen_lon }
+                      : (pedidoAsignadoRepartidor?.estado === 'entregado_repartidor' ? { lat: pedidoAsignadoRepartidor.destino_lat, lng: pedidoAsignadoRepartidor.destino_lon } : null)
                   }
                   coordsUsuario={coordsUsuarioGPS}
                   mostrarRuta={Boolean(pedidoAsignadoRepartidor)}
