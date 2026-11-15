@@ -129,6 +129,21 @@ export default function App() {
 
   const [segundosRestantes, setSegundosRestantes] = useState<number>(60);
 
+  // Función robusta para actualizar la Tasa BCV en tiempo real
+  const actualizarTasaBCVEnVivo = async () => {
+    try {
+      const res = await fetch('https://ve.dolarapi.com/v1/dolares/oficial');
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.promedio) {
+          setTasaBCV(Number(data.promedio));
+        }
+      }
+    } catch (e) {
+      console.warn('No se pudo actualizar tasa BCV en tiempo real, usando respaldo.');
+    }
+  };
+
   useEffect(() => {
     const dmGuardado = localStorage.getItem('llevalo_dark_mode');
     if (dmGuardado === 'true') setDarkMode(true);
@@ -150,12 +165,9 @@ export default function App() {
       }
     }
 
-    fetch('https://ve.dolarapi.com/v1/dolares/oficial')
-      .then(res => res.json())
-      .then(data => {
-        if (data && data.promedio) setTasaBCV(Number(data.promedio));
-      })
-      .catch(() => {});
+    // Consultar tasa al iniciar y cada 5 minutos en tiempo real
+    actualizarTasaBCVEnVivo();
+    const intervalTasa = setInterval(actualizarTasaBCVEnVivo, 300000);
 
     if (navigator.geolocation) {
       navigator.geolocation.watchPosition(
@@ -166,6 +178,8 @@ export default function App() {
         { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
       );
     }
+
+    return () => clearInterval(intervalTasa);
   }, []);
 
   useEffect(() => {
@@ -599,9 +613,10 @@ export default function App() {
               </div>
             </div>
 
+            {/* Imagen profesional actualizada con la foto que proporcionaste */}
             <div className="relative">
               <div className={`rounded-3xl overflow-hidden shadow-xl border p-2 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-orange-100 border-orange-200'}`}>
-                <img src="https://images.unsplash.com/photo-1568772585407-9361f9bf3a87?auto=format&fit=crop&w=1000&q=80" alt="Moto y servicio premium" className="rounded-2xl object-cover w-full h-[420px]" />
+                <img src="https://images.unsplash.com/photo-1558981806-ec527fa84c39?auto=format&fit=crop&w=1000&q=80" alt="Repartidor profesional en movimiento" className="rounded-2xl object-cover w-full h-[420px]" />
               </div>
             </div>
           </div>
