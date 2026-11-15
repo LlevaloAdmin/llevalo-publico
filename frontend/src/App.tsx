@@ -129,7 +129,6 @@ export default function App() {
 
   const [segundosRestantes, setSegundosRestantes] = useState<number>(60);
 
-  // Función robusta para actualizar la Tasa BCV en tiempo real
   const actualizarTasaBCVEnVivo = async () => {
     try {
       const res = await fetch('https://ve.dolarapi.com/v1/dolares/oficial');
@@ -165,7 +164,6 @@ export default function App() {
       }
     }
 
-    // Consultar tasa al iniciar y cada 5 minutos en tiempo real
     actualizarTasaBCVEnVivo();
     const intervalTasa = setInterval(actualizarTasaBCVEnVivo, 300000);
 
@@ -613,10 +611,10 @@ export default function App() {
               </div>
             </div>
 
-            {/* Imagen profesional actualizada con la foto que proporcionaste */}
+            {/* Imagen exacta apuntando al archivo local /hero-moto.jpg */}
             <div className="relative">
               <div className={`rounded-3xl overflow-hidden shadow-xl border p-2 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-orange-100 border-orange-200'}`}>
-                <img src="https://images.unsplash.com/photo-1558981806-ec527fa84c39?auto=format&fit=crop&w=1000&q=80" alt="Repartidor profesional en movimiento" className="rounded-2xl object-cover w-full h-[420px]" />
+                <img src="/hero-moto.jpg" alt="Repartidor de Llévalo en moto" className="rounded-2xl object-cover w-full h-[420px]" />
               </div>
             </div>
           </div>
