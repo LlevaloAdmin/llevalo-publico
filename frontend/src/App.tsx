@@ -119,7 +119,6 @@ export default function App() {
   const costoPorKm = serviceType === 'viajes' ? 0.80 : 0.50; 
   const tarifaTotal = rutaCompletaLista ? Math.max(1.5, distanciaKm * costoPorKm).toFixed(2) : '0.00';
 
-  // Tasa BCV automática desde API pública
   const [tasaBCV, setTasaBCV] = useState<number>(904.45);
   const tarifaEnBolivares = (parseFloat(tarifaTotal) * tasaBCV).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -128,7 +127,6 @@ export default function App() {
   const [mensajesChat, setMensajesChat] = useState<MensajeChat[]>([]);
   const [nuevoMensajeTexto, setNuevoMensajeTexto] = useState('');
 
-  // Cuenta regresiva de 60 segundos por pedido activo
   const [segundosRestantes, setSegundosRestantes] = useState<number>(60);
 
   useEffect(() => {
@@ -152,7 +150,6 @@ export default function App() {
       }
     }
 
-    // Obtener Tasa BCV Oficial en vivo
     fetch('https://ve.dolarapi.com/v1/dolares/oficial')
       .then(res => res.json())
       .then(data => {
@@ -160,12 +157,10 @@ export default function App() {
       })
       .catch(() => {});
 
-    // Geolocalización GPS en tiempo real
     if (navigator.geolocation) {
       navigator.geolocation.watchPosition(
         (pos) => {
-          const nuevaPos = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-          setCoordsUsuarioGPS(nuevaPos);
+          setCoordsUsuarioGPS({ lat: pos.coords.latitude, lng: pos.coords.longitude });
         },
         (err) => console.warn('GPS error:', err),
         { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
@@ -173,7 +168,6 @@ export default function App() {
     }
   }, []);
 
-  // Actualizar GPS del repartidor al servidor si tiene pedido asignado
   useEffect(() => {
     if (usuario?.rol === 'repartidor' && coordsUsuarioGPS) {
       const pedidoAsignado = pedidosReales.find(p => p.repartidor_id === usuario.id && (p.estado === 'aceptado' || p.estado === 'entregado_repartidor'));
@@ -212,7 +206,6 @@ export default function App() {
     return () => clearInterval(intervalo);
   }, [usuario]);
 
-  // Temporizador de 60 segundos para pedidos pendientes
   useEffect(() => {
     const timer = setInterval(() => {
       setSegundosRestantes(prev => (prev > 0 ? prev - 1 : 60));
@@ -446,7 +439,7 @@ export default function App() {
       await fetch(`${API_URL}/api/pedidos/${pedidoId}/estado`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nuevoEstado })
+        body: JSON.stringify({ nuevo_estado })
       });
       if (nuevoEstado === 'completado') {
         setCoordsOrigen(null); setCoordsDestino(null);
@@ -526,9 +519,10 @@ export default function App() {
     ? pedidosReales.find(p => p.repartidor_id === usuario.id && (p.estado === 'aceptado' || p.estado === 'entregado_repartidor'))
     : null;
 
-  const gananciasRepartidor = usuario?.rol === 'repartidor' && Array.isArray(pedidosReales)
-    ? pedidosReales.filter(p => p.repartidor_id === usuario.id && p.estado === 'completado').reduce((a, b) => a + parseFloat(b.tarifa), 0).toFixed(2)
-    : '0.00';
+  const tieneTrabajoActivoOPostulacionRepartidor = usuario?.rol === 'repartidor' && (
+    Boolean(pedidoAsignadoRepartidor) || 
+    postulacionesReales.some(p => p.repartidor_id === usuario.id && p.estado === 'pendiente')
+  );
 
   return (
     <div className={`min-h-screen flex flex-col font-sans transition-colors duration-300 ${darkMode ? 'bg-slate-950 text-slate-100' : 'bg-[#FDFBF7] text-slate-800'}`}>
@@ -545,7 +539,6 @@ export default function App() {
         </nav>
 
         <div className="flex items-center space-x-2 md:space-x-3">
-          {/* Tasa BCV Oficial visible siempre en móvil y PC */}
           <div className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-2xl border text-[11px] md:text-xs font-bold shadow-sm ${darkMode ? 'bg-slate-900 border-slate-800 text-slate-200' : 'bg-orange-50 border-orange-200 text-slate-700'}`}>
             <DollarSign size={13} className="text-[#FF5722]" />
             <span>BCV: <strong>Bs. {tasaBCV}</strong></span>
@@ -606,9 +599,10 @@ export default function App() {
               </div>
             </div>
 
+            {/* Imagen del menú principal actualizada acorde a la solicitud del cliente y referencia estilo profesional */}
             <div className="relative">
               <div className={`rounded-3xl overflow-hidden shadow-xl border p-2 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-orange-100 border-orange-200'}`}>
-                <img src="https://images.unsplash.com/photo-1558981806-ec527fa84c39?auto=format&fit=crop&w=900&q=80" alt="Repartidor urbano" className="rounded-2xl object-cover w-full h-[400px]" />
+                <img src="https://images.unsplash.com/photo-1568772585407-9361f9bf3a87?auto=format&fit=crop&w=1000&q=80" alt="Moto y servicio premium" className="rounded-2xl object-cover w-full h-[420px]" />
               </div>
             </div>
           </div>
@@ -681,7 +675,7 @@ export default function App() {
 
         {/* --- VISTA CLIENTE --- */}
         {activeTab === 'cliente' && usuario?.rol === 'cliente' && (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 py-4">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 py-4 items-start">
             <div className="lg:col-span-5 space-y-4">
               <div className={`border p-6 rounded-3xl shadow-sm space-y-4 ${darkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-orange-100'}`}>
                 <div className="flex justify-between items-center">
@@ -764,7 +758,7 @@ export default function App() {
                               <p className="text-[10px] text-slate-500">{pedidoActivoCliente.repartidor_vehiculo} · Placa: {pedidoActivoCliente.repartidor_placa}</p>
                               <p className="text-[10px] font-bold text-emerald-600 flex items-center space-x-1 mt-0.5">
                                 <Navigation size={11} className="animate-pulse" />
-                                <span>Repartidor en camino a tu ubicación</span>
+                                <span>{pedidoActivoCliente.tipo_servicio === 'viajes' ? 'Conductor en camino a tu ubicación' : 'Repartidor en camino a retirar'}</span>
                               </p>
                             </div>
                           </div>
@@ -854,11 +848,17 @@ export default function App() {
               </div>
             </div>
 
-            <div className="lg:col-span-7 h-[450px] lg:h-auto rounded-3xl overflow-hidden border shadow-sm">
+            {/* Contenedor corregido para que el mapa llene perfectamente el espacio vertical sin cortes */}
+            <div className="lg:col-span-7 h-[600px] lg:h-[calc(100vh-140px)] rounded-3xl overflow-hidden border shadow-sm sticky top-20">
               <MapaMapbox
                 coordsOrigen={coordsOrigen}
                 coordsDestino={coordsDestino}
-                coordsUsuario={coordsUsuarioGPS || (pedidoActivoCliente?.repartidor_lat ? { lat: pedidoActivoCliente.repartidor_lat, lng: pedidoActivoCliente.repartidor_lon! } : null)}
+                coordsUsuario={
+                  coordsUsuarioGPS || 
+                  (pedidoActivoCliente?.repartidor_lat && pedidoActivoCliente?.repartidor_lon 
+                    ? { lat: pedidoActivoCliente.repartidor_lat, lng: pedidoActivoCliente.repartidor_lon } 
+                    : null)
+                }
                 modoSeleccion={modoSeleccionMapa}
                 onMapClick={manejarClicEnMapa}
                 onRutaCalculada={(km, min) => { setDistanciaKm(km); setTiempoEstimadoMin(min); }}
@@ -889,16 +889,26 @@ export default function App() {
                   <span className={`w-2.5 h-2.5 rounded-full ${repartidorOnline ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`}></span>
                   <span>{repartidorOnline ? 'Conectado (Recibiendo Pedidos)' : 'Desconectado'}</span>
                 </div>
-                <button onClick={() => setRepartidorOnline(!repartidorOnline)} className={`p-2 rounded-xl border transition cursor-pointer ${repartidorOnline ? 'bg-red-50 text-red-600 border-red-200' : 'bg-emerald-50 text-emerald-600 border-emerald-200'}`}>
+                
+                {/* Botón de power bloqueado si tiene trabajo activo o postulación pendiente */}
+                <button 
+                  disabled={tieneTrabajoActivoOPostulacionRepartidor} 
+                  onClick={() => {
+                    if (!tieneTrabajoActivoOPostulacionRepartidor) setRepartidorOnline(!repartidorOnline);
+                  }} 
+                  title={tieneTrabajoActivoOPostulacionRepartidor ? "No puedes desconectarte con un trabajo en curso o postulación activa" : "Cambiar estatus"}
+                  className={`p-2 rounded-xl border transition cursor-pointer ${tieneTrabajoActivoOPostulacionRepartidor ? 'opacity-50 cursor-not-allowed bg-slate-200 border-slate-300 text-slate-400' : (repartidorOnline ? 'bg-red-50 text-red-600 border-red-200' : 'bg-emerald-50 text-emerald-600 border-emerald-200')}`}
+                >
                   <Power size={18} />
                 </button>
+
                 <button onClick={toggleDarkMode} title="Cambiar Tema" className={`p-2 rounded-xl border transition cursor-pointer ${darkMode ? 'bg-slate-800 border-slate-700 text-amber-400' : 'bg-orange-50 border-orange-200 text-slate-700'}`}>
                   {darkMode ? <Sun size={18} /> : <Moon size={18} />}
                 </button>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
               <div className="lg:col-span-5 space-y-4">
                 {pedidoAsignadoRepartidor ? (
                   <div className={`border p-5 rounded-3xl shadow-sm space-y-4 ${darkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-orange-100'}`}>
@@ -969,7 +979,8 @@ export default function App() {
                 )}
               </div>
 
-              <div className="lg:col-span-7 h-[450px] lg:h-auto rounded-3xl overflow-hidden border shadow-sm">
+              {/* Mapa expandido y manipulable en la perspectiva del repartidor al tener carrera activa */}
+              <div className="lg:col-span-7 h-[600px] lg:h-[calc(100vh-140px)] rounded-3xl overflow-hidden border shadow-sm sticky top-20">
                 <MapaMapbox
                   coordsOrigen={
                     pedidoAsignadoRepartidor?.estado === 'aceptado'
