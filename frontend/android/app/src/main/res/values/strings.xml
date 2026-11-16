@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Llevalo</string>
+    <string name="title_activity_main">Llevalo</string>
+    <string name="package_name">com.llevalo.app</string>
+    <string name="custom_url_scheme">com.llevalo.app</string>
+</resources>
