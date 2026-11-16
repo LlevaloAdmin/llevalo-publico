@@ -24,6 +24,7 @@
     "tailwindcss": "^4.3.5"
   },
   "devDependencies": {
+    "@capacitor/assets": "^4.0.0",
     "@types/mapbox-gl": "^3.4.1",
     "@types/node": "^24.19.2",
     "@types/react": "^19.3.0",
