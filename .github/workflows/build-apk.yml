@@ -1,4 +1,4 @@
-name: Generar APK de Llévalo
+name: Generar APK y Subir a Drive
 
 on:
   push:
@@ -41,8 +41,57 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug
 
-      - name: Subir APK generado
-        uses: actions/upload-artifact@v4
+      - name: Configurar Python para subida a Drive
+        uses: actions/setup-python@v5
         with:
-          name: app-llevalo-debug
-          path: frontend/android/app/build/outputs/apk/debug/app-debug.apk
+            python-version: '3.10'
+
+      - name: Instalar librerías de Google Drive
+        run: pip install google-api-python-client google-auth
+
+      - name: Subir APK automáticamente a Google Drive con autonumeración
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+        run: |
+          python - <<'EOF'
+          import os
+          import json
+          import re
+          from google.oauth2 import service_account
+          from googleapiclient.discovery import build
+          from googleapiclient.http import MediaFileUpload
+
+          service_account_info = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
+          folder_id = os.environ["GOOGLE_DRIVE_FOLDER_ID"]
+
+          SCOPES = ['https://www.googleapis.com/auth/drive']
+          creds = service_account.Credentials.from_service_account_info(service_account_info, scopes=SCOPES)
+          service = build('drive', 'v3', credentials=creds)
+
+          query = f"'{folder_id}' in parents and trashed = false"
+          results = service.files().list(q=query, spaces='drive', fields="files(id, name)").execute()
+          files = results.get('files', [])
+
+          max_num = 0
+          for file in files:
+              match = re.search(r'llevalo-beta-(\d+)', file['name'])
+              if match:
+                  num = int(match.group(1))
+                  if num > max_num:
+                      max_num = num
+
+          next_num = max_num + 1
+          new_file_name = f"llevalo-beta-{next_num}.apk"
+
+          apk_path = 'frontend/android/app/build/outputs/apk/debug/app-debug.apk'
+
+          file_metadata = {
+              'name': new_file_name,
+              'parents': [folder_id]
+          }
+          media = MediaFileUpload(apk_path, mimetype='application/vnd.android.package-archive')
+          
+          uploaded_file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+          print(f"¡APK subido con éxito como: {new_file_name} (ID: {uploaded_file.get('id')})!")
+          EOF
