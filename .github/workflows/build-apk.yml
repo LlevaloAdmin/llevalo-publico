@@ -93,12 +93,30 @@ jobs:
           
           media = MediaFileUpload(apk_path, mimetype='application/vnd.android.package-archive', resumable=True)
           
+          # Subir el archivo a Google Drive
           uploaded_file = service.files().create(
               body=file_metadata, 
               media_body=media, 
-              fields='id',
-              supportsAllDrives=True
+              fields='id'
           ).execute()
           
-          print(f"¡APK subido con éxito como: {new_file_name} (ID: {uploaded_file.get('id')})!")
+          file_id = uploaded_file.get('id')
+          print(f"¡APK subido con éxito como: {new_file_name} (ID: {file_id})!")
+
+          # Transferir la propiedad a tu cuenta personal para evitar problemas de cuota de la cuenta de servicio
+          try:
+              permission = {
+                  'type': 'user',
+                  'role': 'owner',
+                  'emailAddress': 'levalo.admin@gmail.com'
+              }
+              service.permissions().create(
+                  fileId=file_id,
+                  body=permission,
+                  transferOwnership=True,
+                  sendNotificationEmail=False
+              ).execute()
+              print("¡Propiedad transferida exitosamente a tu cuenta personal!")
+          except Exception as e:
+              print(f"Aviso en transferencia de propiedad: {e}")
           EOF
