@@ -1,6 +1,18 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Bike, MapPin, ArrowRight, User, Eye, EyeOff, Clock, Send, Power, Star, Moon, Sun, DollarSign, XCircle, Navigation, CheckCircle2, Circle } from 'lucide-react';
 import MapaMapbox from './MapaMapbox';
+import { StatusBar, Style } from '@capacitor/status-bar';
+
+// Configuración para eliminar la franja gris superior en la APK
+const configurarBarraEstado = async () => {
+  try {
+    await StatusBar.setStyle({ style: Style.Light });
+    await StatusBar.setOverlaysWebView({ overlay: true });
+  } catch (e) {
+    console.log('Entorno web detectado');
+  }
+};
+configurarBarraEstado();
 
 interface PedidoReal {
   id: number;
