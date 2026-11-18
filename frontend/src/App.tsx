@@ -3,17 +3,6 @@ import { Bike, MapPin, ArrowRight, User, Eye, EyeOff, Clock, Send, Power, Star, 
 import MapaMapbox from './MapaMapbox';
 import { StatusBar, Style } from '@capacitor/status-bar';
 
-// Configuración para eliminar la franja gris superior en la APK
-const configurarBarraEstado = async () => {
-  try {
-    await StatusBar.setStyle({ style: Style.Light });
-    await StatusBar.setOverlaysWebView({ overlay: true });
-  } catch (e) {
-    console.log('Entorno web detectado');
-  }
-};
-configurarBarraEstado();
-
 interface PedidoReal {
   id: number;
   cliente_id: number;
@@ -147,6 +136,18 @@ export default function App() {
   const [nuevoMensajeTexto, setNuevoMensajeTexto] = useState('');
 
   const [segundosRestantes, setSegundosRestantes] = useState<number>(60);
+
+  useEffect(() => {
+    const setupFullScreen = async () => {
+      try {
+        await StatusBar.setOverlaysWebView({ overlay: true });
+        await StatusBar.setStyle({ style: Style.Dark });
+      } catch {
+        // Los plugins nativos no están disponibles en el navegador web.
+      }
+    };
+    void setupFullScreen();
+  }, []);
 
   const actualizarTasaBCVEnVivo = async () => {
     try {
