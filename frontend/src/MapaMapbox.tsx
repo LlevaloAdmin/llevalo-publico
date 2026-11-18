@@ -14,6 +14,7 @@ interface MapaMapboxProps {
   mostrarRuta?: boolean;
   mostrarPines?: boolean;
   darkMode?: boolean;
+  recentrarUsuario?: number;
 }
 
 export default function MapaMapbox({
@@ -27,7 +28,8 @@ export default function MapaMapbox({
   interactivo = true,
   mostrarRuta = false,
   mostrarPines = false,
-  darkMode = false
+  darkMode = false,
+  recentrarUsuario = 0
 }: MapaMapboxProps) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<mapboxgl.Map | null>(null);
@@ -35,6 +37,30 @@ export default function MapaMapbox({
   const markerDestinoRef = useRef<mapboxgl.Marker | null>(null);
   const markerUsuarioRef = useRef<mapboxgl.Marker | null>(null);
   const onMapClickRef = useRef(onMapClick);
+  const onRutaCalculadaRef = useRef(onRutaCalculada);
+  const interactivoRef = useRef(interactivo);
+  const coordsUsuarioRef = useRef(coordsUsuario);
+
+  useEffect(() => {
+    coordsUsuarioRef.current = coordsUsuario;
+  }, [coordsUsuario]);
+
+  useEffect(() => {
+    onRutaCalculadaRef.current = onRutaCalculada;
+  }, [onRutaCalculada]);
+
+  useEffect(() => {
+    interactivoRef.current = interactivo;
+  }, [interactivo]);
+
+  useEffect(() => {
+    if (!recentrarUsuario) return;
+    const map = mapInstance.current;
+    const ubicacion = coordsUsuarioRef.current;
+    if (map && ubicacion) {
+      map.flyTo({ center: [ubicacion.lng, ubicacion.lat], zoom: 15, duration: 800 });
+    }
+  }, [recentrarUsuario]);
 
   useEffect(() => {
     if (onMapClick) onMapClickRef.current = onMapClick;
@@ -67,7 +93,7 @@ export default function MapaMapbox({
         style: darkMode ? 'mapbox://styles/mapbox/dark-v11' : 'mapbox://styles/mapbox/streets-v12',
         center: [centroInicial.lng, centroInicial.lat],
         zoom: mini ? 12 : 14,
-        interactive: mini ? false : interactivo
+        interactive: mini ? false : interactivoRef.current
       });
 
       if (!mini) {
@@ -145,10 +171,10 @@ export default function MapaMapbox({
           const ruta = json.routes[0];
           const routeGeoJSON = ruta.geometry;
 
-          if (onRutaCalculada && !mini) {
+          if (onRutaCalculadaRef.current && !mini) {
             const km = Math.max(0.5, parseFloat((ruta.distance / 1000).toFixed(1)));
             const min = Math.max(2, Math.round(ruta.duration / 60));
-            onRutaCalculada(km, min);
+            onRutaCalculadaRef.current(km, min);
           }
 
           const actualizarRutaLayer = () => {
@@ -205,6 +231,11 @@ export default function MapaMapbox({
     }
 
   }, [coordsOrigen, coordsDestino, coordsUsuario, mini, mostrarRuta, mostrarPines, darkMode]);
+
+  useEffect(() => () => {
+    mapInstance.current?.remove();
+    mapInstance.current = null;
+  }, []);
 
   return (
     <div className={`w-full h-full rounded-3xl overflow-hidden relative ${mini ? 'shadow-inner' : 'shadow-md border border-orange-100 dark:border-slate-800'}`}>

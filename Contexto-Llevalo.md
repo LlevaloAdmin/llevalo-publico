@@ -38,12 +38,19 @@ La autenticación se realiza mediante secretos OAuth almacenados en GitHub Actio
 ## Secretos
 
 No guardar credenciales reales en archivos del repositorio.
-Usar únicamente GitHub Actions Secrets:
+Configurar las variables de entorno en el servicio correspondiente:
 
 - `GOOGLE_CLIENT_ID`
 - `GOOGLE_CLIENT_SECRET`
 - `GOOGLE_REFRESH_TOKEN`
 - `GOOGLE_DRIVE_FOLDER_ID`
+- `JWT_SECRET` (backend, mínimo 32 caracteres aleatorios)
+- `CORS_ORIGINS` (backend, lista de orígenes permitidos separados por comas)
+- `VITE_API_URL` (frontend, URL HTTPS pública del backend)
+
+Los valores de Google Drive pertenecen a GitHub Actions; las demás variables deben
+configurarse en el hosting del backend o frontend indicado. El backend no inicia si
+`JWT_SECRET` falta o tiene menos de 32 caracteres.
 
 Si algún secreto previo quedó expuesto en historial o texto, debe rotarse en Google Cloud.
 

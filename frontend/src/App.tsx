@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Bike, MapPin, ArrowRight, User, Eye, EyeOff, Clock, Send, Power, Star, Moon, Sun, DollarSign, XCircle, Navigation, CheckCircle2, Circle } from 'lucide-react';
-import MapaMapbox from './MapaMapbox';
 import { StatusBar, Style } from '@capacitor/status-bar';
+import { Capacitor } from '@capacitor/core';
+
+const MapaMapbox = React.lazy(() => import('./MapaMapbox'));
 
 interface PedidoReal {
   id: number;
@@ -69,13 +71,32 @@ interface UsuarioSesion {
 
 const API_URL = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:5000`;
 
+const authenticatedFetch = (url: string, options: RequestInit = {}) => {
+  const token = localStorage.getItem('llevalo_token');
+  if (!token) throw new Error('Tu sesión expiró. Inicia sesión nuevamente.');
+
+  const headers = new Headers(options.headers);
+  headers.set('Authorization', `Bearer ${token}`);
+  return fetch(url, { ...options, headers });
+};
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<'home' | 'cliente' | 'repartidor' | 'perfil' | 'auth'>('home');
   const [serviceType, setServiceType] = useState<'comida' | 'mercado' | 'mandados' | 'viajes'>('comida');
   
-  const [darkMode, setDarkMode] = useState<boolean>(false);
+  const [darkMode, setDarkMode] = useState<boolean>(() => localStorage.getItem('llevalo_dark_mode') === 'true');
 
-  const [usuario, setUsuario] = useState<UsuarioSesion | null>(null);
+  const [usuario, setUsuario] = useState<UsuarioSesion | null>(() => {
+    const storedUser = localStorage.getItem('llevalo_usuario');
+    if (!storedUser) return null;
+    try {
+      const parsed = JSON.parse(storedUser);
+      return parsed?.id ? parsed : null;
+    } catch {
+      localStorage.removeItem('llevalo_usuario');
+      return null;
+    }
+  });
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [authRoleSelection, setAuthRoleSelection] = useState<'cliente' | 'repartidor'>('cliente');
   const [errorAuth, setErrorAuth] = useState('');
@@ -85,11 +106,11 @@ export default function App() {
   const [nombre, setNombre] = useState('');
   const [email, setEmail] = useState('');
   const [telefono, setTelefono] = useState('');
-  const [cedulaNumero, setCedulaNumero] = useState(''); // Solo los dígitos de la cédula
-  const [fotoLocal, setFotoLocal] = useState('');
-  const [fotoVehiculoLocal, setFotoVehiculoLocal] = useState('');
-  const [tipoVehiculo, setTipoVehiculo] = useState('Moto Suzuki GN 125');
-  const [placaVehiculo, setPlacaVehiculo] = useState('');
+  const [cedulaNumero, setCedulaNumero] = useState(() => usuario?.cedula?.replace(/^[VvEe]-/, '') || '');
+  const [fotoLocal, setFotoLocal] = useState(() => usuario?.foto || '');
+  const fotoVehiculoLocal = usuario?.vehiculo_foto || '';
+  const [tipoVehiculo, setTipoVehiculo] = useState(() => usuario?.vehiculo || 'Moto Suzuki GN 125');
+  const [placaVehiculo, setPlacaVehiculo] = useState(() => usuario?.placa || '');
   const [password, setPassword] = useState('');
   const [mostrarPassword, setMostrarPassword] = useState(false);
 
@@ -107,6 +128,10 @@ export default function App() {
   const [enviandoPedido, setEnviandoPedido] = useState(false);
   
   const [coordsUsuarioGPS, setCoordsUsuarioGPS] = useState<{ lat: number; lng: number } | null>(null);
+  const [ubicacionCargando, setUbicacionCargando] = useState(false);
+  const [errorUbicacion, setErrorUbicacion] = useState('');
+  const [recentrarMapa, setRecentrarMapa] = useState(0);
+  const objetivoUbicacionRef = useRef<'origen' | 'destino' | null>(null);
 
   const [origenInput, setOrigenInput] = useState('');
   const [coordsOrigen, setCoordsOrigen] = useState<{ lat: number; lng: number } | null>(null);
@@ -139,15 +164,16 @@ export default function App() {
 
   useEffect(() => {
     const setupFullScreen = async () => {
+      if (!Capacitor.isNativePlatform()) return;
       try {
         await StatusBar.setOverlaysWebView({ overlay: true });
-        await StatusBar.setStyle({ style: Style.Dark });
-      } catch {
-        // Los plugins nativos no están disponibles en el navegador web.
+        await StatusBar.setStyle({ style: darkMode ? Style.Light : Style.Dark });
+      } catch (error) {
+        console.error('No se pudo configurar la barra de estado:', error);
       }
     };
     void setupFullScreen();
-  }, []);
+  }, [darkMode]);
 
   const actualizarTasaBCVEnVivo = async () => {
     try {
@@ -158,63 +184,17 @@ export default function App() {
           setTasaBCV(Number(data.promedio));
         }
       }
-    } catch (e) {
+    } catch {
       console.warn('No se pudo actualizar tasa BCV en tiempo real, usando respaldo.');
     }
   };
 
   useEffect(() => {
-    const dmGuardado = localStorage.getItem('llevalo_dark_mode');
-    if (dmGuardado === 'true') setDarkMode(true);
-
-    const sesionGuardada = localStorage.getItem('llevalo_usuario');
-    if (sesionGuardada) {
-      try {
-        const parsed = JSON.parse(sesionGuardada);
-        if (parsed && parsed.id) {
-          setUsuario(parsed);
-          if (parsed.foto) setFotoLocal(parsed.foto);
-          if (parsed.cedula) {
-            const numLimpias = parsed.cedula.replace(/^[VvEe]-/, '');
-            setCedulaNumero(numLimpias);
-          }
-          if (parsed.vehiculo) setTipoVehiculo(parsed.vehiculo);
-          if (parsed.placa) setPlacaVehiculo(parsed.placa);
-          if (parsed.vehiculo_foto) setFotoVehiculoLocal(parsed.vehiculo_foto);
-        }
-      } catch (e) {
-        localStorage.removeItem('llevalo_usuario');
-      }
-    }
-
     actualizarTasaBCVEnVivo();
     const intervalTasa = setInterval(actualizarTasaBCVEnVivo, 300000);
 
-    if (navigator.geolocation) {
-      navigator.geolocation.watchPosition(
-        (pos) => {
-          setCoordsUsuarioGPS({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-        },
-        (err) => console.warn('GPS error:', err),
-        { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
-      );
-    }
-
     return () => clearInterval(intervalTasa);
   }, []);
-
-  useEffect(() => {
-    if (usuario?.rol === 'repartidor' && coordsUsuarioGPS) {
-      const pedidoAsignado = pedidosReales.find(p => p.repartidor_id === usuario.id && (p.estado === 'aceptado' || p.estado === 'entregado_repartidor'));
-      if (pedidoAsignado) {
-        fetch(`${API_URL}/api/pedidos/${pedidoAsignado.id}/ubicacion-repartidor`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ lat: coordsUsuarioGPS.lat, lon: coordsUsuarioGPS.lng })
-        }).catch(() => {});
-      }
-    }
-  }, [coordsUsuarioGPS, pedidosReales, usuario]);
 
   const toggleDarkMode = () => {
     const nuevo = !darkMode;
@@ -224,12 +204,17 @@ export default function App() {
 
   const sincronizarDatos = async () => {
     try {
-      const res = await fetch(`${API_URL}/api/pedidos`);
+      const res = await authenticatedFetch(`${API_URL}/api/pedidos`);
       if (res.ok) {
         const data = await res.json();
         setPedidosReales(Array.isArray(data.pedidos) ? data.pedidos : []);
         setPostulacionesReales(Array.isArray(data.postulaciones) ? data.postulaciones : []);
         setMensajesChat(Array.isArray(data.mensajes) ? data.mensajes : []);
+      } else if (res.status === 401) {
+        localStorage.removeItem('llevalo_token');
+        localStorage.removeItem('llevalo_usuario');
+        setUsuario(null);
+        setActiveTab('home');
       }
     } catch (e) { console.error('Error sincronizando:', e); }
   };
@@ -307,11 +292,52 @@ export default function App() {
 
       if (tipoActual === 'origen') setOrigenInput(nombreLugar);
       else setDestinoInput(nombreLugar);
-    } catch (e) {
+    } catch {
       const fallback = `Ubicación (${lat.toFixed(4)}, ${lng.toFixed(4)})`;
       if (tipoActual === 'origen') setOrigenInput(fallback);
       else setDestinoInput(fallback);
     }
+  };
+
+  const obtenerUbicacionActual = (objetivo: 'origen' | 'destino' | null = null) => {
+    objetivoUbicacionRef.current = objetivo;
+    setErrorUbicacion('');
+
+    if (!navigator.geolocation) {
+      setErrorUbicacion('Este dispositivo o navegador no permite acceder a la ubicación.');
+      return;
+    }
+
+    setUbicacionCargando(true);
+    navigator.geolocation.getCurrentPosition(
+      ({ coords }) => {
+        const ubicacion = { lat: coords.latitude, lng: coords.longitude };
+        setCoordsUsuarioGPS(ubicacion);
+        setRecentrarMapa(value => value + 1);
+
+        if (objetivoUbicacionRef.current === 'origen') {
+          setCoordsOrigen(ubicacion);
+          setOrigenInput('Mi ubicación actual');
+          setSugerenciasOrigen([]);
+        } else if (objetivoUbicacionRef.current === 'destino') {
+          setCoordsDestino(ubicacion);
+          setDestinoInput('Mi ubicación actual');
+          setSugerenciasDestino([]);
+        }
+
+        setUbicacionCargando(false);
+      },
+      (error) => {
+        const mensaje = error.code === error.PERMISSION_DENIED
+          ? 'Permite el acceso a la ubicación en los permisos de la app o del navegador y vuelve a intentarlo.'
+          : error.code === error.POSITION_UNAVAILABLE
+            ? 'No se pudo obtener tu ubicación. Activa el GPS o los servicios de ubicación del dispositivo.'
+            : 'La solicitud de ubicación tardó demasiado. Comprueba el GPS e inténtalo de nuevo.';
+        setErrorUbicacion(mensaje);
+        setUbicacionCargando(false);
+      },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
+    );
   };
 
   const buscarDireccionGeocoding = async (query: string, tipo: 'origen' | 'destino') => {
@@ -361,14 +387,14 @@ export default function App() {
 
   const handleCrearPedido = async () => {
     if (!usuario) return;
-    if (!rutaCompletaLista || !coordsOrigen || !coordsDestino) {
-      alert('Por favor especifica y selecciona tanto el origen como el destino.');
+    if (!rutaCompletaLista || !coordsOrigen || !coordsDestino || distanciaKm <= 0 || tiempoEstimadoMin <= 0) {
+      alert('Completa el origen y destino, y espera a que se calcule la ruta.');
       return;
     }
     setEnviandoPedido(true);
 
     try {
-      const res = await fetch(`${API_URL}/api/pedidos`, {
+      const res = await authenticatedFetch(`${API_URL}/api/pedidos`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -394,21 +420,24 @@ export default function App() {
 
   const cancelarPedidoActual = async (pedidoId: number) => {
     try {
-      await fetch(`${API_URL}/api/pedidos/${pedidoId}/estado`, {
+      const response = await authenticatedFetch(`${API_URL}/api/pedidos/${pedidoId}/estado`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nuevoEstado: 'cancelado' })
+        body: JSON.stringify({ nuevo_estado: 'cancelado' })
       });
+      if (!response.ok) throw new Error('No se pudo cancelar el pedido.');
       setCoordsOrigen(null); setCoordsDestino(null);
       setOrigenInput(''); setDestinoInput('');
       await sincronizarDatos();
-    } catch (e) { alert('No se pudo cancelar el pedido.'); }
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'No se pudo cancelar el pedido.');
+    }
   };
 
   const postularsePedido = async (pedidoId: number) => {
     if (!usuario) return;
     try {
-      const res = await fetch(`${API_URL}/api/pedidos/${pedidoId}/postular`, {
+      const res = await authenticatedFetch(`${API_URL}/api/pedidos/${pedidoId}/postular`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -426,14 +455,15 @@ export default function App() {
   const cancelarPostulacion = async (pedidoId: number) => {
     if (!usuario) return;
     try {
-      await fetch(`${API_URL}/api/pedidos/${pedidoId}/postular/${usuario.id}`, { method: 'DELETE' });
+      const response = await authenticatedFetch(`${API_URL}/api/pedidos/${pedidoId}/postular/${usuario.id}`, { method: 'DELETE' });
+      if (!response.ok) throw new Error('No se pudo cancelar la postulación.');
       await sincronizarDatos();
-    } catch (e) { alert('Error al cancelar postulación'); }
+    } catch { alert('Error al cancelar postulación'); }
   };
 
   const aceptarPostulacion = async (pedidoId: number, post: Postulacion) => {
     try {
-      const res = await fetch(`${API_URL}/api/pedidos/${pedidoId}/aceptar-postulacion`, {
+      const res = await authenticatedFetch(`${API_URL}/api/pedidos/${pedidoId}/aceptar-postulacion`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -449,29 +479,36 @@ export default function App() {
   const enviarMensaje = async (pedidoId: number) => {
     if (!usuario || !nuevoMensajeTexto.trim()) return;
     try {
-      await fetch(`${API_URL}/api/pedidos/${pedidoId}/chat`, {
+      const response = await authenticatedFetch(`${API_URL}/api/pedidos/${pedidoId}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ remitente_id: usuario.id, remitente_nombre: usuario.nombre, mensaje: nuevoMensajeTexto })
       });
+      if (!response.ok) throw new Error('No se pudo enviar el mensaje.');
       setNuevoMensajeTexto('');
       await sincronizarDatos();
-    } catch (e) { console.error(e); }
+    } catch (error) {
+      console.error('Error al enviar mensaje:', error);
+      alert(error instanceof Error ? error.message : 'No se pudo enviar el mensaje.');
+    }
   };
 
   const cambiarEstadoPedido = async (pedidoId: number, nuevoEstado: 'entregado_repartidor' | 'completado' | 'cancelado') => {
     try {
-      await fetch(`${API_URL}/api/pedidos/${pedidoId}/estado`, {
+      const response = await authenticatedFetch(`${API_URL}/api/pedidos/${pedidoId}/estado`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nuevoEstado })
+        body: JSON.stringify({ nuevo_estado: nuevoEstado })
       });
+      if (!response.ok) throw new Error('No se pudo actualizar el estado del pedido.');
       if (nuevoEstado === 'completado') {
         setCoordsOrigen(null); setCoordsDestino(null);
         setOrigenInput(''); setDestinoInput('');
       }
       await sincronizarDatos();
-    } catch (e) { console.error(e); }
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'No se pudo actualizar el estado del pedido.');
+    }
   };
 
   const handleAuthSubmit = async (e: React.FormEvent) => {
@@ -512,7 +549,7 @@ export default function App() {
       localStorage.setItem('llevalo_token', data.token);
       localStorage.setItem('llevalo_usuario', JSON.stringify(data.usuario));
       setUsuario(data.usuario);
-      setActiveTab(data.usuario.rol === 'cliente' ? 'cliente' : 'repartidor');
+      setActiveTab('home');
     } catch (err: any) {
       setErrorAuth(err.message);
     }
@@ -530,7 +567,8 @@ export default function App() {
   };
 
   const handleLogout = () => {
-    localStorage.clear();
+    localStorage.removeItem('llevalo_token');
+    localStorage.removeItem('llevalo_usuario');
     setUsuario(null);
     setActiveTab('home');
   };
@@ -550,6 +588,38 @@ export default function App() {
   const pedidoAsignadoRepartidor = usuario?.rol === 'repartidor' && Array.isArray(pedidosReales)
     ? pedidosReales.find(p => p.repartidor_id === usuario.id && (p.estado === 'aceptado' || p.estado === 'entregado_repartidor'))
     : null;
+  const pedidoAsignadoRepartidorId = pedidoAsignadoRepartidor?.id;
+
+  useEffect(() => {
+    if (usuario?.rol !== 'repartidor' || !pedidoAsignadoRepartidorId || !navigator.geolocation) return;
+
+    const watchId = navigator.geolocation.watchPosition(
+      ({ coords }) => {
+        setCoordsUsuarioGPS({ lat: coords.latitude, lng: coords.longitude });
+        setErrorUbicacion('');
+      },
+      (error) => {
+        setErrorUbicacion(error.code === error.PERMISSION_DENIED
+          ? 'Activa el permiso de ubicación para compartir tu posición durante una entrega.'
+          : 'No se pudo actualizar tu ubicación. Comprueba que el GPS esté activo.');
+      },
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
+    );
+
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, [usuario?.id, usuario?.rol, pedidoAsignadoRepartidorId]);
+
+  useEffect(() => {
+    if (usuario?.rol !== 'repartidor' || !pedidoAsignadoRepartidorId || !coordsUsuarioGPS) return;
+
+    authenticatedFetch(`${API_URL}/api/pedidos/${pedidoAsignadoRepartidorId}/ubicacion-repartidor`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lat: coordsUsuarioGPS.lat, lon: coordsUsuarioGPS.lng })
+    }).then((response) => {
+      if (!response.ok) console.error('No se pudo guardar la ubicación del repartidor.');
+    }).catch((error) => console.error('Error enviando ubicación del repartidor:', error));
+  }, [coordsUsuarioGPS, usuario?.rol, pedidoAsignadoRepartidorId]);
 
   const tieneTrabajoActivoOPostulacionRepartidor = usuario?.rol === 'repartidor' && (
     Boolean(pedidoAsignadoRepartidor) || 
@@ -557,7 +627,7 @@ export default function App() {
   );
 
   return (
-    <div className={`min-h-screen flex flex-col font-sans transition-colors duration-300 ${darkMode ? 'bg-slate-950 text-slate-100' : 'bg-[#FDFBF7] text-slate-800'}`}>
+    <div className={`app-shell flex flex-col font-sans transition-colors duration-300 ${darkMode ? 'bg-slate-950 text-slate-100' : 'bg-[#FDFBF7] text-slate-800'}`}>
       <header className={`border-b backdrop-blur sticky top-0 z-50 px-4 md:px-10 py-3 flex justify-between items-center shadow-sm transition-colors ${darkMode ? 'bg-slate-950/90 border-slate-800' : 'bg-[#FDFBF7]/90 border-orange-100'}`}>
         <div className="flex items-center space-x-3 cursor-pointer" onClick={() => setActiveTab('home')}>
           <div className="bg-[#FF5722] text-white w-9 h-9 rounded-2xl font-black text-lg flex items-center justify-center shadow-md">L</div>
@@ -565,7 +635,7 @@ export default function App() {
         </div>
         
         <nav className={`hidden md:flex space-x-2 p-1.5 rounded-2xl border ${darkMode ? 'bg-slate-900/80 border-slate-800' : 'bg-orange-50/80 border-orange-100'}`}>
-          <button onClick={() => setActiveTab('home')} className={`px-5 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${activeTab === 'home' ? 'bg-[#FF5722] text-white shadow-sm' : (darkMode ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900')}`}>Inicio</button>
+          <button onClick={() => setActiveTab('home')} className={`px-5 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${activeTab === 'home' ? 'bg-[#FF5722] text-white shadow-sm' : (darkMode ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900')}`}>{usuario ? 'Mi Panel' : 'Inicio'}</button>
           {usuario && usuario.rol === 'cliente' && <button onClick={() => setActiveTab('cliente')} className={`px-5 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${activeTab === 'cliente' ? 'bg-[#FF5722] text-white shadow-sm' : (darkMode ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900')}`}>Pedir</button>}
           {usuario && usuario.rol === 'repartidor' && <button onClick={() => setActiveTab('repartidor')} className={`px-5 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${activeTab === 'repartidor' ? 'bg-[#FF5722] text-white shadow-sm' : (darkMode ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900')}`}>Radar de Trabajos</button>}
         </nav>
@@ -601,7 +671,7 @@ export default function App() {
       </header>
 
       <main className="flex-1 flex flex-col p-4 md:p-6 max-w-7xl mx-auto w-full">
-        {activeTab === 'home' && (
+        {activeTab === 'home' && !usuario && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center py-8 lg:py-14">
             <div className="space-y-6">
               <div className={`inline-flex items-center space-x-2 px-4 py-1.5 rounded-full text-xs font-bold uppercase border ${darkMode ? 'bg-orange-950/60 border-orange-900 text-orange-300' : 'bg-orange-100 border-orange-200 text-[#FF5722]'}`}>
@@ -616,18 +686,14 @@ export default function App() {
               </p>
 
               <div className="flex flex-col sm:flex-row gap-4 pt-2">
-                {(!usuario || usuario.rol === 'cliente') && (
-                  <button onClick={() => { if (!usuario) { setAuthRoleSelection('cliente'); setActiveTab('auth'); } else setActiveTab('cliente'); }} className="bg-[#FF5722] hover:bg-[#F4511E] text-white font-bold px-8 py-4 rounded-2xl transition shadow-lg flex items-center justify-center space-x-2 cursor-pointer">
-                    <span>Hacer un pedido</span>
-                    <ArrowRight size={18} />
-                  </button>
-                )}
-                {(!usuario || usuario.rol === 'repartidor') && (
-                  <button onClick={() => { if (!usuario) { setAuthRoleSelection('repartidor'); setActiveTab('auth'); } else setActiveTab('repartidor'); }} className={`border font-bold px-8 py-4 rounded-2xl transition flex items-center justify-center space-x-2 shadow-sm cursor-pointer ${darkMode ? 'bg-slate-900 border-slate-800 text-white hover:bg-slate-800' : 'bg-white hover:bg-orange-50 border-orange-200 text-slate-800'}`}>
-                    <Bike size={18} className="text-[#FF5722]" />
-                    <span>Quiero ser repartidor</span>
-                  </button>
-                )}
+                <button onClick={() => { setAuthRoleSelection('cliente'); setActiveTab('auth'); }} className="bg-[#FF5722] hover:bg-[#F4511E] text-white font-bold px-8 py-4 rounded-2xl transition shadow-lg flex items-center justify-center space-x-2 cursor-pointer">
+                  <span>Hacer un pedido</span>
+                  <ArrowRight size={18} />
+                </button>
+                <button onClick={() => { setAuthRoleSelection('repartidor'); setActiveTab('auth'); }} className={`border font-bold px-8 py-4 rounded-2xl transition flex items-center justify-center space-x-2 shadow-sm cursor-pointer ${darkMode ? 'bg-slate-900 border-slate-800 text-white hover:bg-slate-800' : 'bg-white hover:bg-orange-50 border-orange-200 text-slate-800'}`}>
+                  <Bike size={18} className="text-[#FF5722]" />
+                  <span>Quiero ser repartidor</span>
+                </button>
               </div>
             </div>
 
@@ -638,6 +704,80 @@ export default function App() {
               </div>
             </div>
           </div>
+        )}
+
+        {activeTab === 'home' && usuario && (
+          <section className="w-full max-w-5xl mx-auto py-6 md:py-12 space-y-6">
+            <div className={`rounded-3xl p-6 md:p-10 border shadow-sm ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-orange-100'}`}>
+              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-6">
+                <div className="space-y-3">
+                  <span className="inline-flex items-center gap-2 rounded-full bg-orange-100 px-3 py-1 text-[11px] font-black uppercase tracking-wide text-[#FF5722]">
+                    <MapPin size={14} /> Llévalo · San Diego
+                  </span>
+                  <h1 className={`text-3xl md:text-5xl font-black tracking-tight ${darkMode ? 'text-white' : 'text-slate-900'}`}>
+                    ¡Hola, {usuario.nombre.split(' ')[0]}!
+                  </h1>
+                  <p className={`text-sm md:text-base ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>
+                    {usuario.rol === 'cliente'
+                      ? '¿Qué necesitas hoy? Pide algo y nosotros lo llevamos.'
+                      : 'Tu próximo trabajo está a un toque. Revisa el radar y mantente disponible.'}
+                  </p>
+                </div>
+                <div className="flex flex-col sm:flex-row gap-3">
+                  {usuario.rol === 'cliente' ? (
+                    <button onClick={() => setActiveTab('cliente')} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-[#FF5722] px-6 py-3.5 text-sm font-bold text-white shadow-md transition hover:bg-[#F4511E]">
+                      Hacer un pedido <ArrowRight size={17} />
+                    </button>
+                  ) : (
+                    <button onClick={() => setActiveTab('repartidor')} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-[#FF5722] px-6 py-3.5 text-sm font-bold text-white shadow-md transition hover:bg-[#F4511E]">
+                      <Bike size={17} /> Abrir radar
+                    </button>
+                  )}
+                  <button onClick={() => setActiveTab('perfil')} className={`rounded-2xl border px-6 py-3.5 text-sm font-bold transition ${darkMode ? 'border-slate-700 bg-slate-800 text-white hover:bg-slate-700' : 'border-orange-200 bg-orange-50 text-slate-800 hover:bg-orange-100'}`}>
+                    Mi perfil
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {usuario.rol === 'cliente' ? (
+              <div className="grid gap-4 md:grid-cols-2">
+                <button onClick={() => setActiveTab('cliente')} className={`rounded-3xl border p-6 text-left transition hover:-translate-y-0.5 ${darkMode ? 'bg-slate-900 border-slate-800 hover:border-orange-700' : 'bg-white border-orange-100 hover:border-orange-300'}`}>
+                  <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-orange-100 text-[#FF5722]"><Navigation size={20} /></div>
+                  <h2 className="font-black">Pedir comida, mercado o mandados</h2>
+                  <p className="mt-2 text-xs text-slate-500">Indica origen y destino, y sigue tu solicitud desde aquí.</p>
+                </button>
+                <div className={`rounded-3xl border p-6 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-orange-100'}`}>
+                  <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-700"><Clock size={20} /></div>
+                  <h2 className="font-black">Tu servicio</h2>
+                  <p className="mt-2 text-xs text-slate-500">
+                    {pedidoActivoCliente
+                      ? `Pedido ${pedidoActivoCliente.estado}: ${pedidoActivoCliente.descripcion}`
+                      : 'Todavía no tienes pedidos activos. Cuando hagas uno, su estado aparecerá aquí.'}
+                  </p>
+                  {pedidoActivoCliente && <button onClick={() => setActiveTab('cliente')} className="mt-4 text-xs font-bold text-[#FF5722] hover:underline">Ver pedido y seguimiento</button>}
+                </div>
+              </div>
+            ) : (
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className={`rounded-3xl border p-6 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-orange-100'}`}>
+                  <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-700"><Bike size={20} /></div>
+                  <h2 className="font-black">{pedidoAsignadoRepartidor ? 'Entrega en curso' : 'Trabaja con Llévalo'}</h2>
+                  <p className="mt-2 text-xs text-slate-500">
+                    {pedidoAsignadoRepartidor
+                      ? `${pedidoAsignadoRepartidor.origen_texto} → ${pedidoAsignadoRepartidor.destino_texto}`
+                      : 'Consulta los pedidos disponibles y postúlate a los que te convengan.'}
+                  </p>
+                </div>
+                <div className={`rounded-3xl border p-6 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-orange-100'}`}>
+                  <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-orange-100 text-[#FF5722]"><MapPin size={20} /></div>
+                  <h2 className="font-black">Estado de conexión</h2>
+                  <p className="mt-2 text-xs text-slate-500">{repartidorOnline ? 'Estás conectado y puedes recibir pedidos.' : 'Estás desconectado y no recibirás nuevas solicitudes.'}</p>
+                  <button onClick={() => setActiveTab('repartidor')} className="mt-4 text-xs font-bold text-[#FF5722] hover:underline">Ir al radar de trabajos</button>
+                </div>
+              </div>
+            )}
+          </section>
         )}
 
         {activeTab === 'auth' && (
@@ -854,6 +994,9 @@ export default function App() {
                       <label className={`text-xs font-bold ${darkMode ? 'text-slate-300' : 'text-slate-700'}`}>Origen (Retirada)</label>
                       <div className="flex space-x-2 mt-1">
                         <input type="text" value={origenInput} onChange={e => { setOrigenInput(e.target.value); buscarDireccionGeocoding(e.target.value, 'origen'); }} placeholder="Buscar origen en San Diego / Carabobo" className={`flex-1 border rounded-xl px-3 py-2 text-xs ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
+                        <button type="button" onClick={() => obtenerUbicacionActual('origen')} disabled={ubicacionCargando} aria-label="Usar mi ubicación como origen" title="Usar mi ubicación como origen" className="px-3 py-2 rounded-xl border text-xs font-bold text-[#FF5722] border-orange-200 bg-orange-50 disabled:opacity-50">
+                          <Navigation size={15} />
+                        </button>
                         <button type="button" onClick={() => setModoSeleccionMapa('origen')} className={`px-3 py-2 rounded-xl border text-xs font-bold transition cursor-pointer ${modoSeleccionMapa === 'origen' ? 'bg-emerald-600 text-white' : 'bg-emerald-50 text-emerald-600 border-emerald-200'}`}>Mapa</button>
                       </div>
                       {sugerenciasOrigen.length > 0 && (
@@ -871,6 +1014,9 @@ export default function App() {
                       <label className={`text-xs font-bold ${darkMode ? 'text-slate-300' : 'text-slate-700'}`}>Destino (Entrega)</label>
                       <div className="flex space-x-2 mt-1">
                         <input type="text" value={destinoInput} onChange={e => { setDestinoInput(e.target.value); buscarDireccionGeocoding(e.target.value, 'destino'); }} placeholder="Buscar destino en San Diego / Carabobo" className={`flex-1 border rounded-xl px-3 py-2 text-xs ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
+                        <button type="button" onClick={() => obtenerUbicacionActual('destino')} disabled={ubicacionCargando} aria-label="Usar mi ubicación como destino" title="Usar mi ubicación como destino" className="px-3 py-2 rounded-xl border text-xs font-bold text-[#FF5722] border-orange-200 bg-orange-50 disabled:opacity-50">
+                          <Navigation size={15} />
+                        </button>
                         <button type="button" onClick={() => setModoSeleccionMapa('destino')} className={`px-3 py-2 rounded-xl border text-xs font-bold transition cursor-pointer ${modoSeleccionMapa === 'destino' ? 'bg-red-600 text-white' : 'bg-red-50 text-red-600 border-red-200'}`}>Mapa</button>
                       </div>
                       {sugerenciasDestino.length > 0 && (
@@ -883,6 +1029,15 @@ export default function App() {
                         </div>
                       )}
                     </div>
+
+                    {errorUbicacion && (
+                      <div role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs font-medium text-amber-900">
+                        <p>{errorUbicacion}</p>
+                        <button type="button" onClick={() => obtenerUbicacionActual(objetivoUbicacionRef.current)} className="mt-2 font-bold underline">
+                          Reintentar ubicación
+                        </button>
+                      </div>
+                    )}
 
                     <div>
                       <label className={`text-xs font-bold ${darkMode ? 'text-slate-300' : 'text-slate-700'}`}>Descripción del pedido</label>
@@ -902,7 +1057,7 @@ export default function App() {
                       </div>
                     )}
 
-                    <button disabled={!rutaCompletaLista || enviandoPedido} onClick={handleCrearPedido} className={`w-full py-3 rounded-xl font-bold text-xs transition cursor-pointer shadow-md ${!rutaCompletaLista ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-[#FF5722] hover:bg-[#F4511E] text-white'}`}>
+                    <button disabled={!rutaCompletaLista || distanciaKm <= 0 || tiempoEstimadoMin <= 0 || enviandoPedido} onClick={handleCrearPedido} className={`w-full py-3 rounded-xl font-bold text-xs transition cursor-pointer shadow-md ${!rutaCompletaLista || distanciaKm <= 0 || tiempoEstimadoMin <= 0 ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-[#FF5722] hover:bg-[#F4511E] text-white'}`}>
                       {enviandoPedido ? 'Publicando...' : 'Publicar Pedido en Radar'}
                     </button>
                   </div>
@@ -910,23 +1065,30 @@ export default function App() {
               </div>
             </div>
 
-            <div className="lg:col-span-7 h-[600px] lg:h-[calc(100vh-140px)] rounded-3xl overflow-hidden border shadow-sm sticky top-20">
-              <MapaMapbox
-                coordsOrigen={coordsOrigen}
-                coordsDestino={coordsDestino}
-                coordsUsuario={
-                  coordsUsuarioGPS || 
-                  (pedidoActivoCliente?.repartidor_lat && pedidoActivoCliente?.repartidor_lon 
-                    ? { lat: pedidoActivoCliente.repartidor_lat, lng: pedidoActivoCliente.repartidor_lon } 
-                    : null)
-                }
-                modoSeleccion={modoSeleccionMapa}
-                onMapClick={manejarClicEnMapa}
-                onRutaCalculada={(km, min) => { setDistanciaKm(km); setTiempoEstimadoMin(min); }}
-                mostrarRuta={true}
-                mostrarPines={true}
-                darkMode={darkMode}
-              />
+            <div className="relative lg:col-span-7 h-[600px] lg:h-[calc(100vh-140px)] rounded-3xl overflow-hidden border shadow-sm sticky top-20">
+              <button type="button" onClick={() => obtenerUbicacionActual()} disabled={ubicacionCargando} className="absolute left-3 top-3 z-20 inline-flex items-center gap-2 rounded-xl border border-white/80 bg-white/95 px-3 py-2 text-xs font-bold text-slate-800 shadow-md disabled:opacity-60">
+                <Navigation size={15} className={ubicacionCargando ? 'animate-pulse' : 'text-[#FF5722]'} />
+                {ubicacionCargando ? 'Buscando...' : 'Mi ubicación'}
+              </button>
+              <React.Suspense fallback={<div className="flex h-full w-full items-center justify-center bg-slate-100 text-xs font-bold text-slate-500">Cargando mapa...</div>}>
+                <MapaMapbox
+                  coordsOrigen={coordsOrigen}
+                  coordsDestino={coordsDestino}
+                  coordsUsuario={
+                    coordsUsuarioGPS ||
+                    (pedidoActivoCliente?.repartidor_lat && pedidoActivoCliente?.repartidor_lon
+                      ? { lat: pedidoActivoCliente.repartidor_lat, lng: pedidoActivoCliente.repartidor_lon }
+                      : null)
+                  }
+                  modoSeleccion={modoSeleccionMapa}
+                  onMapClick={manejarClicEnMapa}
+                  onRutaCalculada={(km, min) => { setDistanciaKm(km); setTiempoEstimadoMin(min); }}
+                  mostrarRuta={true}
+                  mostrarPines={true}
+                  darkMode={darkMode}
+                  recentrarUsuario={recentrarMapa}
+                />
+              </React.Suspense>
             </div>
           </div>
         )}
@@ -1039,23 +1201,36 @@ export default function App() {
                 )}
               </div>
 
-              <div className="lg:col-span-7 h-[600px] lg:h-[calc(100vh-140px)] rounded-3xl overflow-hidden border shadow-sm sticky top-20">
-                <MapaMapbox
-                  coordsOrigen={
-                    pedidoAsignadoRepartidor?.estado === 'aceptado'
-                      ? (coordsUsuarioGPS || { lat: pedidoAsignadoRepartidor.origen_lat, lng: pedidoAsignadoRepartidor.origen_lon })
-                      : (pedidoAsignadoRepartidor?.estado === 'entregado_repartidor' ? { lat: pedidoAsignadoRepartidor.origen_lat, lng: pedidoAsignadoRepartidor.origen_lon } : null)
-                  }
-                  coordsDestino={
-                    pedidoAsignadoRepartidor?.estado === 'aceptado'
-                      ? { lat: pedidoAsignadoRepartidor.origen_lat, lng: pedidoAsignadoRepartidor.origen_lon }
-                      : (pedidoAsignadoRepartidor?.estado === 'entregado_repartidor' ? { lat: pedidoAsignadoRepartidor.destino_lat, lng: pedidoAsignadoRepartidor.destino_lon } : null)
-                  }
-                  coordsUsuario={coordsUsuarioGPS}
-                  mostrarRuta={Boolean(pedidoAsignadoRepartidor)}
-                  mostrarPines={true}
-                  darkMode={darkMode}
-                />
+              <div className="relative lg:col-span-7 h-[600px] lg:h-[calc(100vh-140px)] rounded-3xl overflow-hidden border shadow-sm sticky top-20">
+                <button type="button" onClick={() => obtenerUbicacionActual()} disabled={ubicacionCargando} className="absolute left-3 top-3 z-20 inline-flex items-center gap-2 rounded-xl border border-white/80 bg-white/95 px-3 py-2 text-xs font-bold text-slate-800 shadow-md disabled:opacity-60">
+                  <Navigation size={15} className={ubicacionCargando ? 'animate-pulse' : 'text-[#FF5722]'} />
+                  {ubicacionCargando ? 'Buscando...' : 'Mi ubicación'}
+                </button>
+                {errorUbicacion && (
+                  <div role="alert" className="absolute left-3 right-3 top-14 z-20 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs font-medium text-amber-900 shadow">
+                    {errorUbicacion}
+                    <button type="button" onClick={() => obtenerUbicacionActual()} className="ml-2 font-bold underline">Reintentar</button>
+                  </div>
+                )}
+                <React.Suspense fallback={<div className="flex h-full w-full items-center justify-center bg-slate-100 text-xs font-bold text-slate-500">Cargando mapa...</div>}>
+                  <MapaMapbox
+                    coordsOrigen={
+                      pedidoAsignadoRepartidor?.estado === 'aceptado'
+                        ? (coordsUsuarioGPS || { lat: pedidoAsignadoRepartidor.origen_lat, lng: pedidoAsignadoRepartidor.origen_lon })
+                        : (pedidoAsignadoRepartidor?.estado === 'entregado_repartidor' ? { lat: pedidoAsignadoRepartidor.origen_lat, lng: pedidoAsignadoRepartidor.origen_lon } : null)
+                    }
+                    coordsDestino={
+                      pedidoAsignadoRepartidor?.estado === 'aceptado'
+                        ? { lat: pedidoAsignadoRepartidor.origen_lat, lng: pedidoAsignadoRepartidor.origen_lon }
+                        : (pedidoAsignadoRepartidor?.estado === 'entregado_repartidor' ? { lat: pedidoAsignadoRepartidor.destino_lat, lng: pedidoAsignadoRepartidor.destino_lon } : null)
+                    }
+                    coordsUsuario={coordsUsuarioGPS}
+                    mostrarRuta={Boolean(pedidoAsignadoRepartidor)}
+                    mostrarPines={true}
+                    darkMode={darkMode}
+                    recentrarUsuario={recentrarMapa}
+                  />
+                </React.Suspense>
               </div>
             </div>
           </div>

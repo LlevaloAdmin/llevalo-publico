@@ -1,0 +1,48 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.requireRole = exports.requireAuth = exports.verifyAccessToken = void 0;
+const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
+const config_1 = require("../config");
+const verifyAccessToken = (token) => {
+    try {
+        const payload = jsonwebtoken_1.default.verify(token, config_1.JWT_SECRET);
+        if (typeof payload === 'string')
+            return null;
+        const id = Number(payload.id);
+        const rol = payload.rol;
+        if (!Number.isSafeInteger(id) || id <= 0 || (rol !== 'cliente' && rol !== 'repartidor'))
+            return null;
+        return { id, rol };
+    }
+    catch {
+        return null;
+    }
+};
+exports.verifyAccessToken = verifyAccessToken;
+const requireAuth = (req, res, next) => {
+    const authorization = req.header('authorization');
+    const [scheme, token] = authorization?.split(' ') ?? [];
+    if (scheme !== 'Bearer' || !token) {
+        res.status(401).json({ error: 'Debes iniciar sesión para realizar esta acción.' });
+        return;
+    }
+    const authUser = (0, exports.verifyAccessToken)(token);
+    if (!authUser) {
+        res.status(401).json({ error: 'La sesión es inválida o expiró. Inicia sesión nuevamente.' });
+        return;
+    }
+    req.authUser = authUser;
+    next();
+};
+exports.requireAuth = requireAuth;
+const requireRole = (rol) => (req, res, next) => {
+    if (req.authUser?.rol !== rol) {
+        res.status(403).json({ error: 'No tienes permiso para realizar esta acción.' });
+        return;
+    }
+    next();
+};
+exports.requireRole = requireRole;

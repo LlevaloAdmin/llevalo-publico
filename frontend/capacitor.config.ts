@@ -7,6 +7,13 @@ const config: CapacitorConfig = {
   server: {
     url: 'https://llevalo.vercel.app',
     cleartext: true
+  },
+  plugins: {
+    StatusBar: {
+      overlaysWebView: true,
+      style: 'DARK',
+      backgroundColor: '#FDFBF7'
+    }
   }
 };
 
