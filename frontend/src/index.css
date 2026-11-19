@@ -38,13 +38,13 @@ body {
   min-width: 0;
 }
 
-.app-shell button:not(.mapboxgl-ctrl button) {
+.app-shell button:not(.maplibregl-ctrl button) {
   min-width: 44px;
   min-height: 44px;
   white-space: normal;
 }
 
-.app-shell button:not(.mapboxgl-ctrl button) svg {
+.app-shell button:not(.maplibregl-ctrl button) svg {
   width: max(1.15rem, 1.15em);
   height: max(1.15rem, 1.15em);
   flex: 0 0 auto;

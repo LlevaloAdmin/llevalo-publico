@@ -10,7 +10,7 @@
 ## Tecnologías y rutas
 
 - Frontend: `frontend/src/App.tsx`, React, TypeScript, Tailwind CSS 4 y Lucide.
-- Mapas: Mapbox, con ubicación limitada a San Diego/Carabobo/Venezuela.
+- Mapas: MapLibre/OpenFreeMap para el mapa base, Photon/OpenStreetMap para búsqueda y geocodificación inversa, y Mapbox Directions para rutas; enfoque inicial en San Diego/Carabobo/Venezuela.
 - Móvil: `frontend/capacitor.config.ts` y `frontend/android/`.
 - Backend: `backend/src/index.ts`, rutas de Express y PostgreSQL mediante `pg`.
 - API: variable `VITE_API_URL`; en desarrollo se usa el host actual y el puerto 5000.

@@ -3,7 +3,7 @@ import { Bike, MapPin, ArrowRight, User, Eye, EyeOff, Clock, Send, Power, Star, 
 import { StatusBar, Style } from '@capacitor/status-bar';
 import { Capacitor } from '@capacitor/core';
 
-const MapaMapbox = React.lazy(() => import('./MapaMapbox'));
+const MapaLibre = React.lazy(() => import('./MapaLibre'));
 
 interface PedidoReal {
   id: number;
@@ -77,10 +77,60 @@ interface SugerenciaDireccion {
 
 const etiquetasTipoDireccion: Record<string, string> = {
   address: 'Dirección',
+  house: 'Dirección',
+  street: 'Calle',
   neighborhood: 'Sector',
   locality: 'Localidad',
-  district: 'Municipio',
-  place: 'Ciudad'
+  district: 'Sector',
+  place: 'Ciudad',
+  city: 'Ciudad',
+  poi: 'Establecimiento'
+};
+
+interface PropiedadesPhoton {
+  name?: unknown;
+  street?: unknown;
+  housenumber?: unknown;
+  locality?: unknown;
+  district?: unknown;
+  city?: unknown;
+  state?: unknown;
+  type?: unknown;
+  osm_key?: unknown;
+  osm_value?: unknown;
+}
+
+const textoPhoton = (value: unknown) => typeof value === 'string' ? value.trim() : '';
+
+const formatearDireccionPhoton = (properties: PropiedadesPhoton) => {
+  const street = textoPhoton(properties.street);
+  const houseNumber = textoPhoton(properties.housenumber);
+  const parts = [
+    textoPhoton(properties.name),
+    street ? `${houseNumber ? `${houseNumber} ` : ''}${street}` : '',
+    textoPhoton(properties.locality),
+    textoPhoton(properties.district),
+    textoPhoton(properties.city),
+    textoPhoton(properties.state)
+  ].filter(Boolean);
+
+  return parts.filter((part, index) => parts.findIndex(candidate => candidate.toLocaleLowerCase() === part.toLocaleLowerCase()) === index)
+    .join(', ');
+};
+
+const tipoDireccionPhoton = (properties: PropiedadesPhoton) => {
+  const osmKey = textoPhoton(properties.osm_key);
+  const osmValue = textoPhoton(properties.osm_value);
+  if (osmKey === 'place' && ['suburb', 'neighbourhood', 'quarter', 'hamlet'].includes(osmValue)) return 'neighborhood';
+
+  const type = textoPhoton(properties.type);
+  if (type === 'street') return 'street';
+  if (osmKey && osmKey !== 'place') return 'poi';
+  if (type === 'house') return 'address';
+  if (type === 'district') return 'district';
+  if (type === 'locality') return 'locality';
+  if (type === 'city') return 'city';
+  return 'place';
 };
 
 interface MensajeChat {
@@ -190,7 +240,6 @@ export default function App() {
   const tieneSigno = /[^A-Za-z0-9]/.test(password);
   const passwordCompleta = tieneMinLength && tieneMayuscula && tieneMinuscula && tieneNumero && tieneSigno;
 
-  const [descripcionPedido, setDescripcionPedido] = useState('');
   const [enviandoPedido, setEnviandoPedido] = useState(false);
   
   const [coordsUsuarioGPS, setCoordsUsuarioGPS] = useState<{ lat: number; lng: number } | null>(null);
@@ -212,6 +261,7 @@ export default function App() {
   const [sugerenciasDestino, setSugerenciasDestino] = useState<SugerenciaDireccion[]>([]);
   const [buscandoDireccion, setBuscandoDireccion] = useState({ origen: false, destino: false });
   const [errorGeocoding, setErrorGeocoding] = useState('');
+  const [errorRuta, setErrorRuta] = useState('');
   const debounceTimerRef = useRef<Record<'origen' | 'destino', ReturnType<typeof setTimeout> | null>>({
     origen: null,
     destino: null
@@ -220,7 +270,6 @@ export default function App() {
     origen: null,
     destino: null
   });
-
   const [distanciaKm, setDistanciaKm] = useState<number>(0);
   const [tiempoEstimadoMin, setTiempoEstimadoMin] = useState<number>(0);
   
@@ -372,6 +421,8 @@ export default function App() {
   const manejarClicEnMapa = async (lat: number, lng: number) => {
     if (!modoSeleccionMapa) return;
     const tipoActual = modoSeleccionMapa;
+    setErrorGeocoding('');
+    setErrorRuta('');
     if (debounceTimerRef.current[tipoActual]) clearTimeout(debounceTimerRef.current[tipoActual]!);
     geocodingControllerRef.current[tipoActual]?.abort();
     setBuscandoDireccion(current => ({ ...current, [tipoActual]: false }));
@@ -389,24 +440,34 @@ export default function App() {
       setReferenciaDestino('');
     }
 
+    const controller = new AbortController();
+    geocodingControllerRef.current[tipoActual] = controller;
     try {
-      const mapboxToken = import.meta.env.VITE_MAPBOX_TOKEN || '';
       const params = new URLSearchParams({
-        access_token: mapboxToken,
-        types: 'address,neighborhood,locality,district,place',
-        language: 'es',
+        lat: String(lat),
+        lon: String(lng),
+        radius: '0.5',
         limit: '1'
       });
-      const res = await fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json?${params}`);
-      if (!res.ok) throw new Error(`Mapbox respondió HTTP ${res.status}`);
+      const res = await fetch(`https://photon.komoot.io/reverse?${params}`, { signal: controller.signal });
+      if (!res.ok) throw new Error(`Photon respondió HTTP ${res.status}`);
       const data = await res.json();
-      const lugar = data?.features?.[0];
-      const nombreLugar = lugar?.text || lugar?.place_name || `Ubicación (${lat.toFixed(4)}, ${lng.toFixed(4)})`;
+      const propiedades = data?.features?.[0]?.properties as PropiedadesPhoton | undefined;
+      const nombreLugar = propiedades
+        ? formatearDireccionPhoton(propiedades)
+        : '';
+      const nombreFinal = nombreLugar || `Ubicación (${lat.toFixed(5)}, ${lng.toFixed(5)})`;
+      if (!nombreLugar) {
+        setErrorGeocoding('No se encontró el nombre de este lugar; conservamos la ubicación exacta del pin.');
+      }
 
-      if (tipoActual === 'origen') setOrigenInput(nombreLugar);
-      else setDestinoInput(nombreLugar);
-    } catch {
-      const fallback = `Ubicación (${lat.toFixed(4)}, ${lng.toFixed(4)})`;
+      if (tipoActual === 'origen') setOrigenInput(nombreFinal);
+      else setDestinoInput(nombreFinal);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return;
+      console.error('Error buscando el nombre del punto con Photon:', error);
+      setErrorGeocoding('No se pudo obtener el nombre del punto; conservamos la ubicación exacta del pin.');
+      const fallback = `Ubicación (${lat.toFixed(5)}, ${lng.toFixed(5)})`;
       if (tipoActual === 'origen') setOrigenInput(fallback);
       else setDestinoInput(fallback);
     }
@@ -415,6 +476,7 @@ export default function App() {
   const obtenerUbicacionActual = (objetivo: 'origen' | 'destino' | null = null) => {
     objetivoUbicacionRef.current = objetivo;
     setErrorUbicacion('');
+    setErrorRuta('');
     if (objetivo) {
       if (debounceTimerRef.current[objetivo]) clearTimeout(debounceTimerRef.current[objetivo]!);
       geocodingControllerRef.current[objetivo]?.abort();
@@ -474,6 +536,7 @@ export default function App() {
     setSugerencias([]);
     setReferencia('');
     setErrorGeocoding('');
+    setErrorRuta('');
     setBuscandoDireccion(current => ({ ...current, [tipo]: query.trim().length >= 3 }));
     setDistanciaKm(0);
     setTiempoEstimadoMin(0);
@@ -482,52 +545,48 @@ export default function App() {
     geocodingControllerRef.current[tipo]?.abort();
 
     const consulta = query.trim();
-    if (consulta.length < 3) return;
+    if (consulta.length < 3) {
+      return;
+    }
 
     debounceTimerRef.current[tipo] = setTimeout(async () => {
       const controller = new AbortController();
       geocodingControllerRef.current[tipo] = controller;
       try {
-        const mapboxToken = import.meta.env.VITE_MAPBOX_TOKEN || '';
-        if (!mapboxToken) throw new Error('Falta configurar el token público de Mapbox.');
-
-        const proximidad = coordsUsuarioGPS
-          ? `${coordsUsuarioGPS.lng},${coordsUsuarioGPS.lat}`
-          : '-68.0055,10.2291';
+        const proximidad = coordsUsuarioGPS || { lat: 10.2291, lng: -68.0055 };
         const params = new URLSearchParams({
-          access_token: mapboxToken,
-          country: 've',
+          q: consulta,
+          lat: String(proximidad.lat),
+          lon: String(proximidad.lng),
           bbox: '-68.4,10.0,-67.7,10.5',
-          proximity: proximidad,
-          types: 'address,neighborhood,locality,district,place',
-          fuzzyMatch: 'true',
-          autocomplete: 'true',
-          language: 'es',
           limit: '8'
         });
-        const endpoint = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(consulta)}.json?${params}`;
-        const response = await fetch(endpoint, { signal: controller.signal });
-        if (!response.ok) throw new Error(`Mapbox respondió HTTP ${response.status}`);
+        const response = await fetch(`https://photon.komoot.io/api/?${params}`, {
+          headers: { Accept: 'application/json' },
+          signal: controller.signal
+        });
+        if (!response.ok) throw new Error(`Photon respondió HTTP ${response.status}`);
 
         const data = await response.json();
         const features = Array.isArray(data?.features) ? data.features : [];
         const formatted: SugerenciaDireccion[] = features.flatMap((feature: {
-          place_name?: unknown;
-          center?: unknown;
-          place_type?: unknown;
+          properties?: PropiedadesPhoton;
+          geometry?: { coordinates?: unknown };
         }) => {
-          if (typeof feature.place_name !== 'string'
-            || !Array.isArray(feature.center)
-            || feature.center.length < 2
-            || !Number.isFinite(feature.center[0])
-            || !Number.isFinite(feature.center[1])) return [];
+          const coordinates = feature.geometry?.coordinates;
+          if (!Array.isArray(coordinates)
+            || typeof coordinates[0] !== 'number'
+            || typeof coordinates[1] !== 'number'
+            || !Number.isFinite(coordinates[0])
+            || !Number.isFinite(coordinates[1])) return [];
+          const properties = feature.properties || {};
+          const displayName = formatearDireccionPhoton(properties);
+          if (!displayName) return [];
           return [{
-            display_name: feature.place_name,
-            lon: feature.center[0],
-            lat: feature.center[1],
-            tipo: Array.isArray(feature.place_type) && typeof feature.place_type[0] === 'string'
-              ? feature.place_type[0]
-              : 'address'
+            display_name: displayName,
+            lon: coordinates[0],
+            lat: coordinates[1],
+            tipo: tipoDireccionPhoton(properties)
           }];
         });
 
@@ -536,28 +595,29 @@ export default function App() {
         setBuscandoDireccion(current => ({ ...current, [tipo]: false }));
       } catch (error) {
         if (error instanceof DOMException && error.name === 'AbortError') return;
-        console.error('Error buscando dirección en Mapbox:', error);
+        console.error('Error buscando dirección en Photon:', error);
         setBuscandoDireccion(current => ({ ...current, [tipo]: false }));
-        setErrorGeocoding('No se pudieron buscar direcciones. Puedes marcar el punto exacto en el mapa.');
+        setErrorGeocoding('No se pudieron buscar lugares en OpenStreetMap. Puedes marcar el punto exacto en el mapa.');
       }
-    }, 400);
+    }, 500);
   };
 
   const seleccionarSugerencia = (item: SugerenciaDireccion, tipo: 'origen' | 'destino') => {
     if (debounceTimerRef.current[tipo]) clearTimeout(debounceTimerRef.current[tipo]!);
     geocodingControllerRef.current[tipo]?.abort();
     setErrorGeocoding('');
+    setErrorRuta('');
     setBuscandoDireccion(current => ({ ...current, [tipo]: false }));
     setDistanciaKm(0);
     setTiempoEstimadoMin(0);
     if (tipo === 'origen') {
-      setCoordsOrigen({ lat: item.lat, lng: item.lon });
       setOrigenInput(item.display_name);
+      setCoordsOrigen({ lat: item.lat, lng: item.lon });
       setReferenciaOrigen('');
       setSugerenciasOrigen([]);
     } else {
-      setCoordsDestino({ lat: item.lat, lng: item.lon });
       setDestinoInput(item.display_name);
+      setCoordsDestino({ lat: item.lat, lng: item.lon });
       setReferenciaDestino('');
       setSugerenciasDestino([]);
     }
@@ -701,7 +761,7 @@ export default function App() {
           cliente_cedula: usuario.cedula || 'V-00000000',
           cliente_foto: fotoLocal || usuario.foto || '',
           tipo_servicio: serviceType,
-          descripcion: descripcionPedido || (serviceType === 'viajes' ? 'Servicio de viaje' : 'Servicio de envíos'),
+          descripcion: serviceType === 'viajes' ? 'Servicio de viaje' : 'Servicio de envíos',
           origen_texto: `${origenInput.trim()}${referenciaOrigen.trim() ? ` | Referencia: ${referenciaOrigen.trim()}` : ''}`.slice(0, 300),
           origen_lat: coordsOrigen.lat, origen_lon: coordsOrigen.lng,
           destino_texto: `${destinoInput.trim()}${referenciaDestino.trim() ? ` | Referencia: ${referenciaDestino.trim()}` : ''}`.slice(0, 300),
@@ -712,7 +772,7 @@ export default function App() {
         })
       });
       if (!res.ok) throw new Error(await mensajeErrorApi(res, 'No se pudo publicar el pedido'));
-      setDescripcionPedido(''); setOrigenInput(''); setDestinoInput('');
+      setOrigenInput(''); setDestinoInput('');
       setReferenciaPago('');
       setReferenciaOrigen(''); setReferenciaDestino('');
       setCoordsOrigen(null); setCoordsDestino(null);
@@ -1294,9 +1354,6 @@ export default function App() {
               <div className={`border p-6 rounded-3xl shadow-sm space-y-4 ${darkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-orange-100'}`}>
                 <div className="flex justify-between items-center">
                   <h3 className={`text-lg font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Nuevo Pedido</h3>
-                  <button onClick={toggleDarkMode} title="Cambiar Tema" className={`p-2 rounded-xl border transition cursor-pointer ${darkMode ? 'bg-slate-800 border-slate-700 text-amber-400' : 'bg-orange-50 border-orange-200 text-slate-700'}`}>
-                    {darkMode ? <Sun size={16} /> : <Moon size={16} />}
-                  </button>
                 </div>
 
                 <div className="grid grid-cols-1 min-[400px]:grid-cols-2 gap-3">
@@ -1442,7 +1499,7 @@ export default function App() {
                       <label className={`text-xs font-bold ${darkMode ? 'text-slate-300' : 'text-slate-700'}`}>{serviceType === 'viajes' ? 'Punto de partida' : 'Origen (Retirada)'}</label>
                       <div className="relative mt-1">
                         <div className="address-controls grid grid-cols-[minmax(0,1fr)_auto_auto] gap-2">
-                        <input type="text" value={origenInput} onChange={e => buscarDireccionGeocoding(e.target.value, 'origen')} placeholder="Calle, avenida, número o sector" className={`min-w-0 border rounded-xl px-3 py-2 text-xs ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
+                        <input type="text" value={origenInput} onChange={e => buscarDireccionGeocoding(e.target.value, 'origen')} placeholder="Sector, calle o establecimiento" className={`min-w-0 border rounded-xl px-3 py-2 text-xs ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
                         <button type="button" onClick={() => obtenerUbicacionActual('origen')} disabled={ubicacionCargando} aria-label="Usar mi ubicación como origen" title="Usar mi ubicación como origen" className="px-3 py-2 rounded-xl border text-xs font-bold text-[#FF5722] border-orange-200 bg-orange-50 disabled:opacity-50">
                           <Navigation size={15} />
                         </button>
@@ -1459,7 +1516,7 @@ export default function App() {
                         </div>
                       )}
                       </div>
-                      {buscandoDireccion.origen && <p className="mt-1 text-[10px] text-slate-500">Buscando calles y sectores…</p>}
+                      {buscandoDireccion.origen && <p className="mt-1 text-[10px] text-slate-500">Buscando calles, sectores y establecimientos…</p>}
                       {!buscandoDireccion.origen && origenInput.trim().length >= 3 && sugerenciasOrigen.length === 0 && !errorGeocoding && (
                         <p className="mt-1 text-[10px] text-slate-500">¿No aparece el lugar o establecimiento? Toca “Mapa” para marcarlo y agrega una referencia.</p>
                       )}
@@ -1470,7 +1527,7 @@ export default function App() {
                       <label className={`text-xs font-bold ${darkMode ? 'text-slate-300' : 'text-slate-700'}`}>{serviceType === 'viajes' ? 'Destino del viaje' : 'Destino (Entrega)'}</label>
                       <div className="relative mt-1">
                         <div className="address-controls grid grid-cols-[minmax(0,1fr)_auto_auto] gap-2">
-                        <input type="text" value={destinoInput} onChange={e => buscarDireccionGeocoding(e.target.value, 'destino')} placeholder="Calle, avenida, número o sector" className={`min-w-0 border rounded-xl px-3 py-2 text-xs ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
+                        <input type="text" value={destinoInput} onChange={e => buscarDireccionGeocoding(e.target.value, 'destino')} placeholder="Sector, calle o establecimiento" className={`min-w-0 border rounded-xl px-3 py-2 text-xs ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
                         <button type="button" onClick={() => obtenerUbicacionActual('destino')} disabled={ubicacionCargando} aria-label="Usar mi ubicación como destino" title="Usar mi ubicación como destino" className="px-3 py-2 rounded-xl border text-xs font-bold text-[#FF5722] border-orange-200 bg-orange-50 disabled:opacity-50">
                           <Navigation size={15} />
                         </button>
@@ -1487,7 +1544,7 @@ export default function App() {
                         </div>
                       )}
                       </div>
-                      {buscandoDireccion.destino && <p className="mt-1 text-[10px] text-slate-500">Buscando calles y sectores…</p>}
+                      {buscandoDireccion.destino && <p className="mt-1 text-[10px] text-slate-500">Buscando calles, sectores y establecimientos…</p>}
                       {!buscandoDireccion.destino && destinoInput.trim().length >= 3 && sugerenciasDestino.length === 0 && !errorGeocoding && (
                         <p className="mt-1 text-[10px] text-slate-500">¿No aparece el lugar o establecimiento? Toca “Mapa” para marcarlo y agrega una referencia.</p>
                       )}
@@ -1495,6 +1552,10 @@ export default function App() {
                     </div>
 
                     {errorGeocoding && <p role="alert" className="text-[10px] text-amber-700">{errorGeocoding}</p>}
+                    {errorRuta && <p role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">{errorRuta}</p>}
+                    <p className="text-[9px] text-slate-500">
+                      Búsqueda Photon · Datos © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer" className="underline">OpenStreetMap contributors</a>
+                    </p>
 
                     {errorUbicacion && (
                       <div role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs font-medium text-amber-900">
@@ -1504,11 +1565,6 @@ export default function App() {
                         </button>
                       </div>
                     )}
-
-                    <div>
-                      <label className={`text-xs font-bold ${darkMode ? 'text-slate-300' : 'text-slate-700'}`}>Descripción del pedido</label>
-                      <textarea value={descripcionPedido} onChange={e => setDescripcionPedido(e.target.value)} placeholder={serviceType === 'viajes' ? 'Ej. cantidad de pasajeros o indicaciones para el conductor' : 'Ej. comida, compras o paquete que necesitas enviar'} rows={2} className={`w-full border rounded-xl px-3 py-2 text-xs mt-1 ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
-                    </div>
 
                     {rutaCompletaLista && (
                       <div className={`p-3 rounded-2xl border flex justify-between items-center text-xs ${darkMode ? 'bg-slate-950 border-slate-800 text-slate-200' : 'bg-orange-50/50 border-orange-200 text-slate-700'}`}>
@@ -1589,7 +1645,7 @@ export default function App() {
                 {ubicacionCargando ? 'Buscando...' : 'Mi ubicación'}
               </button>
               <React.Suspense fallback={<div className="flex h-full w-full items-center justify-center bg-slate-100 text-xs font-bold text-slate-500">Cargando mapa...</div>}>
-                <MapaMapbox
+                <MapaLibre
                   coordsOrigen={coordsOrigen}
                   coordsDestino={coordsDestino}
                   coordsUsuario={
@@ -1600,7 +1656,12 @@ export default function App() {
                   }
                   modoSeleccion={modoSeleccionMapa}
                   onMapClick={manejarClicEnMapa}
-                  onRutaCalculada={(km, min) => { setDistanciaKm(km); setTiempoEstimadoMin(min); }}
+                  onRutaCalculada={(km, min) => {
+                    setDistanciaKm(km);
+                    setTiempoEstimadoMin(min);
+                    setErrorRuta('');
+                  }}
+                  onErrorRuta={setErrorRuta}
                   mostrarRuta={true}
                   mostrarPines={true}
                   darkMode={darkMode}
@@ -1643,10 +1704,6 @@ export default function App() {
                   className={`p-2 rounded-xl border transition cursor-pointer ${pedidoAsignadoRepartidor || cambiandoEstadoRepartidor ? 'opacity-50 cursor-not-allowed bg-slate-200 border-slate-300 text-slate-400' : (repartidorOnline ? 'bg-red-50 text-red-600 border-red-200' : 'bg-emerald-50 text-emerald-600 border-emerald-200')}`}
                 >
                   <Power size={18} className={cambiandoEstadoRepartidor ? 'animate-pulse' : ''} />
-                </button>
-
-                <button onClick={toggleDarkMode} title="Cambiar Tema" className={`p-2 rounded-xl border transition cursor-pointer ${darkMode ? 'bg-slate-800 border-slate-700 text-amber-400' : 'bg-orange-50 border-orange-200 text-slate-700'}`}>
-                  {darkMode ? <Sun size={18} /> : <Moon size={18} />}
                 </button>
               </div>
             </div>
@@ -1739,7 +1796,7 @@ export default function App() {
                   </div>
                 )}
                 <React.Suspense fallback={<div className="flex h-full w-full items-center justify-center bg-slate-100 text-xs font-bold text-slate-500">Cargando mapa...</div>}>
-                  <MapaMapbox
+                  <MapaLibre
                     coordsOrigen={
                       pedidoAsignadoRepartidor?.estado === 'aceptado'
                         ? (coordsUsuarioGPS || { lat: pedidoAsignadoRepartidor.origen_lat, lng: pedidoAsignadoRepartidor.origen_lon })
@@ -1800,6 +1857,24 @@ export default function App() {
                         {usuario.placa && <p className="mt-0.5 text-xs text-slate-500">Placa: {usuario.placa}</p>}
                       </div>
                     )}
+                  </div>
+                  <div className={`flex items-center justify-between gap-4 rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-950/60' : 'border-slate-100 bg-slate-50'}`}>
+                    <div>
+                      <h3 className={`text-sm font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Apariencia</h3>
+                      <p className="mt-1 text-xs text-slate-500">Modo oscuro</p>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={darkMode}
+                      aria-label="Modo oscuro"
+                      onClick={toggleDarkMode}
+                      className={`flex h-10 w-16 shrink-0 items-center rounded-full border p-1 transition-colors ${darkMode ? 'justify-end border-orange-500 bg-orange-500' : 'justify-start border-slate-300 bg-slate-200'}`}
+                    >
+                      <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-slate-700 shadow-sm">
+                        {darkMode ? <Sun size={15} /> : <Moon size={15} />}
+                      </span>
+                    </button>
                   </div>
                   <div className={`rounded-2xl border p-4 text-xs leading-relaxed ${darkMode ? 'border-orange-900/50 bg-orange-950/20 text-slate-300' : 'border-orange-100 bg-orange-50 text-slate-600'}`}>
                     Mantén tus datos y, si eres repartidor, la información de tu vehículo actualizada para que los clientes puedan identificarte.

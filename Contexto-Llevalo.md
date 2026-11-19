@@ -11,7 +11,8 @@ Los usuarios pueden registrarse e iniciar sesión como cliente o repartidor.
 - Backend Express + PostgreSQL.
 - App móvil Android empaquetada con Capacitor.
 - Comunicación HTTP con la API y sincronización periódica de pedidos.
-- Mapas de Mapbox con enfoque inicial en San Diego, Carabobo, Venezuela.
+- Mapa interactivo con MapLibre y estilos de OpenFreeMap; búsqueda y geocodificación inversa con Photon sobre datos de OpenStreetMap.
+- Mapbox Directions se conserva para calcular rutas; `VITE_MAPBOX_TOKEN` sigue siendo necesario para esa función.
 
 ## Estado actual
 
@@ -29,8 +30,9 @@ Los usuarios pueden registrarse e iniciar sesión como cliente o repartidor.
 - Hay modo claro/oscuro y actualización automática de la tasa oficial de Dólar API.
 - La app móvil usa `@capacitor/status-bar` para cubrir el área segura en Android.
 - La interfaz adapta la tipografía y los controles a pantallas estrechas; Android aplica a la WebView la escala de texto configurada en el dispositivo y los formularios reacomodan sus botones en pantallas compactas.
-- La búsqueda de direcciones usa Mapbox Geocoding v5 para direcciones, sectores y localidades; si no hay coincidencia, se puede fijar el punto en el mapa y agregar una referencia.
-- Geocoding v5 ya no ofrece resultados POI (establecimientos), y Mapbox Search Box no cubre Venezuela; para autocompletar negocios se necesita otro proveedor con cobertura local.
+- La búsqueda de Photon prioriza San Diego, Carabobo y puede encontrar sectores, calles y establecimientos incluidos en OpenStreetMap. Los resultados incluyen coordenadas para seleccionar con precisión el punto; si falta un lugar, se puede marcar directamente en el mapa y agregar una referencia.
+- Photon y OpenFreeMap son servicios públicos sin garantía de disponibilidad; deben usarse razonablemente. Para mayor volumen, conviene alojar Photon o contratar un proveedor con SLA.
+- El mapa muestra atribución a OpenStreetMap. Mapbox solo se utiliza para Directions, no como mapa base ni proveedor de búsqueda.
 
 ## Build móvil
 
@@ -44,6 +46,15 @@ Cada push a `main` activa GitHub Actions:
 
 La carpeta de destino es administrada mediante el secreto `GOOGLE_DRIVE_FOLDER_ID`.
 La autenticación se realiza mediante secretos OAuth almacenados en GitHub Actions.
+El código de versión Android se incrementa con el número de ejecución de GitHub Actions. El workflow restaura la firma debug desde el secreto persistente `ANDROID_DEBUG_KEYSTORE_BASE64`; mientras ese secreto no esté configurado, la acción falla explícitamente y no publica APKs incompatibles. Para crear una clave beta una sola vez en PowerShell:
+
+```powershell
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.android" | Out-Null
+keytool -genkeypair -v -keystore "$env:USERPROFILE\.android\llevalo-debug.keystore" -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("$env:USERPROFILE\.android\llevalo-debug.keystore")) | Set-Clipboard
+```
+
+Crear en el repositorio de GitHub el secreto `ANDROID_DEBUG_KEYSTORE_BASE64` y pegar el contenido copiado. No subir el keystore al repositorio ni compartir su contenido en el chat. La primera APK con la clave nueva exige desinstalar una vez las APK anteriores firmadas con claves temporales; después las actualizaciones de Actions conservarán la firma.
 
 ## Secretos
 
@@ -54,13 +65,13 @@ Configurar las variables de entorno en el servicio correspondiente:
 - `GOOGLE_CLIENT_SECRET`
 - `GOOGLE_REFRESH_TOKEN`
 - `GOOGLE_DRIVE_FOLDER_ID`
+- `ANDROID_DEBUG_KEYSTORE_BASE64` (APK beta, firma persistente)
 - `JWT_SECRET` (backend, mínimo 32 caracteres aleatorios)
 - `CORS_ORIGINS` (backend, lista de orígenes permitidos separados por comas)
 - `VITE_API_URL` (frontend, URL HTTPS pública del backend)
+- `VITE_MAPBOX_TOKEN` (frontend, Directions)
 
-Los valores de Google Drive pertenecen a GitHub Actions; las demás variables deben
-configurarse en el hosting del backend o frontend indicado. El backend no inicia si
-`JWT_SECRET` falta o tiene menos de 32 caracteres.
+Los secretos de Google Drive y `ANDROID_DEBUG_KEYSTORE_BASE64` pertenecen a GitHub Actions. `JWT_SECRET` y `CORS_ORIGINS` se configuran en el backend; `VITE_API_URL` y `VITE_MAPBOX_TOKEN`, en el entorno de compilación del frontend. El backend no inicia si `JWT_SECRET` falta o tiene menos de 32 caracteres.
 
 Si algún secreto previo quedó expuesto en historial o texto, debe rotarse en Google Cloud.
 
