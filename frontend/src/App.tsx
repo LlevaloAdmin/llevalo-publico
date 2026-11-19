@@ -250,10 +250,8 @@ export default function App() {
 
   const [origenInput, setOrigenInput] = useState('');
   const [coordsOrigen, setCoordsOrigen] = useState<{ lat: number; lng: number } | null>(null);
-  const [referenciaOrigen, setReferenciaOrigen] = useState('');
   const [destinoInput, setDestinoInput] = useState('');
   const [coordsDestino, setCoordsDestino] = useState<{ lat: number; lng: number } | null>(null);
-  const [referenciaDestino, setReferenciaDestino] = useState('');
   
   const [modoSeleccionMapa, setModoSeleccionMapa] = useState<'origen' | 'destino' | null>(null);
 
@@ -433,11 +431,9 @@ export default function App() {
     if (tipoActual === 'origen') {
       setCoordsOrigen({ lat, lng });
       setOrigenInput('Buscando lugar...');
-      setReferenciaOrigen('');
     } else {
       setCoordsDestino({ lat, lng });
       setDestinoInput('Buscando lugar...');
-      setReferenciaDestino('');
     }
 
     const controller = new AbortController();
@@ -500,14 +496,12 @@ export default function App() {
           setTiempoEstimadoMin(0);
           setCoordsOrigen(ubicacion);
           setOrigenInput('Mi ubicación actual');
-          setReferenciaOrigen('');
           setSugerenciasOrigen([]);
         } else if (objetivoUbicacionRef.current === 'destino') {
           setDistanciaKm(0);
           setTiempoEstimadoMin(0);
           setCoordsDestino(ubicacion);
           setDestinoInput('Mi ubicación actual');
-          setReferenciaDestino('');
           setSugerenciasDestino([]);
         }
 
@@ -530,11 +524,9 @@ export default function App() {
     const setInput = tipo === 'origen' ? setOrigenInput : setDestinoInput;
     const setCoords = tipo === 'origen' ? setCoordsOrigen : setCoordsDestino;
     const setSugerencias = tipo === 'origen' ? setSugerenciasOrigen : setSugerenciasDestino;
-    const setReferencia = tipo === 'origen' ? setReferenciaOrigen : setReferenciaDestino;
     setInput(query);
     setCoords(null);
     setSugerencias([]);
-    setReferencia('');
     setErrorGeocoding('');
     setErrorRuta('');
     setBuscandoDireccion(current => ({ ...current, [tipo]: query.trim().length >= 3 }));
@@ -613,12 +605,10 @@ export default function App() {
     if (tipo === 'origen') {
       setOrigenInput(item.display_name);
       setCoordsOrigen({ lat: item.lat, lng: item.lon });
-      setReferenciaOrigen('');
       setSugerenciasOrigen([]);
     } else {
       setDestinoInput(item.display_name);
       setCoordsDestino({ lat: item.lat, lng: item.lon });
-      setReferenciaDestino('');
       setSugerenciasDestino([]);
     }
   };
@@ -762,9 +752,9 @@ export default function App() {
           cliente_foto: fotoLocal || usuario.foto || '',
           tipo_servicio: serviceType,
           descripcion: serviceType === 'viajes' ? 'Servicio de viaje' : 'Servicio de envíos',
-          origen_texto: `${origenInput.trim()}${referenciaOrigen.trim() ? ` | Referencia: ${referenciaOrigen.trim()}` : ''}`.slice(0, 300),
+          origen_texto: origenInput.trim().slice(0, 300),
           origen_lat: coordsOrigen.lat, origen_lon: coordsOrigen.lng,
-          destino_texto: `${destinoInput.trim()}${referenciaDestino.trim() ? ` | Referencia: ${referenciaDestino.trim()}` : ''}`.slice(0, 300),
+          destino_texto: destinoInput.trim().slice(0, 300),
           destino_lat: coordsDestino.lat, destino_lon: coordsDestino.lng,
           distancia_km: distanciaKm, tiempo_min: tiempoEstimadoMin, tarifa: tarifaTotal,
           metodo_pago: serviceType === 'viajes' ? metodoPagoViaje : undefined,
@@ -774,7 +764,6 @@ export default function App() {
       if (!res.ok) throw new Error(await mensajeErrorApi(res, 'No se pudo publicar el pedido'));
       setOrigenInput(''); setDestinoInput('');
       setReferenciaPago('');
-      setReferenciaOrigen(''); setReferenciaDestino('');
       setCoordsOrigen(null); setCoordsDestino(null);
       setDistanciaKm(0); setTiempoEstimadoMin(0);
       setSegundosRestantes(60);
@@ -794,7 +783,6 @@ export default function App() {
       const data = await response.json();
       setCoordsOrigen(null); setCoordsDestino(null);
       setOrigenInput(''); setDestinoInput('');
-      setReferenciaOrigen(''); setReferenciaDestino('');
       setDistanciaKm(0); setTiempoEstimadoMin(0);
       setSugerenciasOrigen([]); setSugerenciasDestino([]);
       await sincronizarDatos();
@@ -1518,9 +1506,8 @@ export default function App() {
                       </div>
                       {buscandoDireccion.origen && <p className="mt-1 text-[10px] text-slate-500">Buscando calles, sectores y establecimientos…</p>}
                       {!buscandoDireccion.origen && origenInput.trim().length >= 3 && sugerenciasOrigen.length === 0 && !errorGeocoding && (
-                        <p className="mt-1 text-[10px] text-slate-500">¿No aparece el lugar o establecimiento? Toca “Mapa” para marcarlo y agrega una referencia.</p>
+                        <p className="mt-1 text-[10px] text-slate-500">¿No aparece el lugar o establecimiento? Toca “Mapa” para marcar el punto exacto.</p>
                       )}
-                      <input type="text" maxLength={100} value={referenciaOrigen} onChange={e => setReferenciaOrigen(e.target.value)} placeholder="Referencia: urbanización, casa, bloque o apartamento (opcional)" className={`w-full mt-2 border rounded-xl px-3 py-2 text-xs ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
                     </div>
 
                     <div>
@@ -1546,9 +1533,8 @@ export default function App() {
                       </div>
                       {buscandoDireccion.destino && <p className="mt-1 text-[10px] text-slate-500">Buscando calles, sectores y establecimientos…</p>}
                       {!buscandoDireccion.destino && destinoInput.trim().length >= 3 && sugerenciasDestino.length === 0 && !errorGeocoding && (
-                        <p className="mt-1 text-[10px] text-slate-500">¿No aparece el lugar o establecimiento? Toca “Mapa” para marcarlo y agrega una referencia.</p>
+                        <p className="mt-1 text-[10px] text-slate-500">¿No aparece el lugar o establecimiento? Toca “Mapa” para marcar el punto exacto.</p>
                       )}
-                      <input type="text" maxLength={100} value={referenciaDestino} onChange={e => setReferenciaDestino(e.target.value)} placeholder="Referencia: urbanización, casa, bloque o apartamento (opcional)" className={`w-full mt-2 border rounded-xl px-3 py-2 text-xs ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
                     </div>
 
                     {errorGeocoding && <p role="alert" className="text-[10px] text-amber-700">{errorGeocoding}</p>}
