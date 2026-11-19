@@ -13,3 +13,10 @@ backend/dist/*
 !backend/dist/middleware/
 backend/dist/middleware/*
 !backend/dist/middleware/auth.js
+!backend/dist/routes/
+backend/dist/routes/*
+!backend/dist/routes/pagos.js
+!backend/dist/utils/
+backend/dist/utils/*
+!backend/dist/utils/pricing.js
+!backend/dist/utils/payments.js

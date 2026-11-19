@@ -2,7 +2,7 @@
 
 ## Producto
 
-Llévalo es una aplicación de delivery para pedidos de comida, mercado, mandados y viajes.
+Llévalo ofrece dos servicios principales: envíos (comida, mercado, paquetes y mandados) y viajes.
 Los usuarios pueden registrarse e iniciar sesión como cliente o repartidor.
 
 ## Arquitectura
@@ -18,9 +18,19 @@ Los usuarios pueden registrarse e iniciar sesión como cliente o repartidor.
 - Existe autenticación con registro, login y sesión guardada en `localStorage`.
 - Los clientes pueden publicar pedidos, consultar postulaciones y aceptar repartidores.
 - Los repartidores pueden consultar pedidos, postularse, cancelar postulaciones y actualizar ubicación.
-- Existe chat básico asociado a cada pedido.
+- El selector principal agrupa los servicios en Envíos y Viajes; se conservan los tipos históricos para pedidos existentes.
+- Los viajes cuestan USD 0,38/km si la ruta es menor de 1 km y USD 0,28/km desde 1 km, con el mínimo vigente de USD 1,50. El backend recalcula y valida la tarifa.
+- Los viajes admiten Pago Móvil con verificación manual, efectivo confirmado por el conductor antes de iniciar y saldo corporativo prepagado. Los envíos no requieren pago en la app.
+- Un viaje puede cancelarse hasta antes de iniciarse, incluso después de que un conductor lo acepte. Si se pagó con saldo corporativo, el sistema devuelve el monto al saldo; si fue Pago Móvil, queda una devolución pendiente para que el administrador verifique el abono, devuelva el dinero manualmente y confirme la operación.
+- El panel de administración permite validar pagos, gestionar devoluciones de Pago Móvil, configurar los datos receptores y recargar saldos corporativos. El permiso se controla con la columna `usuarios.es_admin`.
+- No se permite el registro público de administradores. La primera cuenta administradora se habilita manualmente en la base de datos y debe volver a iniciar sesión para recibir el permiso.
+- Los cambios de perfil se guardan en la base de datos.
+- El chat se mantiene para envíos y se oculta en viajes.
 - Hay modo claro/oscuro y actualización automática de la tasa oficial de Dólar API.
 - La app móvil usa `@capacitor/status-bar` para cubrir el área segura en Android.
+- La interfaz adapta la tipografía y los controles a pantallas estrechas; Android aplica a la WebView la escala de texto configurada en el dispositivo y los formularios reacomodan sus botones en pantallas compactas.
+- La búsqueda de direcciones usa Mapbox Geocoding v5 para direcciones, sectores y localidades; si no hay coincidencia, se puede fijar el punto en el mapa y agregar una referencia.
+- Geocoding v5 ya no ofrece resultados POI (establecimientos), y Mapbox Search Box no cubre Venezuela; para autocompletar negocios se necesita otro proveedor con cobertura local.
 
 ## Build móvil
 
@@ -57,6 +67,6 @@ Si algún secreto previo quedó expuesto en historial o texto, debe rotarse en G
 ## Próximas mejoras
 
 - Reforzar pantalla completa y manejo seguro de áreas de notch.
-- Crear menús distintos para invitados, clientes y repartidores.
+- Incorporar notificaciones para la revisión de pagos.
 - Mantener una navegación clara y consistente entre web y Android.
 - Mejorar seguridad, pruebas, estados de pedidos y manejo de errores.

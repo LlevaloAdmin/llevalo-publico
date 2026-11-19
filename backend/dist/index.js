@@ -14,6 +14,7 @@ dotenv_1.default.config();
 require("./db");
 const auth_2 = __importDefault(require("./routes/auth"));
 const pedidos_1 = __importDefault(require("./routes/pedidos"));
+const pagos_1 = __importDefault(require("./routes/pagos"));
 const app = (0, express_1.default)();
 app.use((0, cors_1.default)({
     origin: (origin, callback) => callback(null, !origin || config_1.allowedOrigins.includes(origin))
@@ -21,6 +22,7 @@ app.use((0, cors_1.default)({
 app.use(express_1.default.json({ limit: '1mb' }));
 app.use('/api/auth', auth_2.default);
 app.use('/api/pedidos', pedidos_1.default);
+app.use('/api/pagos', pagos_1.default);
 const server = http_1.default.createServer(app);
 const io = new socket_io_1.Server(server, {
     cors: {

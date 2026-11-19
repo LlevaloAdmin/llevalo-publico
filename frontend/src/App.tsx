@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Bike, MapPin, ArrowRight, User, Eye, EyeOff, Clock, Send, Power, Star, Moon, Sun, DollarSign, XCircle, Navigation, CheckCircle2, Circle } from 'lucide-react';
+import { Bike, MapPin, ArrowRight, User, Eye, EyeOff, Clock, Send, Power, Star, Moon, Sun, DollarSign, XCircle, Navigation, CheckCircle2, Circle, Package, CarFront } from 'lucide-react';
 import { StatusBar, Style } from '@capacitor/status-bar';
 import { Capacitor } from '@capacitor/core';
 
@@ -9,6 +9,7 @@ interface PedidoReal {
   id: number;
   cliente_id: number;
   cliente_nombre: string;
+  cliente_email?: string;
   cliente_cedula?: string;
   cliente_foto?: string;
   repartidor_id?: number;
@@ -29,11 +30,31 @@ interface PedidoReal {
   distancia_km: number;
   tiempo_min: number;
   tarifa: string;
+  metodo_pago?: 'pago_movil' | 'efectivo' | 'saldo_corporativo' | 'no_aplica';
+  estado_pago?: 'no_aplica' | 'pendiente' | 'pagado' | 'rechazado' | 'reembolsado' | 'reembolso_pendiente';
+  referencia_pago?: string | null;
+  creado_en?: string;
   estado: 'pendiente' | 'postulado' | 'aceptado' | 'entregado_repartidor' | 'completado' | 'cancelado';
   repartidor_lat?: number;
   repartidor_lon?: number;
   created_at?: string;
 }
+
+type TipoServicio = 'envios' | 'viajes';
+
+const etiquetaTipoServicio = (tipo: string) => {
+  if (tipo === 'viajes') return 'Viajes';
+  if (tipo === 'comida') return 'Envíos · comida';
+  if (tipo === 'mercado') return 'Envíos · mercado';
+  return 'Envíos';
+};
+
+const etiquetaMetodoPago = (metodo?: string) => {
+  if (metodo === 'pago_movil') return 'Pago Móvil';
+  if (metodo === 'efectivo') return 'Efectivo';
+  if (metodo === 'saldo_corporativo') return 'Saldo corporativo';
+  return 'Sin método de pago';
+};
 
 interface Postulacion {
   id: number;
@@ -46,6 +67,21 @@ interface Postulacion {
   calificacion: number;
   estado: 'pendiente' | 'aceptado' | 'rechazado';
 }
+
+interface SugerenciaDireccion {
+  display_name: string;
+  lat: number;
+  lon: number;
+  tipo: string;
+}
+
+const etiquetasTipoDireccion: Record<string, string> = {
+  address: 'Dirección',
+  neighborhood: 'Sector',
+  locality: 'Localidad',
+  district: 'Municipio',
+  place: 'Ciudad'
+};
 
 interface MensajeChat {
   id: number;
@@ -67,6 +103,19 @@ interface UsuarioSesion {
   vehiculo_foto?: string;
   calificacion?: number;
   rol: 'cliente' | 'repartidor';
+  es_admin?: boolean;
+}
+
+type MetodoPagoViaje = 'pago_movil' | 'efectivo' | 'saldo_corporativo';
+
+interface ConfiguracionPago {
+  pagoMovil: {
+    banco: string;
+    telefono: string;
+    cedula: string;
+    titular: string;
+  };
+  saldoCorporativo: number;
 }
 
 const API_URL = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:5000`;
@@ -80,28 +129,45 @@ const authenticatedFetch = (url: string, options: RequestInit = {}) => {
   return fetch(url, { ...options, headers });
 };
 
+const mensajeErrorApi = async (response: Response, mensajePredeterminado: string): Promise<string> => {
+  const payload: unknown = await response.json().catch(() => null);
+  if (payload && typeof payload === 'object' && 'error' in payload && typeof payload.error === 'string') {
+    return payload.error;
+  }
+  return `${mensajePredeterminado} (HTTP ${response.status})`;
+};
+
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'home' | 'cliente' | 'repartidor' | 'perfil' | 'auth'>('home');
-  const [serviceType, setServiceType] = useState<'comida' | 'mercado' | 'mandados' | 'viajes'>('comida');
+  const [activeTab, setActiveTab] = useState<'home' | 'cliente' | 'repartidor' | 'perfil' | 'auth' | 'admin'>('home');
+  const [serviceType, setServiceType] = useState<TipoServicio>('envios');
   
   const [darkMode, setDarkMode] = useState<boolean>(() => localStorage.getItem('llevalo_dark_mode') === 'true');
 
   const [usuario, setUsuario] = useState<UsuarioSesion | null>(() => {
     const storedUser = localStorage.getItem('llevalo_usuario');
-    if (!storedUser) return null;
+    const storedToken = localStorage.getItem('llevalo_token');
+    if (!storedUser || !storedToken) {
+      localStorage.removeItem('llevalo_usuario');
+      localStorage.removeItem('llevalo_token');
+      return null;
+    }
     try {
       const parsed = JSON.parse(storedUser);
       return parsed?.id ? parsed : null;
     } catch {
       localStorage.removeItem('llevalo_usuario');
+      localStorage.removeItem('llevalo_token');
       return null;
     }
   });
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [authRoleSelection, setAuthRoleSelection] = useState<'cliente' | 'repartidor'>('cliente');
   const [errorAuth, setErrorAuth] = useState('');
+  const [guardandoPerfil, setGuardandoPerfil] = useState(false);
+  const [errorPerfil, setErrorPerfil] = useState('');
 
   const [repartidorOnline, setRepartidorOnline] = useState(true);
+  const [cambiandoEstadoRepartidor, setCambiandoEstadoRepartidor] = useState(false);
 
   const [nombre, setNombre] = useState('');
   const [email, setEmail] = useState('');
@@ -135,21 +201,34 @@ export default function App() {
 
   const [origenInput, setOrigenInput] = useState('');
   const [coordsOrigen, setCoordsOrigen] = useState<{ lat: number; lng: number } | null>(null);
+  const [referenciaOrigen, setReferenciaOrigen] = useState('');
   const [destinoInput, setDestinoInput] = useState('');
   const [coordsDestino, setCoordsDestino] = useState<{ lat: number; lng: number } | null>(null);
+  const [referenciaDestino, setReferenciaDestino] = useState('');
   
   const [modoSeleccionMapa, setModoSeleccionMapa] = useState<'origen' | 'destino' | null>(null);
 
-  const [sugerenciasOrigen, setSugerenciasOrigen] = useState<any[]>([]);
-  const [sugerenciasDestino, setSugerenciasDestino] = useState<any[]>([]);
-  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [sugerenciasOrigen, setSugerenciasOrigen] = useState<SugerenciaDireccion[]>([]);
+  const [sugerenciasDestino, setSugerenciasDestino] = useState<SugerenciaDireccion[]>([]);
+  const [buscandoDireccion, setBuscandoDireccion] = useState({ origen: false, destino: false });
+  const [errorGeocoding, setErrorGeocoding] = useState('');
+  const debounceTimerRef = useRef<Record<'origen' | 'destino', ReturnType<typeof setTimeout> | null>>({
+    origen: null,
+    destino: null
+  });
+  const geocodingControllerRef = useRef<Record<'origen' | 'destino', AbortController | null>>({
+    origen: null,
+    destino: null
+  });
 
   const [distanciaKm, setDistanciaKm] = useState<number>(0);
   const [tiempoEstimadoMin, setTiempoEstimadoMin] = useState<number>(0);
   
   const rutaCompletaLista = Boolean(coordsOrigen && coordsDestino && origenInput.trim() && destinoInput.trim());
 
-  const costoPorKm = serviceType === 'viajes' ? 0.80 : 0.50; 
+  const costoPorKm = serviceType === 'viajes'
+    ? (distanciaKm >= 1 ? 0.28 : 0.38)
+    : 0.50;
   const tarifaTotal = rutaCompletaLista ? Math.max(1.5, distanciaKm * costoPorKm).toFixed(2) : '0.00';
 
   const [tasaBCV, setTasaBCV] = useState<number>(904.45);
@@ -159,6 +238,19 @@ export default function App() {
   const [postulacionesReales, setPostulacionesReales] = useState<Postulacion[]>([]);
   const [mensajesChat, setMensajesChat] = useState<MensajeChat[]>([]);
   const [nuevoMensajeTexto, setNuevoMensajeTexto] = useState('');
+  const [metodoPagoViaje, setMetodoPagoViaje] = useState<MetodoPagoViaje>('pago_movil');
+  const [referenciaPago, setReferenciaPago] = useState('');
+  const [configuracionPago, setConfiguracionPago] = useState<ConfiguracionPago | null>(null);
+  const [cargandoConfiguracionPago, setCargandoConfiguracionPago] = useState(false);
+  const [errorPago, setErrorPago] = useState('');
+  const [pagosPendientesAdmin, setPagosPendientesAdmin] = useState<PedidoReal[]>([]);
+  const [cargandoAdmin, setCargandoAdmin] = useState(false);
+  const [errorAdmin, setErrorAdmin] = useState('');
+  const [mensajeAdmin, setMensajeAdmin] = useState('');
+  const [configPagoAdmin, setConfigPagoAdmin] = useState({ banco: '', telefono: '', cedula: '', titular: '' });
+  const [emailRecargaSaldo, setEmailRecargaSaldo] = useState('');
+  const [montoRecargaSaldo, setMontoRecargaSaldo] = useState('');
+  const [notaRecargaSaldo, setNotaRecargaSaldo] = useState('');
 
   const [segundosRestantes, setSegundosRestantes] = useState<number>(60);
 
@@ -233,6 +325,13 @@ export default function App() {
     return () => clearInterval(timer);
   }, []);
 
+  useEffect(() => () => {
+    for (const tipo of ['origen', 'destino'] as const) {
+      if (debounceTimerRef.current[tipo]) clearTimeout(debounceTimerRef.current[tipo]!);
+      geocodingControllerRef.current[tipo]?.abort();
+    }
+  }, []);
+
   const convertirImagenSegura = (e: React.ChangeEvent<HTMLInputElement>, setter: (val: string) => void) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -273,19 +372,33 @@ export default function App() {
   const manejarClicEnMapa = async (lat: number, lng: number) => {
     if (!modoSeleccionMapa) return;
     const tipoActual = modoSeleccionMapa;
+    if (debounceTimerRef.current[tipoActual]) clearTimeout(debounceTimerRef.current[tipoActual]!);
+    geocodingControllerRef.current[tipoActual]?.abort();
+    setBuscandoDireccion(current => ({ ...current, [tipoActual]: false }));
     setModoSeleccionMapa(null);
+    setDistanciaKm(0);
+    setTiempoEstimadoMin(0);
 
     if (tipoActual === 'origen') {
       setCoordsOrigen({ lat, lng });
       setOrigenInput('Buscando lugar...');
+      setReferenciaOrigen('');
     } else {
       setCoordsDestino({ lat, lng });
       setDestinoInput('Buscando lugar...');
+      setReferenciaDestino('');
     }
 
     try {
       const mapboxToken = import.meta.env.VITE_MAPBOX_TOKEN || '';
-      const res = await fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json?access_token=${mapboxToken}&types=poi,address,neighborhood,place&language=es&limit=1`);
+      const params = new URLSearchParams({
+        access_token: mapboxToken,
+        types: 'address,neighborhood,locality,district,place',
+        language: 'es',
+        limit: '1'
+      });
+      const res = await fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json?${params}`);
+      if (!res.ok) throw new Error(`Mapbox respondió HTTP ${res.status}`);
       const data = await res.json();
       const lugar = data?.features?.[0];
       const nombreLugar = lugar?.text || lugar?.place_name || `Ubicación (${lat.toFixed(4)}, ${lng.toFixed(4)})`;
@@ -302,6 +415,11 @@ export default function App() {
   const obtenerUbicacionActual = (objetivo: 'origen' | 'destino' | null = null) => {
     objetivoUbicacionRef.current = objetivo;
     setErrorUbicacion('');
+    if (objetivo) {
+      if (debounceTimerRef.current[objetivo]) clearTimeout(debounceTimerRef.current[objetivo]!);
+      geocodingControllerRef.current[objetivo]?.abort();
+      setBuscandoDireccion(current => ({ ...current, [objetivo]: false }));
+    }
 
     if (!navigator.geolocation) {
       setErrorUbicacion('Este dispositivo o navegador no permite acceder a la ubicación.');
@@ -316,12 +434,18 @@ export default function App() {
         setRecentrarMapa(value => value + 1);
 
         if (objetivoUbicacionRef.current === 'origen') {
+          setDistanciaKm(0);
+          setTiempoEstimadoMin(0);
           setCoordsOrigen(ubicacion);
           setOrigenInput('Mi ubicación actual');
+          setReferenciaOrigen('');
           setSugerenciasOrigen([]);
         } else if (objetivoUbicacionRef.current === 'destino') {
+          setDistanciaKm(0);
+          setTiempoEstimadoMin(0);
           setCoordsDestino(ubicacion);
           setDestinoInput('Mi ubicación actual');
+          setReferenciaDestino('');
           setSugerenciasDestino([]);
         }
 
@@ -340,48 +464,203 @@ export default function App() {
     );
   };
 
-  const buscarDireccionGeocoding = async (query: string, tipo: 'origen' | 'destino') => {
-    if (tipo === 'origen') {
-      setOrigenInput(query);
-      if (!query.trim()) { setCoordsOrigen(null); setSugerenciasOrigen([]); return; }
-    } else {
-      setDestinoInput(query);
-      if (!query.trim()) { setCoordsDestino(null); setSugerenciasDestino([]); return; }
-    }
+  const buscarDireccionGeocoding = (query: string, tipo: 'origen' | 'destino') => {
+    const setInput = tipo === 'origen' ? setOrigenInput : setDestinoInput;
+    const setCoords = tipo === 'origen' ? setCoordsOrigen : setCoordsDestino;
+    const setSugerencias = tipo === 'origen' ? setSugerenciasOrigen : setSugerenciasDestino;
+    const setReferencia = tipo === 'origen' ? setReferenciaOrigen : setReferenciaDestino;
+    setInput(query);
+    setCoords(null);
+    setSugerencias([]);
+    setReferencia('');
+    setErrorGeocoding('');
+    setBuscandoDireccion(current => ({ ...current, [tipo]: query.trim().length >= 3 }));
+    setDistanciaKm(0);
+    setTiempoEstimadoMin(0);
 
-    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-    debounceTimerRef.current = setTimeout(async () => {
+    if (debounceTimerRef.current[tipo]) clearTimeout(debounceTimerRef.current[tipo]!);
+    geocodingControllerRef.current[tipo]?.abort();
+
+    const consulta = query.trim();
+    if (consulta.length < 3) return;
+
+    debounceTimerRef.current[tipo] = setTimeout(async () => {
+      const controller = new AbortController();
+      geocodingControllerRef.current[tipo] = controller;
       try {
         const mapboxToken = import.meta.env.VITE_MAPBOX_TOKEN || '';
-        const bboxCarabobo = '-68.4,10.0,-67.7,10.5';
-        const endpoint = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?access_token=${mapboxToken}&country=ve&bbox=${bboxCarabobo}&proximity=-68.0055,10.2291&types=poi,address,neighborhood,place&fuzzyMatch=true&autocomplete=true&language=es&limit=6`;
-        
-        const res = await fetch(endpoint);
-        const data = await res.json();
-        if (data && data.features) {
-          const formatted = data.features.map((f: any) => ({
-            display_name: f.place_name,
-            lon: f.center[0],
-            lat: f.center[1]
-          }));
-          if (tipo === 'origen') setSugerenciasOrigen(formatted);
-          else setSugerenciasDestino(formatted);
-        }
-      } catch (e) { console.error(e); }
-    }, 300);
+        if (!mapboxToken) throw new Error('Falta configurar el token público de Mapbox.');
+
+        const proximidad = coordsUsuarioGPS
+          ? `${coordsUsuarioGPS.lng},${coordsUsuarioGPS.lat}`
+          : '-68.0055,10.2291';
+        const params = new URLSearchParams({
+          access_token: mapboxToken,
+          country: 've',
+          bbox: '-68.4,10.0,-67.7,10.5',
+          proximity: proximidad,
+          types: 'address,neighborhood,locality,district,place',
+          fuzzyMatch: 'true',
+          autocomplete: 'true',
+          language: 'es',
+          limit: '8'
+        });
+        const endpoint = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(consulta)}.json?${params}`;
+        const response = await fetch(endpoint, { signal: controller.signal });
+        if (!response.ok) throw new Error(`Mapbox respondió HTTP ${response.status}`);
+
+        const data = await response.json();
+        const features = Array.isArray(data?.features) ? data.features : [];
+        const formatted: SugerenciaDireccion[] = features.flatMap((feature: {
+          place_name?: unknown;
+          center?: unknown;
+          place_type?: unknown;
+        }) => {
+          if (typeof feature.place_name !== 'string'
+            || !Array.isArray(feature.center)
+            || feature.center.length < 2
+            || !Number.isFinite(feature.center[0])
+            || !Number.isFinite(feature.center[1])) return [];
+          return [{
+            display_name: feature.place_name,
+            lon: feature.center[0],
+            lat: feature.center[1],
+            tipo: Array.isArray(feature.place_type) && typeof feature.place_type[0] === 'string'
+              ? feature.place_type[0]
+              : 'address'
+          }];
+        });
+
+        if (tipo === 'origen') setSugerenciasOrigen(formatted);
+        else setSugerenciasDestino(formatted);
+        setBuscandoDireccion(current => ({ ...current, [tipo]: false }));
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+        console.error('Error buscando dirección en Mapbox:', error);
+        setBuscandoDireccion(current => ({ ...current, [tipo]: false }));
+        setErrorGeocoding('No se pudieron buscar direcciones. Puedes marcar el punto exacto en el mapa.');
+      }
+    }, 400);
   };
 
-  const seleccionarSugerencia = (item: any, tipo: 'origen' | 'destino') => {
-    const lat = parseFloat(item.lat);
-    const lng = parseFloat(item.lon);
+  const seleccionarSugerencia = (item: SugerenciaDireccion, tipo: 'origen' | 'destino') => {
+    if (debounceTimerRef.current[tipo]) clearTimeout(debounceTimerRef.current[tipo]!);
+    geocodingControllerRef.current[tipo]?.abort();
+    setErrorGeocoding('');
+    setBuscandoDireccion(current => ({ ...current, [tipo]: false }));
+    setDistanciaKm(0);
+    setTiempoEstimadoMin(0);
     if (tipo === 'origen') {
-      setCoordsOrigen({ lat, lng });
+      setCoordsOrigen({ lat: item.lat, lng: item.lon });
       setOrigenInput(item.display_name);
+      setReferenciaOrigen('');
       setSugerenciasOrigen([]);
     } else {
-      setCoordsDestino({ lat, lng });
+      setCoordsDestino({ lat: item.lat, lng: item.lon });
       setDestinoInput(item.display_name);
+      setReferenciaDestino('');
       setSugerenciasDestino([]);
+    }
+  };
+
+  const cargarConfiguracionPago = async () => {
+    if (!usuario) return;
+    setCargandoConfiguracionPago(true);
+    setErrorPago('');
+    try {
+      const response = await authenticatedFetch(`${API_URL}/api/pagos/config`);
+      if (!response.ok) throw new Error(await mensajeErrorApi(response, 'No se pudo cargar la información de pago'));
+      const data: ConfiguracionPago = await response.json();
+      setConfiguracionPago(data);
+    } catch (error) {
+      setErrorPago(error instanceof Error ? error.message : 'No se pudo cargar la información de pago.');
+    } finally {
+      setCargandoConfiguracionPago(false);
+    }
+  };
+
+  const cargarPanelAdmin = async () => {
+    if (!usuario?.es_admin) return;
+    setCargandoAdmin(true);
+    setErrorAdmin('');
+    try {
+      const [pagosResponse, configResponse] = await Promise.all([
+        authenticatedFetch(`${API_URL}/api/pagos/admin/pendientes`),
+        authenticatedFetch(`${API_URL}/api/pagos/config`)
+      ]);
+      if (!pagosResponse.ok) throw new Error(await mensajeErrorApi(pagosResponse, 'No se pudieron cargar los pagos pendientes'));
+      if (!configResponse.ok) throw new Error(await mensajeErrorApi(configResponse, 'No se pudo cargar la configuración de pago'));
+      const pagosData = await pagosResponse.json();
+      const configData: ConfiguracionPago = await configResponse.json();
+      setPagosPendientesAdmin(Array.isArray(pagosData.pagos) ? pagosData.pagos : []);
+      setConfiguracionPago(configData);
+      setConfigPagoAdmin(configData.pagoMovil);
+    } catch (error) {
+      setErrorAdmin(error instanceof Error ? error.message : 'No se pudo cargar el panel de administración.');
+    } finally {
+      setCargandoAdmin(false);
+    }
+  };
+
+  const revisarPagoManual = async (pedidoId: number, accion: 'aprobar' | 'rechazar' | 'reembolsar' | 'sin_pago') => {
+    const confirmacion = accion === 'rechazar'
+      ? '¿Rechazar el pago y cancelar este viaje?'
+      : accion === 'reembolsar'
+        ? 'Confirma solo después de devolver el dinero al pasajero. ¿Ya realizaste el reembolso?'
+        : accion === 'sin_pago' ? '¿Confirmas que no se recibió ningún pago por este viaje cancelado?' : '';
+    if (confirmacion && !window.confirm(confirmacion)) return;
+    try {
+      const response = await authenticatedFetch(`${API_URL}/api/pagos/admin/pedidos/${pedidoId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accion })
+      });
+      if (!response.ok) throw new Error(await mensajeErrorApi(response, 'No se pudo revisar el pago'));
+      await cargarPanelAdmin();
+      setMensajeAdmin(
+        accion === 'aprobar' ? 'Pago confirmado; el viaje ya puede aparecer en el radar.'
+          : accion === 'rechazar' ? 'Pago rechazado y viaje cancelado.'
+            : accion === 'reembolsar' ? 'Reembolso registrado.'
+              : 'Solicitud cerrada: no se recibió el pago.'
+      );
+    } catch (error) {
+      setErrorAdmin(error instanceof Error ? error.message : 'No se pudo revisar el pago.');
+    }
+  };
+
+  const guardarConfiguracionPagoAdmin = async (event: React.FormEvent) => {
+    event.preventDefault();
+    try {
+      const response = await authenticatedFetch(`${API_URL}/api/pagos/admin/config`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(configPagoAdmin)
+      });
+      if (!response.ok) throw new Error(await mensajeErrorApi(response, 'No se pudo guardar la configuración'));
+      await cargarPanelAdmin();
+      setMensajeAdmin('Datos de Pago Móvil guardados.');
+    } catch (error) {
+      setErrorAdmin(error instanceof Error ? error.message : 'No se pudo guardar la configuración.');
+    }
+  };
+
+  const recargarSaldoCorporativo = async (event: React.FormEvent) => {
+    event.preventDefault();
+    try {
+      const response = await authenticatedFetch(`${API_URL}/api/pagos/admin/saldo`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: emailRecargaSaldo, monto: montoRecargaSaldo, nota: notaRecargaSaldo })
+      });
+      if (!response.ok) throw new Error(await mensajeErrorApi(response, 'No se pudo recargar el saldo'));
+      const data = await response.json();
+      setEmailRecargaSaldo('');
+      setMontoRecargaSaldo('');
+      setNotaRecargaSaldo('');
+      setErrorAdmin('');
+      setMensajeAdmin(`Recarga aplicada. Nuevo saldo: $${Number(data.saldoCorporativo).toFixed(2)}.`);
+    } catch (error) {
+      setErrorAdmin(error instanceof Error ? error.message : 'No se pudo recargar el saldo.');
     }
   };
 
@@ -390,6 +669,25 @@ export default function App() {
     if (!rutaCompletaLista || !coordsOrigen || !coordsDestino || distanciaKm <= 0 || tiempoEstimadoMin <= 0) {
       alert('Completa el origen y destino, y espera a que se calcule la ruta.');
       return;
+    }
+    if (serviceType === 'viajes') {
+      if (metodoPagoViaje === 'pago_movil' && !referenciaPago.trim()) {
+        alert('Ingresa la referencia del Pago Móvil para enviarlo a revisión.');
+        return;
+      }
+      if (metodoPagoViaje === 'pago_movil'
+        && !(configuracionPago?.pagoMovil.banco
+          && configuracionPago.pagoMovil.telefono
+          && configuracionPago.pagoMovil.cedula
+          && configuracionPago.pagoMovil.titular)) {
+        alert('Pago Móvil todavía no está configurado por Llévalo. Selecciona otro método o inténtalo luego.');
+        return;
+      }
+      if (metodoPagoViaje === 'saldo_corporativo'
+        && (configuracionPago?.saldoCorporativo || 0) < Number(tarifaTotal)) {
+        alert('Tu saldo corporativo no es suficiente para este viaje.');
+        return;
+      }
     }
     setEnviandoPedido(true);
 
@@ -403,15 +701,22 @@ export default function App() {
           cliente_cedula: usuario.cedula || 'V-00000000',
           cliente_foto: fotoLocal || usuario.foto || '',
           tipo_servicio: serviceType,
-          descripcion: descripcionPedido || `Servicio de ${serviceType}`,
-          origen_texto: origenInput, origen_lat: coordsOrigen.lat, origen_lon: coordsOrigen.lng,
-          destino_texto: destinoInput, destino_lat: coordsDestino.lat, destino_lon: coordsDestino.lng,
-          distancia_km: distanciaKm, tiempo_min: tiempoEstimadoMin, tarifa: tarifaTotal
+          descripcion: descripcionPedido || (serviceType === 'viajes' ? 'Servicio de viaje' : 'Servicio de envíos'),
+          origen_texto: `${origenInput.trim()}${referenciaOrigen.trim() ? ` | Referencia: ${referenciaOrigen.trim()}` : ''}`.slice(0, 300),
+          origen_lat: coordsOrigen.lat, origen_lon: coordsOrigen.lng,
+          destino_texto: `${destinoInput.trim()}${referenciaDestino.trim() ? ` | Referencia: ${referenciaDestino.trim()}` : ''}`.slice(0, 300),
+          destino_lat: coordsDestino.lat, destino_lon: coordsDestino.lng,
+          distancia_km: distanciaKm, tiempo_min: tiempoEstimadoMin, tarifa: tarifaTotal,
+          metodo_pago: serviceType === 'viajes' ? metodoPagoViaje : undefined,
+          referencia_pago: serviceType === 'viajes' && metodoPagoViaje === 'pago_movil' ? referenciaPago.trim() : undefined
         })
       });
-      if (!res.ok) throw new Error('Error al publicar');
+      if (!res.ok) throw new Error(await mensajeErrorApi(res, 'No se pudo publicar el pedido'));
       setDescripcionPedido(''); setOrigenInput(''); setDestinoInput('');
+      setReferenciaPago('');
+      setReferenciaOrigen(''); setReferenciaDestino('');
       setCoordsOrigen(null); setCoordsDestino(null);
+      setDistanciaKm(0); setTiempoEstimadoMin(0);
       setSegundosRestantes(60);
       await sincronizarDatos();
     } catch (err: any) { alert(err.message); }
@@ -425,10 +730,17 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ nuevo_estado: 'cancelado' })
       });
-      if (!response.ok) throw new Error('No se pudo cancelar el pedido.');
+      if (!response.ok) throw new Error(await mensajeErrorApi(response, 'No se pudo cancelar el pedido'));
+      const data = await response.json();
       setCoordsOrigen(null); setCoordsDestino(null);
       setOrigenInput(''); setDestinoInput('');
+      setReferenciaOrigen(''); setReferenciaDestino('');
+      setDistanciaKm(0); setTiempoEstimadoMin(0);
+      setSugerenciasOrigen([]); setSugerenciasDestino([]);
       await sincronizarDatos();
+      if (data.pedido?.estado_pago === 'reembolso_pendiente' || data.pedido?.estado_pago === 'reembolsado') {
+        window.alert(data.mensaje);
+      }
     } catch (error) {
       alert(error instanceof Error ? error.message : 'No se pudo cancelar el pedido.');
     }
@@ -452,13 +764,19 @@ export default function App() {
     } catch (err: any) { alert(err.message); }
   };
 
+  const cancelarPostulacionEnServidor = async (pedidoId: number) => {
+    if (!usuario || usuario.rol !== 'repartidor') throw new Error('Inicia sesión como repartidor para cancelar la postulación.');
+    const response = await authenticatedFetch(`${API_URL}/api/pedidos/${pedidoId}/postular/${usuario.id}`, { method: 'DELETE' });
+    if (!response.ok) throw new Error(await mensajeErrorApi(response, 'No se pudo cancelar la postulación'));
+  };
+
   const cancelarPostulacion = async (pedidoId: number) => {
-    if (!usuario) return;
     try {
-      const response = await authenticatedFetch(`${API_URL}/api/pedidos/${pedidoId}/postular/${usuario.id}`, { method: 'DELETE' });
-      if (!response.ok) throw new Error('No se pudo cancelar la postulación.');
+      await cancelarPostulacionEnServidor(pedidoId);
       await sincronizarDatos();
-    } catch { alert('Error al cancelar postulación'); }
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Error al cancelar postulación');
+    }
   };
 
   const aceptarPostulacion = async (pedidoId: number, post: Postulacion) => {
@@ -471,7 +789,7 @@ export default function App() {
           vehiculo: post.vehiculo, placa: post.placa, vehiculo_foto: post.vehiculo_foto || '', calificacion: post.calificacion || 4.9
         })
       });
-      if (!res.ok) throw new Error('Error al aceptar');
+      if (!res.ok) throw new Error(await mensajeErrorApi(res, 'No se pudo aceptar la postulación'));
       await sincronizarDatos();
     } catch (err: any) { alert(err.message); }
   };
@@ -500,7 +818,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ nuevo_estado: nuevoEstado })
       });
-      if (!response.ok) throw new Error('No se pudo actualizar el estado del pedido.');
+      if (!response.ok) throw new Error(await mensajeErrorApi(response, 'No se pudo actualizar el estado del pedido'));
       if (nuevoEstado === 'completado') {
         setCoordsOrigen(null); setCoordsDestino(null);
         setOrigenInput(''); setDestinoInput('');
@@ -549,21 +867,47 @@ export default function App() {
       localStorage.setItem('llevalo_token', data.token);
       localStorage.setItem('llevalo_usuario', JSON.stringify(data.usuario));
       setUsuario(data.usuario);
+      setCedulaNumero(data.usuario.cedula?.replace(/^[VvEe]-/, '') || '');
+      setFotoLocal(data.usuario.foto || '');
+      setTipoVehiculo(data.usuario.vehiculo || 'Moto Suzuki GN 125');
+      setPlacaVehiculo(data.usuario.placa || '');
       setActiveTab('home');
     } catch (err: any) {
       setErrorAuth(err.message);
     }
   };
 
-  const guardarPerfil = (e: React.FormEvent) => {
+  const guardarPerfil = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!usuario) return;
+    setGuardandoPerfil(true);
+    setErrorPerfil('');
     const cedulaCompleta = `V-${cedulaNumero.trim()}`;
-    const actualizado = { ...usuario, cedula: cedulaCompleta, foto: fotoLocal, vehiculo: tipoVehiculo, placa: placaVehiculo, vehiculo_foto: fotoVehiculoLocal };
-    setUsuario(actualizado);
-    localStorage.setItem('llevalo_usuario', JSON.stringify(actualizado));
-    alert('✓ Perfil actualizado con éxito');
-    setActiveTab(usuario.rol === 'cliente' ? 'cliente' : 'repartidor');
+    try {
+      const response = await authenticatedFetch(`${API_URL}/api/auth/profile`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cedula: cedulaCompleta,
+          foto: fotoLocal,
+          ...(usuario.rol === 'repartidor' ? {
+            vehiculo: tipoVehiculo,
+            placa: placaVehiculo,
+            vehiculo_foto: fotoVehiculoLocal
+          } : {})
+        })
+      });
+      if (!response.ok) throw new Error(await mensajeErrorApi(response, 'No se pudo guardar el perfil'));
+      const data = await response.json();
+      const actualizado: UsuarioSesion = data.usuario;
+      setUsuario(actualizado);
+      localStorage.setItem('llevalo_usuario', JSON.stringify(actualizado));
+      setActiveTab(usuario.rol === 'cliente' ? 'cliente' : 'repartidor');
+    } catch (error) {
+      setErrorPerfil(error instanceof Error ? error.message : 'No se pudo guardar el perfil.');
+    } finally {
+      setGuardandoPerfil(false);
+    }
   };
 
   const handleLogout = () => {
@@ -589,6 +933,52 @@ export default function App() {
     ? pedidosReales.find(p => p.repartidor_id === usuario.id && (p.estado === 'aceptado' || p.estado === 'entregado_repartidor'))
     : null;
   const pedidoAsignadoRepartidorId = pedidoAsignadoRepartidor?.id;
+  const postulacionesPendientesRepartidor = usuario?.rol === 'repartidor'
+    ? postulacionesReales.filter(p => p.repartidor_id === usuario.id && p.estado === 'pendiente')
+    : [];
+  const pagoViajeCompleto = serviceType !== 'viajes'
+    || metodoPagoViaje === 'efectivo'
+    || (metodoPagoViaje === 'pago_movil'
+      && Boolean(configuracionPago?.pagoMovil.banco
+        && configuracionPago.pagoMovil.telefono
+        && configuracionPago.pagoMovil.cedula
+        && configuracionPago.pagoMovil.titular)
+      && Boolean(referenciaPago.trim()))
+    || (metodoPagoViaje === 'saldo_corporativo'
+      && (configuracionPago?.saldoCorporativo || 0) >= Number(tarifaTotal));
+
+  const cambiarEstadoRepartidor = async () => {
+    if (!usuario || usuario.rol !== 'repartidor' || cambiandoEstadoRepartidor) return;
+    if (!repartidorOnline) {
+      setRepartidorOnline(true);
+      return;
+    }
+    if (pedidoAsignadoRepartidor) {
+      alert('No puedes desconectarte mientras tienes una entrega activa.');
+      return;
+    }
+
+    if (postulacionesPendientesRepartidor.length > 0) {
+      const confirmacion = window.confirm(
+        `Al desconectarte se cancelarán tus ${postulacionesPendientesRepartidor.length} postulaciones pendientes. ¿Deseas continuar?`
+      );
+      if (!confirmacion) return;
+    }
+
+    setCambiandoEstadoRepartidor(true);
+    try {
+      for (const postulacion of postulacionesPendientesRepartidor) {
+        await cancelarPostulacionEnServidor(postulacion.pedido_id);
+      }
+      if (postulacionesPendientesRepartidor.length > 0) await sincronizarDatos();
+      setRepartidorOnline(false);
+    } catch (error) {
+      await sincronizarDatos();
+      alert(error instanceof Error ? error.message : 'No se pudo cancelar las postulaciones.');
+    } finally {
+      setCambiandoEstadoRepartidor(false);
+    }
+  };
 
   useEffect(() => {
     if (usuario?.rol !== 'repartidor' || !pedidoAsignadoRepartidorId || !navigator.geolocation) return;
@@ -621,14 +1011,9 @@ export default function App() {
     }).catch((error) => console.error('Error enviando ubicación del repartidor:', error));
   }, [coordsUsuarioGPS, usuario?.rol, pedidoAsignadoRepartidorId]);
 
-  const tieneTrabajoActivoOPostulacionRepartidor = usuario?.rol === 'repartidor' && (
-    Boolean(pedidoAsignadoRepartidor) || 
-    postulacionesReales.some(p => p.repartidor_id === usuario.id && p.estado === 'pendiente')
-  );
-
   return (
-    <div className={`app-shell flex flex-col font-sans transition-colors duration-300 ${darkMode ? 'bg-slate-950 text-slate-100' : 'bg-[#FDFBF7] text-slate-800'}`}>
-      <header className={`border-b backdrop-blur sticky top-0 z-50 px-4 md:px-10 py-3 flex justify-between items-center shadow-sm transition-colors ${darkMode ? 'bg-slate-950/90 border-slate-800' : 'bg-[#FDFBF7]/90 border-orange-100'}`}>
+    <div className={`app-shell flex flex-col font-sans transition-colors duration-300 ${darkMode ? 'dark bg-slate-950 text-slate-100' : 'bg-[#FDFBF7] text-slate-800'}`}>
+      <header className={`border-b backdrop-blur sticky top-0 z-50 px-4 md:px-10 py-3 flex flex-wrap justify-between items-center gap-y-2 shadow-sm transition-colors ${darkMode ? 'bg-slate-950/90 border-slate-800' : 'bg-[#FDFBF7]/90 border-orange-100'}`}>
         <div className="flex items-center space-x-3 cursor-pointer" onClick={() => setActiveTab('home')}>
           <div className="bg-[#FF5722] text-white w-9 h-9 rounded-2xl font-black text-lg flex items-center justify-center shadow-md">L</div>
           <span className={`text-xl md:text-2xl font-black tracking-tight ${darkMode ? 'text-white' : 'text-slate-900'}`}>Llévalo</span>
@@ -638,10 +1023,11 @@ export default function App() {
           <button onClick={() => setActiveTab('home')} className={`px-5 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${activeTab === 'home' ? 'bg-[#FF5722] text-white shadow-sm' : (darkMode ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900')}`}>{usuario ? 'Mi Panel' : 'Inicio'}</button>
           {usuario && usuario.rol === 'cliente' && <button onClick={() => setActiveTab('cliente')} className={`px-5 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${activeTab === 'cliente' ? 'bg-[#FF5722] text-white shadow-sm' : (darkMode ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900')}`}>Pedir</button>}
           {usuario && usuario.rol === 'repartidor' && <button onClick={() => setActiveTab('repartidor')} className={`px-5 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${activeTab === 'repartidor' ? 'bg-[#FF5722] text-white shadow-sm' : (darkMode ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900')}`}>Radar de Trabajos</button>}
+          {usuario?.es_admin && <button onClick={() => { setActiveTab('admin'); void cargarPanelAdmin(); }} className={`px-5 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${activeTab === 'admin' ? 'bg-[#FF5722] text-white shadow-sm' : (darkMode ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900')}`}>Administración</button>}
         </nav>
 
         <div className="flex items-center space-x-2 md:space-x-3">
-          <div className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-2xl border text-[11px] md:text-xs font-bold shadow-sm ${darkMode ? 'bg-slate-900 border-slate-800 text-slate-200' : 'bg-orange-50 border-orange-200 text-slate-700'}`}>
+          <div className={`hidden sm:flex items-center space-x-1.5 px-3 py-1.5 rounded-2xl border text-[11px] md:text-xs font-bold shadow-sm ${darkMode ? 'bg-slate-900 border-slate-800 text-slate-200' : 'bg-orange-50 border-orange-200 text-slate-700'}`}>
             <DollarSign size={13} className="text-[#FF5722]" />
             <span>BCV: <strong>Bs. {tasaBCV}</strong></span>
           </div>
@@ -659,6 +1045,7 @@ export default function App() {
                 <p className={`text-xs font-black hover:underline ${darkMode ? 'text-white' : 'text-slate-900'}`}>{usuario.nombre}</p>
                 <p className="text-[10px] font-bold text-[#FF5722] uppercase">{usuario.rol} · Mi Perfil</p>
               </div>
+              {usuario.es_admin && <button onClick={() => { setActiveTab('admin'); void cargarPanelAdmin(); }} className="rounded-lg border border-orange-200 bg-orange-50 px-2 py-1 text-[10px] font-bold text-[#FF5722] md:hidden">Admin</button>}
               <button onClick={handleLogout} className="text-xs font-bold text-red-600 hover:bg-red-50 dark:hover:bg-red-950/35 px-2 py-1 rounded-xl border border-red-200 cursor-pointer">Salir</button>
             </div>
           ) : (
@@ -668,6 +1055,31 @@ export default function App() {
             </button>
           )}
         </div>
+
+        {usuario && (
+          <nav aria-label="Navegación móvil" className={`flex w-full flex-wrap items-center gap-2 md:hidden ${darkMode ? 'text-slate-200' : 'text-slate-700'}`}>
+            <button type="button" aria-pressed={activeTab === 'home'} onClick={() => setActiveTab('home')} className={`flex min-w-[5rem] flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold ${activeTab === 'home' ? 'border-orange-200 bg-orange-50 text-[#FF5722]' : 'border-transparent'}`}>
+              <MapPin size={17} /> Inicio
+            </button>
+            {usuario.rol === 'cliente' ? (
+              <button type="button" aria-pressed={activeTab === 'cliente'} onClick={() => setActiveTab('cliente')} className={`flex min-w-[5rem] flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold ${activeTab === 'cliente' ? 'border-orange-200 bg-orange-50 text-[#FF5722]' : 'border-transparent'}`}>
+                <Package size={17} /> Pedir
+              </button>
+            ) : (
+              <button type="button" aria-pressed={activeTab === 'repartidor'} onClick={() => setActiveTab('repartidor')} className={`flex min-w-[5rem] flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold ${activeTab === 'repartidor' ? 'border-orange-200 bg-orange-50 text-[#FF5722]' : 'border-transparent'}`}>
+                <Bike size={17} /> Radar
+              </button>
+            )}
+            {usuario.es_admin && (
+              <button type="button" aria-pressed={activeTab === 'admin'} onClick={() => { setActiveTab('admin'); void cargarPanelAdmin(); }} className={`flex min-w-[5rem] flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold ${activeTab === 'admin' ? 'border-orange-200 bg-orange-50 text-[#FF5722]' : 'border-transparent'}`}>
+                <DollarSign size={17} /> Admin
+              </button>
+            )}
+            <button type="button" aria-pressed={activeTab === 'perfil'} onClick={() => setActiveTab('perfil')} className={`flex min-w-[5rem] flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold ${activeTab === 'perfil' ? 'border-orange-200 bg-orange-50 text-[#FF5722]' : 'border-transparent'}`}>
+              <User size={17} /> Perfil
+            </button>
+          </nav>
+        )}
       </header>
 
       <main className="flex-1 flex flex-col p-4 md:p-6 max-w-7xl mx-auto w-full">
@@ -682,7 +1094,7 @@ export default function App() {
                 Lo que necesites, <span className="text-[#FF5722]">llévalo ya.</span>
               </h1>
               <p className={`text-base lg:text-lg leading-relaxed max-w-xl ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>
-                Comida, mercado, mandados y viajes. Conoce el perfil verificado, la moto y la reputación de tu repartidor antes de aceptar.
+                Envíos y viajes en San Diego. Conoce quién realizará el servicio y sigue cada solicitud desde la app.
               </p>
 
               <div className="flex flex-col sm:flex-row gap-4 pt-2">
@@ -743,8 +1155,8 @@ export default function App() {
             {usuario.rol === 'cliente' ? (
               <div className="grid gap-4 md:grid-cols-2">
                 <button onClick={() => setActiveTab('cliente')} className={`rounded-3xl border p-6 text-left transition hover:-translate-y-0.5 ${darkMode ? 'bg-slate-900 border-slate-800 hover:border-orange-700' : 'bg-white border-orange-100 hover:border-orange-300'}`}>
-                  <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-orange-100 text-[#FF5722]"><Navigation size={20} /></div>
-                  <h2 className="font-black">Pedir comida, mercado o mandados</h2>
+                  <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-orange-100 text-[#FF5722]"><Package size={20} /></div>
+                  <h2 className="font-black">Solicitar un envío</h2>
                   <p className="mt-2 text-xs text-slate-500">Indica origen y destino, y sigue tu solicitud desde aquí.</p>
                 </button>
                 <div className={`rounded-3xl border p-6 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-orange-100'}`}>
@@ -887,12 +1299,17 @@ export default function App() {
                   </button>
                 </div>
 
-                <div className="grid grid-cols-4 gap-1.5 p-1 rounded-2xl border bg-slate-100 dark:bg-slate-950 dark:border-slate-800">
-                  {(['comida', 'mercado', 'mandados', 'viajes'] as const).map(t => (
-                    <button key={t} onClick={() => setServiceType(t)} className={`py-2 text-[11px] font-bold rounded-xl capitalize transition cursor-pointer ${serviceType === t ? 'bg-[#FF5722] text-white shadow-sm' : 'text-slate-500 dark:text-slate-400'}`}>
-                      {t}
-                    </button>
-                  ))}
+                <div className="grid grid-cols-1 min-[400px]:grid-cols-2 gap-3">
+                  <button type="button" onClick={() => setServiceType('envios')} className={`rounded-2xl border p-4 text-left transition cursor-pointer ${serviceType === 'envios' ? 'border-[#FF5722] bg-orange-50 shadow-sm dark:bg-orange-950/30' : 'border-slate-200 bg-white hover:border-orange-200 dark:border-slate-800 dark:bg-slate-950'}`}>
+                    <span className={`mb-3 flex h-10 w-10 items-center justify-center rounded-xl ${serviceType === 'envios' ? 'bg-[#FF5722] text-white' : 'bg-orange-100 text-[#FF5722]'}`}><Package size={19} /></span>
+                    <span className={`block text-sm font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Envíos</span>
+                    <span className="mt-1 block text-[10px] leading-relaxed text-slate-500">Comida, mercado, paquetes y mandados</span>
+                  </button>
+                  <button type="button" onClick={() => { setServiceType('viajes'); void cargarConfiguracionPago(); }} className={`rounded-2xl border p-4 text-left transition cursor-pointer ${serviceType === 'viajes' ? 'border-[#FF5722] bg-orange-50 shadow-sm dark:bg-orange-950/30' : 'border-slate-200 bg-white hover:border-orange-200 dark:border-slate-800 dark:bg-slate-950'}`}>
+                    <span className={`mb-3 flex h-10 w-10 items-center justify-center rounded-xl ${serviceType === 'viajes' ? 'bg-[#FF5722] text-white' : 'bg-orange-100 text-[#FF5722]'}`}><CarFront size={19} /></span>
+                    <span className={`block text-sm font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Viajes</span>
+                    <span className="mt-1 block text-[10px] leading-relaxed text-slate-500">Traslados seguros punto a punto</span>
+                  </button>
                 </div>
 
                 {pedidoActivoCliente ? (
@@ -904,6 +1321,19 @@ export default function App() {
                       </div>
                       <p className={`text-xs font-bold ${darkMode ? 'text-slate-300' : 'text-slate-700'}`}>{pedidoActivoCliente.descripcion}</p>
                       <p className="text-[11px] text-slate-500 font-medium">Estado: <strong className="uppercase text-[#FF5722]">{pedidoActivoCliente.estado}</strong></p>
+                      {pedidoActivoCliente.tipo_servicio === 'viajes' && (
+                        <div className={`rounded-xl border p-3 text-[11px] ${pedidoActivoCliente.estado_pago === 'pagado' ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300' : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300'}`}>
+                          <p><strong>{etiquetaMetodoPago(pedidoActivoCliente.metodo_pago)}</strong> · {pedidoActivoCliente.estado_pago === 'pagado' ? 'Pago confirmado' : 'Pago pendiente'}</p>
+                          {pedidoActivoCliente.estado_pago === 'pendiente' && pedidoActivoCliente.metodo_pago === 'pago_movil' && <p className="mt-1">Un administrador verificará la referencia antes de publicar el viaje en el radar.</p>}
+                          {pedidoActivoCliente.estado_pago === 'pendiente' && pedidoActivoCliente.metodo_pago === 'efectivo' && <p className="mt-1">Paga al conductor en el punto de partida antes de iniciar.</p>}
+                        </div>
+                      )}
+
+                      {pedidoActivoCliente.estado === 'postulado' && (
+                        <button onClick={() => cancelarPedidoActual(pedidoActivoCliente.id)} className="mt-2 bg-red-600 hover:bg-red-700 text-white text-xs font-bold px-3 py-1.5 rounded-xl transition cursor-pointer">
+                          Cancelar pedido
+                        </button>
+                      )}
 
                       {pedidoActivoCliente.estado === 'pendiente' && (
                         <div className="flex items-center justify-between pt-1">
@@ -966,19 +1396,37 @@ export default function App() {
                           </div>
                         </div>
 
-                        <div className={`border rounded-2xl p-3 space-y-2 h-44 overflow-y-auto ${darkMode ? 'bg-slate-950 border-slate-800' : 'bg-slate-50 border-slate-200'}`}>
-                          <p className="text-[10px] font-black uppercase text-slate-400 tracking-wider text-center">Chat con Repartidor</p>
-                          {mensajesChat.filter(m => m.pedido_id === pedidoActivoCliente.id).map(m => (
-                            <div key={m.id} className={`text-xs p-2 rounded-xl max-w-[85%] ${m.remitente_id === usuario.id ? 'bg-[#FF5722] text-white ml-auto' : (darkMode ? 'bg-slate-800 text-slate-200' : 'bg-white text-slate-800 border')}`}>
-                              <p className="text-[9px] font-bold opacity-75">{m.remitente_nombre}</p>
-                              <p>{m.mensaje}</p>
+                        {pedidoActivoCliente.tipo_servicio === 'viajes' && pedidoActivoCliente.estado === 'aceptado' && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (window.confirm('¿Cancelar el viaje antes de que inicie?')) {
+                                void cancelarPedidoActual(pedidoActivoCliente.id);
+                              }
+                            }}
+                            className="w-full rounded-xl border border-red-200 bg-red-50 py-2.5 text-xs font-bold text-red-700 transition hover:bg-red-100 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300"
+                          >
+                            Cancelar viaje antes de iniciar
+                          </button>
+                        )}
+
+                        {pedidoActivoCliente.tipo_servicio !== 'viajes' && (
+                          <>
+                            <div className={`border rounded-2xl p-3 space-y-2 h-44 overflow-y-auto ${darkMode ? 'bg-slate-950 border-slate-800' : 'bg-slate-50 border-slate-200'}`}>
+                              <p className="text-[10px] font-black uppercase text-slate-400 tracking-wider text-center">Chat con Repartidor</p>
+                              {mensajesChat.filter(m => m.pedido_id === pedidoActivoCliente.id).map(m => (
+                                <div key={m.id} className={`text-xs p-2 rounded-xl max-w-[85%] ${m.remitente_id === usuario.id ? 'bg-[#FF5722] text-white ml-auto' : (darkMode ? 'bg-slate-800 text-slate-200' : 'bg-white text-slate-800 border')}`}>
+                                  <p className="text-[9px] font-bold opacity-75">{m.remitente_nombre}</p>
+                                  <p>{m.mensaje}</p>
+                                </div>
+                              ))}
                             </div>
-                          ))}
-                        </div>
-                        <div className="flex space-x-2">
-                          <input type="text" value={nuevoMensajeTexto} onChange={e => setNuevoMensajeTexto(e.target.value)} placeholder="Escribe un mensaje..." className={`flex-1 border rounded-xl px-3 py-2 text-xs ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
-                          <button onClick={() => enviarMensaje(pedidoActivoCliente.id)} className="bg-[#FF5722] text-white p-2 rounded-xl cursor-pointer"><Send size={16} /></button>
-                        </div>
+                            <div className="flex space-x-2">
+                              <input type="text" value={nuevoMensajeTexto} onChange={e => setNuevoMensajeTexto(e.target.value)} placeholder="Escribe un mensaje..." className={`flex-1 border rounded-xl px-3 py-2 text-xs ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
+                              <button onClick={() => enviarMensaje(pedidoActivoCliente.id)} className="bg-[#FF5722] text-white p-2 rounded-xl cursor-pointer"><Send size={16} /></button>
+                            </div>
+                          </>
+                        )}
 
                         {pedidoActivoCliente.estado === 'entregado_repartidor' && (
                           <button onClick={() => cambiarEstadoPedido(pedidoActivoCliente.id, 'completado')} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold py-3 rounded-xl transition cursor-pointer shadow-sm">
@@ -991,44 +1439,62 @@ export default function App() {
                 ) : (
                   <div className="space-y-3">
                     <div>
-                      <label className={`text-xs font-bold ${darkMode ? 'text-slate-300' : 'text-slate-700'}`}>Origen (Retirada)</label>
-                      <div className="flex space-x-2 mt-1">
-                        <input type="text" value={origenInput} onChange={e => { setOrigenInput(e.target.value); buscarDireccionGeocoding(e.target.value, 'origen'); }} placeholder="Buscar origen en San Diego / Carabobo" className={`flex-1 border rounded-xl px-3 py-2 text-xs ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
+                      <label className={`text-xs font-bold ${darkMode ? 'text-slate-300' : 'text-slate-700'}`}>{serviceType === 'viajes' ? 'Punto de partida' : 'Origen (Retirada)'}</label>
+                      <div className="relative mt-1">
+                        <div className="address-controls grid grid-cols-[minmax(0,1fr)_auto_auto] gap-2">
+                        <input type="text" value={origenInput} onChange={e => buscarDireccionGeocoding(e.target.value, 'origen')} placeholder="Calle, avenida, número o sector" className={`min-w-0 border rounded-xl px-3 py-2 text-xs ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
                         <button type="button" onClick={() => obtenerUbicacionActual('origen')} disabled={ubicacionCargando} aria-label="Usar mi ubicación como origen" title="Usar mi ubicación como origen" className="px-3 py-2 rounded-xl border text-xs font-bold text-[#FF5722] border-orange-200 bg-orange-50 disabled:opacity-50">
                           <Navigation size={15} />
                         </button>
                         <button type="button" onClick={() => setModoSeleccionMapa('origen')} className={`px-3 py-2 rounded-xl border text-xs font-bold transition cursor-pointer ${modoSeleccionMapa === 'origen' ? 'bg-emerald-600 text-white' : 'bg-emerald-50 text-emerald-600 border-emerald-200'}`}>Mapa</button>
-                      </div>
+                        </div>
                       {sugerenciasOrigen.length > 0 && (
-                        <div className={`border rounded-xl mt-1 max-h-36 overflow-y-auto z-20 absolute w-72 shadow-lg ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-orange-100'}`}>
+                        <div className={`absolute left-0 right-0 top-full z-30 mt-1 max-h-36 w-full max-w-full overflow-y-auto rounded-xl border shadow-lg ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-orange-100'}`}>
                           {sugerenciasOrigen.map((s, idx) => (
-                            <div key={idx} onClick={() => seleccionarSugerencia(s, 'origen')} className={`p-2 text-xs cursor-pointer border-b last:border-0 ${darkMode ? 'hover:bg-slate-800 border-slate-800 text-slate-200' : 'hover:bg-orange-50 border-orange-50 text-slate-700'}`}>
-                              {s.display_name}
-                            </div>
+                            <button type="button" key={`${s.display_name}-${idx}`} onClick={() => seleccionarSugerencia(s, 'origen')} className={`w-full p-2 text-left text-xs cursor-pointer border-b last:border-0 ${darkMode ? 'hover:bg-slate-800 border-slate-800 text-slate-200' : 'hover:bg-orange-50 border-orange-50 text-slate-700'}`}>
+                              <span className="block">{s.display_name}</span>
+                              <span className="mt-1 inline-block rounded bg-slate-100 px-1.5 py-0.5 text-[9px] uppercase text-slate-500 dark:bg-slate-800 dark:text-slate-400">{etiquetasTipoDireccion[s.tipo] || 'Ubicación'}</span>
+                            </button>
                           ))}
                         </div>
                       )}
+                      </div>
+                      {buscandoDireccion.origen && <p className="mt-1 text-[10px] text-slate-500">Buscando calles y sectores…</p>}
+                      {!buscandoDireccion.origen && origenInput.trim().length >= 3 && sugerenciasOrigen.length === 0 && !errorGeocoding && (
+                        <p className="mt-1 text-[10px] text-slate-500">¿No aparece el lugar o establecimiento? Toca “Mapa” para marcarlo y agrega una referencia.</p>
+                      )}
+                      <input type="text" maxLength={100} value={referenciaOrigen} onChange={e => setReferenciaOrigen(e.target.value)} placeholder="Referencia: urbanización, casa, bloque o apartamento (opcional)" className={`w-full mt-2 border rounded-xl px-3 py-2 text-xs ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
                     </div>
 
                     <div>
-                      <label className={`text-xs font-bold ${darkMode ? 'text-slate-300' : 'text-slate-700'}`}>Destino (Entrega)</label>
-                      <div className="flex space-x-2 mt-1">
-                        <input type="text" value={destinoInput} onChange={e => { setDestinoInput(e.target.value); buscarDireccionGeocoding(e.target.value, 'destino'); }} placeholder="Buscar destino en San Diego / Carabobo" className={`flex-1 border rounded-xl px-3 py-2 text-xs ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
+                      <label className={`text-xs font-bold ${darkMode ? 'text-slate-300' : 'text-slate-700'}`}>{serviceType === 'viajes' ? 'Destino del viaje' : 'Destino (Entrega)'}</label>
+                      <div className="relative mt-1">
+                        <div className="address-controls grid grid-cols-[minmax(0,1fr)_auto_auto] gap-2">
+                        <input type="text" value={destinoInput} onChange={e => buscarDireccionGeocoding(e.target.value, 'destino')} placeholder="Calle, avenida, número o sector" className={`min-w-0 border rounded-xl px-3 py-2 text-xs ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
                         <button type="button" onClick={() => obtenerUbicacionActual('destino')} disabled={ubicacionCargando} aria-label="Usar mi ubicación como destino" title="Usar mi ubicación como destino" className="px-3 py-2 rounded-xl border text-xs font-bold text-[#FF5722] border-orange-200 bg-orange-50 disabled:opacity-50">
                           <Navigation size={15} />
                         </button>
                         <button type="button" onClick={() => setModoSeleccionMapa('destino')} className={`px-3 py-2 rounded-xl border text-xs font-bold transition cursor-pointer ${modoSeleccionMapa === 'destino' ? 'bg-red-600 text-white' : 'bg-red-50 text-red-600 border-red-200'}`}>Mapa</button>
-                      </div>
+                        </div>
                       {sugerenciasDestino.length > 0 && (
-                        <div className={`border rounded-xl mt-1 max-h-36 overflow-y-auto z-20 absolute w-72 shadow-lg ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-orange-100'}`}>
+                        <div className={`absolute left-0 right-0 top-full z-30 mt-1 max-h-36 w-full max-w-full overflow-y-auto rounded-xl border shadow-lg ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-orange-100'}`}>
                           {sugerenciasDestino.map((s, idx) => (
-                            <div key={idx} onClick={() => seleccionarSugerencia(s, 'destino')} className={`p-2 text-xs cursor-pointer border-b last:border-0 ${darkMode ? 'hover:bg-slate-800 border-slate-800 text-slate-200' : 'hover:bg-orange-50 border-orange-50 text-slate-700'}`}>
-                              {s.display_name}
-                            </div>
+                            <button type="button" key={`${s.display_name}-${idx}`} onClick={() => seleccionarSugerencia(s, 'destino')} className={`w-full p-2 text-left text-xs cursor-pointer border-b last:border-0 ${darkMode ? 'hover:bg-slate-800 border-slate-800 text-slate-200' : 'hover:bg-orange-50 border-orange-50 text-slate-700'}`}>
+                              <span className="block">{s.display_name}</span>
+                              <span className="mt-1 inline-block rounded bg-slate-100 px-1.5 py-0.5 text-[9px] uppercase text-slate-500 dark:bg-slate-800 dark:text-slate-400">{etiquetasTipoDireccion[s.tipo] || 'Ubicación'}</span>
+                            </button>
                           ))}
                         </div>
                       )}
+                      </div>
+                      {buscandoDireccion.destino && <p className="mt-1 text-[10px] text-slate-500">Buscando calles y sectores…</p>}
+                      {!buscandoDireccion.destino && destinoInput.trim().length >= 3 && sugerenciasDestino.length === 0 && !errorGeocoding && (
+                        <p className="mt-1 text-[10px] text-slate-500">¿No aparece el lugar o establecimiento? Toca “Mapa” para marcarlo y agrega una referencia.</p>
+                      )}
+                      <input type="text" maxLength={100} value={referenciaDestino} onChange={e => setReferenciaDestino(e.target.value)} placeholder="Referencia: urbanización, casa, bloque o apartamento (opcional)" className={`w-full mt-2 border rounded-xl px-3 py-2 text-xs ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
                     </div>
+
+                    {errorGeocoding && <p role="alert" className="text-[10px] text-amber-700">{errorGeocoding}</p>}
 
                     {errorUbicacion && (
                       <div role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs font-medium text-amber-900">
@@ -1041,7 +1507,7 @@ export default function App() {
 
                     <div>
                       <label className={`text-xs font-bold ${darkMode ? 'text-slate-300' : 'text-slate-700'}`}>Descripción del pedido</label>
-                      <textarea value={descripcionPedido} onChange={e => setDescripcionPedido(e.target.value)} placeholder="Ej. 2 hamburguesas con queso y refresco" rows={2} className={`w-full border rounded-xl px-3 py-2 text-xs mt-1 ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
+                      <textarea value={descripcionPedido} onChange={e => setDescripcionPedido(e.target.value)} placeholder={serviceType === 'viajes' ? 'Ej. cantidad de pasajeros o indicaciones para el conductor' : 'Ej. comida, compras o paquete que necesitas enviar'} rows={2} className={`w-full border rounded-xl px-3 py-2 text-xs mt-1 ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
                     </div>
 
                     {rutaCompletaLista && (
@@ -1057,15 +1523,67 @@ export default function App() {
                       </div>
                     )}
 
-                    <button disabled={!rutaCompletaLista || distanciaKm <= 0 || tiempoEstimadoMin <= 0 || enviandoPedido} onClick={handleCrearPedido} className={`w-full py-3 rounded-xl font-bold text-xs transition cursor-pointer shadow-md ${!rutaCompletaLista || distanciaKm <= 0 || tiempoEstimadoMin <= 0 ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-[#FF5722] hover:bg-[#F4511E] text-white'}`}>
-                      {enviandoPedido ? 'Publicando...' : 'Publicar Pedido en Radar'}
+                    {serviceType === 'viajes' && (
+                      <div className={`space-y-3 rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-950/70' : 'border-slate-200 bg-white'}`}>
+                        <div>
+                          <h4 className={`text-sm font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Método de pago</h4>
+                          <p className="mt-1 text-[10px] text-slate-500">El pago se confirma antes de comenzar el viaje.</p>
+                        </div>
+                        <div className="grid gap-2 sm:grid-cols-3">
+                          {([
+                            ['pago_movil', 'Pago Móvil'],
+                            ['efectivo', 'Efectivo'],
+                            ['saldo_corporativo', 'Saldo corporativo']
+                          ] as const).map(([metodo, etiqueta]) => (
+                            <button key={metodo} type="button" aria-pressed={metodoPagoViaje === metodo} onClick={() => setMetodoPagoViaje(metodo)} className={`rounded-xl border px-3 py-2.5 text-left text-xs font-bold transition ${metodoPagoViaje === metodo ? 'border-[#FF5722] bg-orange-50 text-[#D84315] dark:bg-orange-950/30 dark:text-orange-300' : 'border-slate-200 text-slate-600 dark:border-slate-800 dark:text-slate-300'}`}>
+                              {etiqueta}
+                            </button>
+                          ))}
+                        </div>
+
+                        {metodoPagoViaje === 'pago_movil' && (
+                          <div className="space-y-2 rounded-xl bg-slate-50 p-3 text-xs dark:bg-slate-900">
+                            {cargandoConfiguracionPago && <p className="text-slate-500">Cargando datos de Pago Móvil…</p>}
+                            {configuracionPago?.pagoMovil.telefono ? (
+                              <div className="space-y-1 text-slate-600 dark:text-slate-300">
+                                <p><strong>Banco:</strong> {configuracionPago.pagoMovil.banco}</p>
+                                <p><strong>Teléfono:</strong> {configuracionPago.pagoMovil.telefono}</p>
+                                <p><strong>Cédula/RIF:</strong> {configuracionPago.pagoMovil.cedula}</p>
+                                <p><strong>Titular:</strong> {configuracionPago.pagoMovil.titular}</p>
+                                <p className="pt-1 text-[10px] text-amber-700 dark:text-amber-400">Realiza el pago por el monto cotizado y escribe la referencia. Un administrador la verificará antes de ofrecer el viaje.</p>
+                              </div>
+                            ) : !cargandoConfiguracionPago && (
+                              <p className="text-amber-700 dark:text-amber-400">Pago Móvil aún no está configurado. Puedes elegir efectivo o saldo corporativo.</p>
+                            )}
+                            <input type="text" maxLength={100} value={referenciaPago} onChange={e => setReferenciaPago(e.target.value)} placeholder="Referencia de la operación" className={`w-full rounded-xl border px-3 py-2 ${darkMode ? 'border-slate-800 bg-slate-950 text-white' : 'border-slate-200 bg-white'}`} />
+                          </div>
+                        )}
+
+                        {metodoPagoViaje === 'efectivo' && (
+                          <p className="rounded-xl bg-amber-50 p-3 text-[11px] leading-relaxed text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
+                            Paga al conductor en el punto de partida. El conductor confirmará que recibió el efectivo antes de iniciar el viaje.
+                          </p>
+                        )}
+
+                        {metodoPagoViaje === 'saldo_corporativo' && (
+                          <p className={`rounded-xl p-3 text-[11px] ${darkMode ? 'bg-slate-900 text-slate-300' : 'bg-slate-50 text-slate-600'}`}>
+                            Saldo disponible: <strong>${(configuracionPago?.saldoCorporativo || 0).toFixed(2)}</strong>
+                            {(configuracionPago?.saldoCorporativo || 0) < Number(tarifaTotal) && <span className="mt-1 block font-semibold text-amber-700 dark:text-amber-400">Solicita una recarga al administrador de tu cuenta.</span>}
+                          </p>
+                        )}
+                        {errorPago && <p role="alert" className="text-[10px] font-semibold text-red-600">{errorPago}</p>}
+                      </div>
+                    )}
+
+                    <button disabled={!rutaCompletaLista || distanciaKm <= 0 || tiempoEstimadoMin <= 0 || !pagoViajeCompleto || enviandoPedido} onClick={handleCrearPedido} className={`w-full py-3 rounded-xl font-bold text-xs transition cursor-pointer shadow-md ${!rutaCompletaLista || distanciaKm <= 0 || tiempoEstimadoMin <= 0 || !pagoViajeCompleto || enviandoPedido ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-[#FF5722] hover:bg-[#F4511E] text-white'}`}>
+                      {enviandoPedido ? 'Procesando...' : serviceType !== 'viajes' ? 'Publicar envío en radar' : metodoPagoViaje === 'saldo_corporativo' ? 'Pagar con saldo y solicitar viaje' : 'Solicitar viaje'}
                     </button>
                   </div>
                 )}
               </div>
             </div>
 
-            <div className="relative lg:col-span-7 h-[600px] lg:h-[calc(100vh-140px)] rounded-3xl overflow-hidden border shadow-sm sticky top-20">
+            <div className="relative lg:col-span-7 h-[min(60dvh,520px)] min-h-[300px] lg:h-[calc(100dvh-140px)] rounded-3xl overflow-hidden border shadow-sm sticky top-20">
               <button type="button" onClick={() => obtenerUbicacionActual()} disabled={ubicacionCargando} className="absolute left-3 top-3 z-20 inline-flex items-center gap-2 rounded-xl border border-white/80 bg-white/95 px-3 py-2 text-xs font-bold text-slate-800 shadow-md disabled:opacity-60">
                 <Navigation size={15} className={ubicacionCargando ? 'animate-pulse' : 'text-[#FF5722]'} />
                 {ubicacionCargando ? 'Buscando...' : 'Mi ubicación'}
@@ -1114,14 +1632,17 @@ export default function App() {
                 </div>
                 
                 <button 
-                  disabled={tieneTrabajoActivoOPostulacionRepartidor} 
-                  onClick={() => {
-                    if (!tieneTrabajoActivoOPostulacionRepartidor) setRepartidorOnline(!repartidorOnline);
-                  }} 
-                  title={tieneTrabajoActivoOPostulacionRepartidor ? "No puedes desconectarte con un trabajo en curso o postulación activa" : "Cambiar estatus"}
-                  className={`p-2 rounded-xl border transition cursor-pointer ${tieneTrabajoActivoOPostulacionRepartidor ? 'opacity-50 cursor-not-allowed bg-slate-200 border-slate-300 text-slate-400' : (repartidorOnline ? 'bg-red-50 text-red-600 border-red-200' : 'bg-emerald-50 text-emerald-600 border-emerald-200')}`}
+                  disabled={(repartidorOnline && Boolean(pedidoAsignadoRepartidor)) || cambiandoEstadoRepartidor}
+                  onClick={() => void cambiarEstadoRepartidor()}
+                  title={pedidoAsignadoRepartidor
+                    ? 'No puedes desconectarte durante una entrega activa'
+                    : postulacionesPendientesRepartidor.length > 0
+                      ? 'Al desconectarte se cancelarán tus postulaciones pendientes'
+                      : 'Cambiar estatus'}
+                  aria-label={repartidorOnline ? 'Desconectarme' : 'Conectarme'}
+                  className={`p-2 rounded-xl border transition cursor-pointer ${pedidoAsignadoRepartidor || cambiandoEstadoRepartidor ? 'opacity-50 cursor-not-allowed bg-slate-200 border-slate-300 text-slate-400' : (repartidorOnline ? 'bg-red-50 text-red-600 border-red-200' : 'bg-emerald-50 text-emerald-600 border-emerald-200')}`}
                 >
-                  <Power size={18} />
+                  <Power size={18} className={cambiandoEstadoRepartidor ? 'animate-pulse' : ''} />
                 </button>
 
                 <button onClick={toggleDarkMode} title="Cambiar Tema" className={`p-2 rounded-xl border transition cursor-pointer ${darkMode ? 'bg-slate-800 border-slate-700 text-amber-400' : 'bg-orange-50 border-orange-200 text-slate-700'}`}>
@@ -1141,6 +1662,7 @@ export default function App() {
 
                     <div className="space-y-2 text-xs">
                       <p><strong>Cliente:</strong> {pedidoAsignadoRepartidor.cliente_nombre}</p>
+                      {pedidoAsignadoRepartidor.tipo_servicio === 'viajes' && <p><strong>Pago:</strong> {etiquetaMetodoPago(pedidoAsignadoRepartidor.metodo_pago)} · {pedidoAsignadoRepartidor.estado_pago === 'pagado' ? 'Confirmado' : 'Pendiente de efectivo'}</p>}
                       <p><strong>Descripción:</strong> {pedidoAsignadoRepartidor.descripcion}</p>
                       <p><strong>Origen (Punto A):</strong> {pedidoAsignadoRepartidor.origen_texto}</p>
                       <p><strong>Destino (Punto B):</strong> {pedidoAsignadoRepartidor.destino_texto}</p>
@@ -1148,7 +1670,11 @@ export default function App() {
 
                     {pedidoAsignadoRepartidor.estado === 'aceptado' && (
                       <button onClick={() => cambiarEstadoPedido(pedidoAsignadoRepartidor.id, 'entregado_repartidor')} className="w-full bg-[#FF5722] hover:bg-[#F4511E] text-white text-xs font-bold py-3 rounded-xl transition cursor-pointer shadow-sm">
-                        Llegué al Punto A / Retirado
+                        {pedidoAsignadoRepartidor.tipo_servicio === 'viajes'
+                          ? pedidoAsignadoRepartidor.metodo_pago === 'efectivo' && pedidoAsignadoRepartidor.estado_pago !== 'pagado'
+                            ? 'Confirmar efectivo recibido e iniciar viaje'
+                            : 'Iniciar viaje'
+                          : 'Llegué al Punto A / Retirado'}
                       </button>
                     )}
 
@@ -1171,7 +1697,7 @@ export default function App() {
                         return (
                           <div key={p.id} className={`border p-4 rounded-3xl shadow-sm space-y-3 ${darkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-orange-100'}`}>
                             <div className="flex justify-between items-center">
-                              <span className="text-[10px] font-black uppercase px-2.5 py-1 rounded-full bg-orange-100 text-[#FF5722]">{p.tipo_servicio} · {p.distancia_km} km</span>
+                              <span className="text-[10px] font-black uppercase px-2.5 py-1 rounded-full bg-orange-100 text-[#FF5722]">{etiquetaTipoServicio(p.tipo_servicio)} · {p.distancia_km} km</span>
                               <span className="text-sm font-black text-[#FF5722]">${p.tarifa}</span>
                             </div>
 
@@ -1201,7 +1727,7 @@ export default function App() {
                 )}
               </div>
 
-              <div className="relative lg:col-span-7 h-[600px] lg:h-[calc(100vh-140px)] rounded-3xl overflow-hidden border shadow-sm sticky top-20">
+              <div className="relative lg:col-span-7 h-[min(60dvh,520px)] min-h-[300px] lg:h-[calc(100dvh-140px)] rounded-3xl overflow-hidden border shadow-sm sticky top-20">
                 <button type="button" onClick={() => obtenerUbicacionActual()} disabled={ubicacionCargando} className="absolute left-3 top-3 z-20 inline-flex items-center gap-2 rounded-xl border border-white/80 bg-white/95 px-3 py-2 text-xs font-bold text-slate-800 shadow-md disabled:opacity-60">
                   <Navigation size={15} className={ubicacionCargando ? 'animate-pulse' : 'text-[#FF5722]'} />
                   {ubicacionCargando ? 'Buscando...' : 'Mi ubicación'}
@@ -1237,47 +1763,186 @@ export default function App() {
         )}
 
         {activeTab === 'perfil' && usuario && (
-          <div className="max-w-md mx-auto w-full py-8">
-            <div className={`border p-6 rounded-3xl shadow-sm space-y-4 ${darkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-orange-100'}`}>
-              <h3 className={`text-xl font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Editar mi Perfil</h3>
+          <section className="mx-auto w-full max-w-4xl py-6 md:py-10">
+            <div className={`overflow-hidden rounded-3xl border shadow-sm ${darkMode ? 'border-slate-800 bg-slate-900 text-white' : 'border-orange-100 bg-white'}`}>
+              <div className="bg-gradient-to-r from-[#FF5722] to-orange-400 px-6 py-7 text-white md:px-8">
+                <div className="flex flex-col items-center gap-4 sm:flex-row">
+                  <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-full border-4 border-white/70 bg-white/20 text-2xl font-black shadow-md">
+                    {fotoLocal ? <img src={fotoLocal} alt="Foto de perfil" className="h-full w-full object-cover" /> : usuario.nombre.slice(0, 1).toUpperCase()}
+                  </div>
+                  <div className="text-center sm:text-left">
+                    <p className="text-xs font-bold uppercase tracking-[0.18em] text-white/80">Mi cuenta</p>
+                    <h2 className="mt-1 text-2xl font-black">{usuario.nombre}</h2>
+                    <span className="mt-2 inline-flex rounded-full bg-white/20 px-3 py-1 text-[11px] font-bold capitalize">{usuario.rol === 'repartidor' ? 'Repartidor' : 'Cliente'}</span>
+                  </div>
+                </div>
+              </div>
 
-              <form onSubmit={guardarPerfil} className="space-y-4">
-                <div>
-                  <label className="text-xs font-bold">Cédula</label>
-                  <div className="flex mt-1">
-                    <span className={`inline-flex items-center px-3 rounded-l-xl border border-r-0 text-xs font-bold ${darkMode ? 'bg-slate-800 border-slate-700 text-slate-300' : 'bg-orange-100 border-orange-200 text-[#FF5722]'}`}>
-                      V-
-                    </span>
-                    <input type="text" value={cedulaNumero} onChange={e => setCedulaNumero(e.target.value.replace(/\D/g, ''))} maxLength={8} className={`w-full border rounded-r-xl px-3 py-2 text-xs ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
+              <div className="grid gap-6 p-5 md:grid-cols-[1fr_1.2fr] md:p-8">
+                <div className="space-y-4">
+                  <div>
+                    <h3 className={`text-base font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Datos de la cuenta</h3>
+                    <p className="mt-1 text-xs text-slate-500">Información asociada a tu inicio de sesión.</p>
+                  </div>
+                  <div className={`space-y-3 rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-950/60' : 'border-slate-100 bg-slate-50'}`}>
+                    <div>
+                      <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Correo electrónico</p>
+                      <p className="mt-1 break-all text-sm font-semibold">{usuario.email}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Teléfono</p>
+                      <p className="mt-1 text-sm font-semibold">{usuario.telefono || 'No registrado'}</p>
+                    </div>
+                    {usuario.rol === 'repartidor' && (
+                      <div>
+                        <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Vehículo registrado</p>
+                        <p className="mt-1 text-sm font-semibold">{usuario.vehiculo || 'Añade los datos de tu vehículo'}</p>
+                        {usuario.placa && <p className="mt-0.5 text-xs text-slate-500">Placa: {usuario.placa}</p>}
+                      </div>
+                    )}
+                  </div>
+                  <div className={`rounded-2xl border p-4 text-xs leading-relaxed ${darkMode ? 'border-orange-900/50 bg-orange-950/20 text-slate-300' : 'border-orange-100 bg-orange-50 text-slate-600'}`}>
+                    Mantén tus datos y, si eres repartidor, la información de tu vehículo actualizada para que los clientes puedan identificarte.
                   </div>
                 </div>
 
-                {usuario.rol === 'repartidor' && (
-                  <>
-                    <div>
-                      <label className="text-xs font-bold">Vehículo</label>
-                      <input type="text" value={tipoVehiculo} onChange={e => setTipoVehiculo(e.target.value)} className={`w-full border rounded-xl px-3 py-2 text-xs mt-1 ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
-                    </div>
-                    <div>
-                      <label className="text-xs font-bold">Placa</label>
-                      <input type="text" value={placaVehiculo} onChange={e => validarPlacaFormato(e.target.value)} className={`w-full border rounded-xl px-3 py-2 text-xs mt-1 ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
-                      {errorPlaca && <p className="text-[10px] text-red-600 font-bold mt-1">{errorPlaca}</p>}
-                    </div>
-                  </>
-                )}
+                <form onSubmit={guardarPerfil} className="space-y-4">
+                  <div>
+                    <h3 className={`text-base font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Editar perfil</h3>
+                    <p className="mt-1 text-xs text-slate-500">Los cambios se guardarán en tu cuenta.</p>
+                  </div>
 
-                <div>
-                  <label className="text-xs font-bold">Foto de Perfil (Opcional)</label>
-                  <input type="file" accept="image/*" onChange={e => convertirImagenSegura(e, setFotoLocal)} className="text-xs mt-1 block" />
-                  {fotoLocal && <img src={fotoLocal} alt="Preview" className="w-16 h-16 rounded-full object-cover mt-2 border-2 border-[#FF5722]" />}
-                </div>
+                  {errorPerfil && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-700">{errorPerfil}</p>}
 
-                <button type="submit" className="w-full bg-[#FF5722] hover:bg-[#F4511E] text-white py-3 rounded-xl font-bold text-xs cursor-pointer shadow-md">
-                  Guardar Cambios
-                </button>
-              </form>
+                  <div>
+                    <label className="text-xs font-bold">Cédula de identidad</label>
+                    <div className="mt-1 flex">
+                      <span className={`inline-flex items-center rounded-l-xl border border-r-0 px-3 text-xs font-bold ${darkMode ? 'border-slate-700 bg-slate-800 text-slate-300' : 'border-orange-200 bg-orange-100 text-[#FF5722]'}`}>V-</span>
+                      <input type="text" inputMode="numeric" value={cedulaNumero} onChange={e => setCedulaNumero(e.target.value.replace(/\D/g, ''))} maxLength={8} className={`w-full rounded-r-xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-800 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50'}`} />
+                    </div>
+                  </div>
+
+                  {usuario.rol === 'repartidor' && (
+                    <div className={`space-y-3 rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-950/60' : 'border-slate-100 bg-slate-50'}`}>
+                      <p className="text-xs font-black uppercase tracking-wide text-slate-500">Datos del vehículo</p>
+                      <div>
+                        <label className="text-xs font-bold">Vehículo</label>
+                        <input type="text" required maxLength={100} value={tipoVehiculo} onChange={e => setTipoVehiculo(e.target.value)} className={`mt-1 w-full rounded-xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-800 bg-slate-950 text-white' : 'border-slate-200 bg-white'}`} />
+                      </div>
+                      <div>
+                        <label className="text-xs font-bold">Placa</label>
+                        <input type="text" value={placaVehiculo} onChange={e => validarPlacaFormato(e.target.value)} className={`mt-1 w-full rounded-xl border px-3 py-2.5 text-sm uppercase ${darkMode ? 'border-slate-800 bg-slate-950 text-white' : 'border-slate-200 bg-white'}`} />
+                        {errorPlaca && <p className="mt-1 text-[10px] font-bold text-red-600">{errorPlaca}</p>}
+                      </div>
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="text-xs font-bold">Foto de perfil</label>
+                    <input type="file" accept="image/*" onChange={e => convertirImagenSegura(e, setFotoLocal)} className="mt-1 block w-full text-xs file:mr-3 file:rounded-lg file:border-0 file:bg-orange-100 file:px-3 file:py-2 file:font-bold file:text-[#FF5722]" />
+                    {fotoLocal && <img src={fotoLocal} alt="Vista previa del perfil" className="mt-3 h-16 w-16 rounded-full border-2 border-[#FF5722] object-cover" />}
+                  </div>
+
+                  <button type="submit" disabled={guardandoPerfil || Boolean(errorPlaca)} className="w-full rounded-xl bg-[#FF5722] py-3 text-sm font-bold text-white shadow-md transition hover:bg-[#F4511E] disabled:cursor-not-allowed disabled:opacity-50">
+                    {guardandoPerfil ? 'Guardando…' : 'Guardar cambios'}
+                  </button>
+                </form>
+              </div>
             </div>
-          </div>
+          </section>
+        )}
+
+        {activeTab === 'admin' && usuario?.es_admin && (
+          <section className="mx-auto w-full max-w-5xl space-y-6 py-6 md:py-10">
+            <div className={`flex flex-col gap-4 rounded-3xl border p-6 shadow-sm sm:flex-row sm:items-center sm:justify-between ${darkMode ? 'border-slate-800 bg-slate-900 text-white' : 'border-orange-100 bg-white'}`}>
+              <div>
+                <p className="text-[11px] font-black uppercase tracking-[0.18em] text-[#FF5722]">Panel seguro</p>
+                <h2 className={`mt-1 text-2xl font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Administración de pagos</h2>
+                <p className="mt-1 text-xs text-slate-500">Verifica los comprobantes directamente en la cuenta receptora antes de aprobarlos.</p>
+              </div>
+              <button type="button" onClick={() => void cargarPanelAdmin()} disabled={cargandoAdmin} className="rounded-xl border border-orange-200 bg-orange-50 px-4 py-2.5 text-xs font-bold text-[#FF5722] disabled:opacity-50">
+                {cargandoAdmin ? 'Actualizando…' : 'Actualizar panel'}
+              </button>
+            </div>
+
+            {errorAdmin && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-700">{errorAdmin}</p>}
+            {mensajeAdmin && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs font-semibold text-emerald-800">{mensajeAdmin}</p>}
+
+            <div className="grid gap-6 lg:grid-cols-2">
+              <div className={`space-y-4 rounded-3xl border p-5 shadow-sm ${darkMode ? 'border-slate-800 bg-slate-900 text-white' : 'border-orange-100 bg-white'}`}>
+                <div>
+                  <h3 className="text-base font-black">Pagos y reembolsos de Pago Móvil</h3>
+                  <p className="mt-1 text-xs text-slate-500">Verifica el abono en el banco; si el viaje se canceló, devuelve el monto antes de confirmarlo.</p>
+                </div>
+                {pagosPendientesAdmin.length === 0 ? (
+                  <p className="rounded-2xl bg-slate-50 p-4 text-xs text-slate-500 dark:bg-slate-950">No hay pagos ni reembolsos pendientes.</p>
+                ) : pagosPendientesAdmin.map(pago => (
+                  <article key={pago.id} className={`space-y-3 rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-950' : 'border-slate-100 bg-slate-50'}`}>
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-black">{pago.cliente_nombre}</p>
+                        <p className="text-[11px] text-slate-500">{pago.cliente_email}</p>
+                      </div>
+                      <span className={`rounded-full px-2.5 py-1 text-[10px] font-black ${pago.estado_pago === 'reembolso_pendiente' ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'}`}>
+                        {pago.estado_pago === 'reembolso_pendiente' ? `Reembolso · Viaje #${pago.id}` : `Pago · Viaje #${pago.id}`}
+                      </span>
+                    </div>
+                    <p className="text-xs"><strong>Referencia:</strong> {pago.referencia_pago || 'Sin referencia'}</p>
+                    <p className="text-xs"><strong>Monto:</strong> ${Number(pago.tarifa).toFixed(2)}</p>
+                    <p className="text-[11px] text-slate-500">{pago.origen_texto} → {pago.destino_texto}</p>
+                    {pago.estado_pago === 'reembolso_pendiente' ? (
+                      <>
+                        <p className="rounded-xl bg-red-50 p-3 text-[11px] text-red-800 dark:bg-red-950/30 dark:text-red-300">
+                          Viaje cancelado. Verifica si recibiste el abono; si se recibió, devuelve ${Number(pago.tarifa).toFixed(2)} antes de confirmar.
+                        </p>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button type="button" onClick={() => void revisarPagoManual(pago.id, 'sin_pago')} className="rounded-xl border border-slate-300 bg-white py-2.5 text-xs font-bold text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">No hubo pago</button>
+                          <button type="button" onClick={() => void revisarPagoManual(pago.id, 'reembolsar')} className="rounded-xl bg-emerald-600 py-2.5 text-xs font-bold text-white">Confirmar reembolso</button>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="grid grid-cols-2 gap-2">
+                        <button type="button" onClick={() => void revisarPagoManual(pago.id, 'rechazar')} className="rounded-xl border border-red-200 bg-red-50 py-2.5 text-xs font-bold text-red-700">Rechazar</button>
+                        <button type="button" onClick={() => void revisarPagoManual(pago.id, 'aprobar')} className="rounded-xl bg-emerald-600 py-2.5 text-xs font-bold text-white">Confirmar pago</button>
+                      </div>
+                    )}
+                  </article>
+                ))}
+              </div>
+
+              <div className="space-y-6">
+                <form onSubmit={guardarConfiguracionPagoAdmin} className={`space-y-4 rounded-3xl border p-5 shadow-sm ${darkMode ? 'border-slate-800 bg-slate-900 text-white' : 'border-orange-100 bg-white'}`}>
+                  <div>
+                    <h3 className="text-base font-black">Datos para recibir Pago Móvil</h3>
+                    <p className="mt-1 text-xs text-slate-500">Se mostrarán a los clientes al solicitar un viaje.</p>
+                  </div>
+                  {([
+                    ['banco', 'Banco'],
+                    ['telefono', 'Teléfono afiliado'],
+                    ['cedula', 'Cédula o RIF'],
+                    ['titular', 'Nombre del titular']
+                  ] as const).map(([field, label]) => (
+                    <label key={field} className="block text-xs font-bold">
+                      {label}
+                      <input required maxLength={field === 'titular' ? 120 : field === 'banco' ? 100 : 30} value={configPagoAdmin[field]} onChange={event => setConfigPagoAdmin(current => ({ ...current, [field]: event.target.value }))} className={`mt-1 w-full rounded-xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-800 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50'}`} />
+                    </label>
+                  ))}
+                  <button type="submit" className="w-full rounded-xl bg-[#FF5722] py-3 text-xs font-bold text-white">Guardar datos de Pago Móvil</button>
+                </form>
+
+                <form onSubmit={recargarSaldoCorporativo} className={`space-y-4 rounded-3xl border p-5 shadow-sm ${darkMode ? 'border-slate-800 bg-slate-900 text-white' : 'border-orange-100 bg-white'}`}>
+                  <div>
+                    <h3 className="text-base font-black">Recargar saldo corporativo</h3>
+                    <p className="mt-1 text-xs text-slate-500">Busca la cuenta del cliente por correo. El monto se registra en dólares.</p>
+                  </div>
+                  <input type="email" required value={emailRecargaSaldo} onChange={event => setEmailRecargaSaldo(event.target.value)} placeholder="cliente@empresa.com" className={`w-full rounded-xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-800 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50'}`} />
+                  <input type="number" required min="0.01" max="10000" step="0.01" value={montoRecargaSaldo} onChange={event => setMontoRecargaSaldo(event.target.value)} placeholder="Monto en USD" className={`w-full rounded-xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-800 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50'}`} />
+                  <input type="text" maxLength={250} value={notaRecargaSaldo} onChange={event => setNotaRecargaSaldo(event.target.value)} placeholder="Nota o referencia (opcional)" className={`w-full rounded-xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-800 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50'}`} />
+                  <button type="submit" className="w-full rounded-xl bg-[#FF5722] py-3 text-xs font-bold text-white">Aplicar recarga</button>
+                </form>
+              </div>
+            </div>
+          </section>
         )}
       </main>
     </div>

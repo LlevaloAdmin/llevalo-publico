@@ -1,5 +1,13 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
+html {
+  font-size: clamp(16px, calc(15px + 0.35vw), 18px);
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 html,
 body,
 #root {
@@ -8,6 +16,8 @@ body,
 
 body {
   margin: 0;
+  min-width: 0;
+  overflow-x: hidden;
   background: #fdfbf7;
 }
 
@@ -15,5 +25,58 @@ body {
   box-sizing: border-box;
   min-height: 100vh;
   min-height: 100dvh;
+  min-width: 0;
+  overflow-x: clip;
   padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.app-shell main,
+.app-shell section,
+.app-shell article,
+.app-shell form {
+  min-width: 0;
+}
+
+.app-shell button:not(.mapboxgl-ctrl button) {
+  min-width: 44px;
+  min-height: 44px;
+  white-space: normal;
+}
+
+.app-shell button:not(.mapboxgl-ctrl button) svg {
+  width: max(1.15rem, 1.15em);
+  height: max(1.15rem, 1.15em);
+  flex: 0 0 auto;
+}
+
+.app-shell input,
+.app-shell textarea,
+.app-shell select {
+  max-width: 100%;
+  font-size: max(16px, 1em);
+}
+
+.app-shell p,
+.app-shell h1,
+.app-shell h2,
+.app-shell h3,
+.app-shell h4 {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  html {
+    font-size: clamp(17px, 4.4vw, 19px);
+  }
+}
+
+@media (max-width: 380px) {
+  .app-shell .address-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .app-shell .address-controls input {
+    grid-column: 1 / -1;
+  }
 }

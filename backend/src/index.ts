@@ -11,6 +11,7 @@ dotenv.config();
 import './db';
 import authRoutes from './routes/auth';
 import pedidosRoutes from './routes/pedidos';
+import pagosRoutes from './routes/pagos';
 
 const app = express();
 app.use(cors({
@@ -19,6 +20,7 @@ app.use(cors({
 app.use(express.json({ limit: '1mb' }));
 app.use('/api/auth', authRoutes);
 app.use('/api/pedidos', pedidosRoutes);
+app.use('/api/pagos', pagosRoutes);
 
 const server = http.createServer(app);
 const io = new Server(server, {

@@ -4,12 +4,66 @@ import jwt from 'jsonwebtoken';
 import dns from 'dns/promises';
 import { pool } from '../db';
 import { JWT_SECRET } from '../config';
+import { requireAuth } from '../middleware/auth';
 
 const router = Router();
 
+interface UsuarioFila {
+  id: number;
+  nombre: string;
+  email: string;
+  telefono?: string | null;
+  rol: 'cliente' | 'repartidor';
+  cedula?: string | null;
+  foto?: string | null;
+  vehiculo?: string | null;
+  placa?: string | null;
+  vehiculo_foto?: string | null;
+  calificacion?: number | string | null;
+  es_admin?: boolean | null;
+}
+
+let profileColumnsReady: Promise<void> | null = null;
+
+const ensureProfileColumns = () => {
+  if (!profileColumnsReady) {
+    profileColumnsReady = pool.query(`
+      ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS cedula VARCHAR(30);
+      ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS foto TEXT;
+      ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS vehiculo VARCHAR(100);
+      ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS placa VARCHAR(30);
+      ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS vehiculo_foto TEXT;
+      ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS calificacion NUMERIC(3,2) DEFAULT 5.0;
+      ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS es_admin BOOLEAN NOT NULL DEFAULT FALSE;
+    `).then(() => undefined).catch((error) => {
+      profileColumnsReady = null;
+      console.error('Error preparando los datos de perfil:', error);
+      throw error;
+    });
+  }
+  return profileColumnsReady;
+};
+
+const usuarioPublico = (user: UsuarioFila) => ({
+  id: user.id,
+  nombre: user.nombre,
+  email: user.email,
+  telefono: user.telefono || '',
+  rol: user.rol,
+  cedula: user.cedula || '',
+  foto: user.foto || '',
+  vehiculo: user.vehiculo || '',
+  placa: user.placa || '',
+  vehiculo_foto: user.vehiculo_foto || '',
+  calificacion: user.calificacion === null || user.calificacion === undefined
+    ? undefined
+    : Number(user.calificacion),
+  es_admin: user.es_admin === true
+});
+
 // REGISTRO DIRECTO (Sin verificación SMS)
 router.post('/register', async (req: Request, res: Response): Promise<any> => {
-  const { nombre, email, telefono, password } = req.body ?? {};
+  const { nombre, email, telefono, password, cedula, foto, vehiculo, placa, vehiculo_foto } = req.body ?? {};
   const rol = req.body?.rol || 'cliente';
 
   if (typeof nombre !== 'string' || !nombre.trim() || nombre.length > 120
@@ -18,6 +72,11 @@ router.post('/register', async (req: Request, res: Response): Promise<any> => {
     || password.length < 8 || password.length > 128 || !/[A-Z]/.test(password) || !/[a-z]/.test(password)
     || !/\d/.test(password) || !/[^A-Za-z0-9]/.test(password)
     || (telefono !== undefined && (typeof telefono !== 'string' || telefono.length > 30))
+    || (cedula !== undefined && (typeof cedula !== 'string' || cedula.length > 30))
+    || (foto !== undefined && (typeof foto !== 'string' || foto.length > 1_000_000))
+    || (vehiculo !== undefined && (typeof vehiculo !== 'string' || vehiculo.length > 100))
+    || (placa !== undefined && (typeof placa !== 'string' || placa.length > 30))
+    || (vehiculo_foto !== undefined && (typeof vehiculo_foto !== 'string' || vehiculo_foto.length > 1_000_000))
     || (rol !== 'cliente' && rol !== 'repartidor')) {
     return res.status(400).json({ error: 'Los datos de registro no son válidos.' });
   }
@@ -25,6 +84,8 @@ router.post('/register', async (req: Request, res: Response): Promise<any> => {
   const emailNormalizado = email.trim().toLowerCase();
 
   try {
+    await ensureProfileColumns();
+
     // 1. Validar dominio de correo real (MX)
     const dominio = emailNormalizado.split('@')[1];
 
@@ -52,12 +113,18 @@ router.post('/register', async (req: Request, res: Response): Promise<any> => {
     const passwordHash = await bcrypt.hash(password, salt);
 
     const newUser = await pool.query(
-      'INSERT INTO usuarios (nombre, email, telefono, password_hash, rol) VALUES ($1, $2, $3, $4, $5) RETURNING id, nombre, email, telefono, rol',
-      [nombre.trim(), emailNormalizado, telefono?.trim() || null, passwordHash, rol]
+      `INSERT INTO usuarios
+       (nombre, email, telefono, password_hash, rol, cedula, foto, vehiculo, placa, vehiculo_foto)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING id, nombre, email, telefono, rol, cedula, foto, vehiculo, placa, vehiculo_foto, calificacion, es_admin`,
+      [
+        nombre.trim(), emailNormalizado, telefono?.trim() || null, passwordHash, rol,
+        cedula?.trim() || null, foto || null, vehiculo?.trim() || null, placa?.trim() || null, vehiculo_foto || null
+      ]
     );
 
-    const user = newUser.rows[0];
-    const token = jwt.sign({ id: user.id, rol: user.rol }, JWT_SECRET, { expiresIn: '7d' });
+    const user = usuarioPublico(newUser.rows[0]);
+    const token = jwt.sign({ id: user.id, rol: user.rol, es_admin: user.es_admin }, JWT_SECRET, { expiresIn: '7d' });
 
     res.status(201).json({
       mensaje: '¡Cuenta creada con éxito!',
@@ -78,33 +145,68 @@ router.post('/login', async (req: Request, res: Response): Promise<any> => {
   }
 
   try {
+    await ensureProfileColumns();
     const result = await pool.query('SELECT * FROM usuarios WHERE lower(email) = $1', [email.trim().toLowerCase()]);
     if (result.rows.length === 0) {
       return res.status(400).json({ error: 'Correo o contraseña incorrectos.' });
     }
 
-    const user = result.rows[0];
+    const user = result.rows[0] as UsuarioFila & { password_hash: string };
     const validPassword = await bcrypt.compare(password, user.password_hash);
     if (!validPassword) {
       return res.status(400).json({ error: 'Correo o contraseña incorrectos.' });
     }
 
-    const token = jwt.sign({ id: user.id, rol: user.rol }, JWT_SECRET, { expiresIn: '7d' });
+    const token = jwt.sign({ id: user.id, rol: user.rol, es_admin: user.es_admin === true }, JWT_SECRET, { expiresIn: '7d' });
 
     res.json({
       mensaje: 'Login exitoso',
       token,
-      usuario: {
-        id: user.id,
-        nombre: user.nombre,
-        email: user.email,
-        telefono: user.telefono,
-        rol: user.rol
-      }
+      usuario: usuarioPublico(user)
     });
   } catch (error) {
     console.error('Error en login:', error);
     res.status(500).json({ error: 'Error interno al iniciar sesión.' });
+  }
+});
+
+router.put('/profile', requireAuth, async (req: Request, res: Response): Promise<any> => {
+  const authUser = req.authUser;
+  if (!authUser) return res.status(401).json({ error: 'Sesión inválida.' });
+
+  const { cedula, foto, vehiculo, placa, vehiculo_foto } = req.body ?? {};
+  if (typeof cedula !== 'string' || cedula.length > 30
+    || typeof foto !== 'string' || foto.length > 1_000_000
+    || (authUser.rol === 'repartidor' && (
+      typeof vehiculo !== 'string' || !vehiculo.trim() || vehiculo.length > 100
+      || typeof placa !== 'string' || placa.length > 30
+      || typeof vehiculo_foto !== 'string' || vehiculo_foto.length > 1_000_000
+    ))) {
+    return res.status(400).json({ error: 'Los datos del perfil no son válidos.' });
+  }
+
+  try {
+    await ensureProfileColumns();
+    const result = authUser.rol === 'repartidor'
+      ? await pool.query(
+        `UPDATE usuarios
+         SET cedula = $1, foto = $2, vehiculo = $3, placa = $4, vehiculo_foto = $5
+         WHERE id = $6 AND rol = 'repartidor'
+         RETURNING id, nombre, email, telefono, rol, cedula, foto, vehiculo, placa, vehiculo_foto, calificacion, es_admin`,
+        [cedula.trim(), foto, vehiculo.trim(), placa.trim(), vehiculo_foto, authUser.id]
+      )
+      : await pool.query(
+        `UPDATE usuarios SET cedula = $1, foto = $2
+         WHERE id = $3 AND rol = 'cliente'
+         RETURNING id, nombre, email, telefono, rol, cedula, foto, vehiculo, placa, vehiculo_foto, calificacion, es_admin`,
+        [cedula.trim(), foto, authUser.id]
+      );
+
+    if (result.rows.length === 0) return res.status(404).json({ error: 'No se encontró el perfil de la cuenta.' });
+    res.json({ usuario: usuarioPublico(result.rows[0]) });
+  } catch (error) {
+    console.error('Error al actualizar perfil:', error);
+    res.status(500).json({ error: 'No se pudo actualizar el perfil.' });
   }
 });
 
