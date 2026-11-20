@@ -160,6 +160,8 @@ router.put('/admin/pedidos/:id', requireAdmin, async (req: Request, res: Respons
            estado = CASE WHEN $2 = 'rechazar' THEN 'cancelado' ELSE estado END,
            pago_confirmado_por = CASE WHEN $2 IN ('aprobar', 'rechazar') THEN $3 ELSE pago_confirmado_por END,
            pago_confirmado_en = CASE WHEN $2 IN ('aprobar', 'rechazar') THEN CURRENT_TIMESTAMP ELSE pago_confirmado_en END,
+           publicado_en = CASE WHEN $2 = 'aprobar' THEN CURRENT_TIMESTAMP ELSE publicado_en END,
+           motivo_cancelacion = CASE WHEN $2 = 'rechazar' THEN 'pago_rechazado' ELSE motivo_cancelacion END,
            reembolso_confirmado_por = CASE WHEN $2 = 'reembolsar' THEN $3 ELSE reembolso_confirmado_por END,
            reembolso_confirmado_en = CASE WHEN $2 = 'reembolsar' THEN CURRENT_TIMESTAMP ELSE reembolso_confirmado_en END
        WHERE id = $4

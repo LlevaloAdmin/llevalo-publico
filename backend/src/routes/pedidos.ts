@@ -3,7 +3,7 @@ import type { PoolClient } from 'pg';
 import { pool } from '../db';
 import { requireAuth, requireRole } from '../middleware/auth';
 import { calcularTarifa } from '../utils/pricing';
-import { estadoPagoAlCancelar, referenciaPagoValida } from '../utils/payments';
+import { estadoPagoAlCancelar, referenciaPagoValida, solicitudExpirada } from '../utils/payments';
 
 const router = Router();
 
@@ -44,7 +44,9 @@ const initTables = async () => {
         estado VARCHAR(30) DEFAULT 'pendiente',
         repartidor_lat DOUBLE PRECISION,
         repartidor_lon DOUBLE PRECISION,
-        creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        publicado_en TIMESTAMPTZ,
+        motivo_cancelacion VARCHAR(40)
       );
 
       ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS cliente_cedula VARCHAR(30);
@@ -65,6 +67,16 @@ const initTables = async () => {
       ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS pago_confirmado_en TIMESTAMP;
       ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS reembolso_confirmado_por INTEGER;
       ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS reembolso_confirmado_en TIMESTAMP;
+      ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS publicado_en TIMESTAMPTZ;
+      ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS motivo_cancelacion VARCHAR(40);
+
+      UPDATE pedidos
+      SET publicado_en = CASE
+        WHEN metodo_pago = 'pago_movil' THEN COALESCE(pago_confirmado_en, creado_en)
+        ELSE creado_en
+      END
+      WHERE publicado_en IS NULL
+        AND (metodo_pago <> 'pago_movil' OR estado_pago = 'pagado');
 
       CREATE TABLE IF NOT EXISTS postulaciones (
         id SERIAL PRIMARY KEY,
@@ -146,6 +158,113 @@ const getOrderId = (value: string | string[] | number | undefined): number | nul
   const id = Number(value);
   return Number.isSafeInteger(id) && id > 0 ? id : null;
 };
+
+const expirarPedidoSiCorresponde = async (client: PoolClient, id: number): Promise<boolean> => {
+  const pedidoResult = await client.query(
+    `SELECT id, cliente_id, tarifa, metodo_pago, estado_pago, referencia_pago, publicado_en
+     FROM pedidos
+     WHERE id = $1 AND estado IN ('pendiente', 'postulado')
+     FOR UPDATE`,
+    [id]
+  );
+  if (pedidoResult.rows.length === 0) return false;
+
+  const pedido = pedidoResult.rows[0];
+  if (!solicitudExpirada(pedido.publicado_en)
+    || (pedido.metodo_pago === 'pago_movil' && pedido.estado_pago !== 'pagado')) return false;
+
+  const postulacionPendiente = await client.query(
+    "SELECT id FROM postulaciones WHERE pedido_id = $1 AND estado = 'pendiente' LIMIT 1",
+    [id]
+  );
+  if (postulacionPendiente.rows.length > 0) return false;
+
+  const nuevoEstadoPago = estadoPagoAlCancelar(pedido.metodo_pago, pedido.estado_pago);
+  const cancelado = await client.query(
+    `UPDATE pedidos
+     SET estado = 'cancelado', estado_pago = $2, motivo_cancelacion = 'sin_repartidor'
+     WHERE id = $1 AND estado IN ('pendiente', 'postulado')
+     RETURNING id`,
+    [id, nuevoEstadoPago]
+  );
+  if (cancelado.rowCount === 0) return false;
+
+  if (pedido.metodo_pago === 'saldo_corporativo' && nuevoEstadoPago === 'reembolsado') {
+    const saldo = await client.query(
+      `INSERT INTO saldos_corporativos (cliente_id, saldo)
+       VALUES ($1, $2)
+       ON CONFLICT (cliente_id) DO UPDATE
+         SET saldo = saldos_corporativos.saldo + EXCLUDED.saldo
+       RETURNING saldo`,
+      [pedido.cliente_id, Number(pedido.tarifa)]
+    );
+    await client.query(
+      `INSERT INTO movimientos_saldo
+       (cliente_id, monto, saldo_resultante, tipo, pedido_id, nota)
+       VALUES ($1, $2, $3, 'reembolso', $4, $5)`,
+      [pedido.cliente_id, Number(pedido.tarifa), saldo.rows[0].saldo, id, `Reembolso automático por expiración del pedido ${id}`]
+    );
+  }
+
+  const detalle = pedido.metodo_pago === 'saldo_corporativo' && nuevoEstadoPago === 'reembolsado'
+    ? 'No hubo postulaciones en 60 segundos; el saldo corporativo se restituyó automáticamente.'
+    : pedido.metodo_pago === 'pago_movil' && nuevoEstadoPago === 'reembolso_pendiente'
+      ? 'No hubo postulaciones en 60 segundos; el pago móvil quedó pendiente de verificación para reembolso.'
+      : 'No hubo postulaciones en 60 segundos y el pedido se canceló automáticamente.';
+  await client.query(
+    `INSERT INTO historial_pagos
+     (pedido_id, actor_rol, accion, metodo_pago, estado_pago, monto, referencia_pago, detalle)
+     VALUES ($1, 'sistema', 'pedido_expirado', $2, $3, $4, $5, $6)`,
+    [id, pedido.metodo_pago, nuevoEstadoPago, pedido.tarifa, pedido.referencia_pago, detalle]
+  );
+  return true;
+};
+
+let procesandoExpiraciones = false;
+const procesarPedidosExpirados = async () => {
+  if (procesandoExpiraciones) return;
+  procesandoExpiraciones = true;
+  let client: PoolClient | null = null;
+  try {
+    await tablasPedidosListas;
+    client = await pool.connect();
+    await client.query('BEGIN');
+    const expirables = await client.query(
+      `SELECT p.id
+       FROM pedidos p
+       WHERE p.estado IN ('pendiente', 'postulado')
+         AND p.publicado_en IS NOT NULL
+         AND p.publicado_en <= CURRENT_TIMESTAMP - INTERVAL '60 seconds'
+         AND (p.metodo_pago <> 'pago_movil' OR p.estado_pago = 'pagado')
+         AND NOT EXISTS (
+           SELECT 1 FROM postulaciones po
+           WHERE po.pedido_id = p.id AND po.estado = 'pendiente'
+         )
+       ORDER BY p.publicado_en
+       LIMIT 50
+       FOR UPDATE OF p SKIP LOCKED`
+    );
+    for (const pedido of expirables.rows) {
+      await expirarPedidoSiCorresponde(client, Number(pedido.id));
+    }
+    await client.query('COMMIT');
+  } catch (error) {
+    console.error('Error al cancelar pedidos sin postulaciones:', error);
+    try {
+      if (client) await client.query('ROLLBACK');
+    } catch (rollbackError) {
+      console.error('Error al revertir la cancelación automática:', rollbackError);
+    }
+  } finally {
+    client?.release();
+    procesandoExpiraciones = false;
+  }
+};
+
+const temporizadorExpiraciones = setInterval(() => {
+  void procesarPedidosExpirados();
+}, 5000);
+temporizadorExpiraciones.unref();
 
 router.post('/', requireRole('cliente'), async (req: Request, res: Response): Promise<any> => {
   const authUser = req.authUser;
@@ -229,10 +348,11 @@ router.post('/', requireRole('cliente'), async (req: Request, res: Response): Pr
 
     const result = await client.query(
       `INSERT INTO pedidos
-      (cliente_id, cliente_nombre, cliente_cedula, cliente_foto, tipo_servicio, descripcion, origen_texto, origen_lat, origen_lon, destino_texto, destino_lat, destino_lon, distancia_km, tiempo_min, tarifa, metodo_pago, estado_pago, referencia_pago, pago_confirmado_por, pago_confirmado_en, estado)
+      (cliente_id, cliente_nombre, cliente_cedula, cliente_foto, tipo_servicio, descripcion, origen_texto, origen_lat, origen_lon, destino_texto, destino_lat, destino_lon, distancia_km, tiempo_min, tarifa, metodo_pago, estado_pago, referencia_pago, pago_confirmado_por, pago_confirmado_en, estado, publicado_en)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18,
               $19::integer,
-              CASE WHEN $20 THEN CURRENT_TIMESTAMP ELSE NULL END, 'pendiente')
+              CASE WHEN $20 THEN CURRENT_TIMESTAMP ELSE NULL END, 'pendiente',
+              CASE WHEN $16::varchar = 'pago_movil' THEN NULL ELSE CURRENT_TIMESTAMP END)
       RETURNING *`,
       [
         authUser.id, cliente.rows[0].nombre,
@@ -298,7 +418,12 @@ router.get('/', async (req: Request, res: Response): Promise<any> => {
   try {
     const pedidosRes = authUser.rol === 'cliente'
       ? await pool.query(
-        "SELECT * FROM pedidos WHERE cliente_id = $1 AND estado != 'cancelado' ORDER BY creado_en DESC",
+        `SELECT * FROM pedidos
+         WHERE cliente_id = $1
+           AND (estado != 'cancelado'
+                OR (motivo_cancelacion = 'sin_repartidor'
+                    AND creado_en >= CURRENT_TIMESTAMP - INTERVAL '10 minutes'))
+         ORDER BY creado_en DESC`,
         [authUser.id]
       )
       : await pool.query(
@@ -362,7 +487,10 @@ router.post('/:id/postular', requireRole('repartidor'), async (req: Request, res
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const pedido = await client.query('SELECT cliente_id, estado FROM pedidos WHERE id = $1 FOR UPDATE', [id]);
+    const pedido = await client.query(
+      'SELECT cliente_id, estado, publicado_en, metodo_pago, estado_pago FROM pedidos WHERE id = $1 FOR UPDATE',
+      [id]
+    );
     if (pedido.rows.length === 0) {
       await client.query('ROLLBACK');
       return res.status(404).json({ error: 'Pedido no encontrado.' });
@@ -374,6 +502,16 @@ router.post('/:id/postular', requireRole('repartidor'), async (req: Request, res
     if (!['pendiente', 'postulado'].includes(pedido.rows[0].estado)) {
       await client.query('ROLLBACK');
       return res.status(409).json({ error: 'Este pedido ya no acepta postulaciones.' });
+    }
+    if (!pedido.rows[0].publicado_en
+      || (pedido.rows[0].metodo_pago === 'pago_movil' && pedido.rows[0].estado_pago !== 'pagado')) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'Este pedido todavía no está publicado en el radar.' });
+    }
+    if (solicitudExpirada(pedido.rows[0].publicado_en)
+      && await expirarPedidoSiCorresponde(client, id)) {
+      await client.query('COMMIT');
+      return res.status(409).json({ error: 'El pedido venció porque ningún repartidor se postuló en 60 segundos.' });
     }
 
     const repartidor = await client.query(
@@ -447,7 +585,10 @@ router.delete('/:id/postular/:repartidor_id', requireRole('repartidor'), async (
       [id]
     );
     if (restantes.rows.length === 0) {
-      await client.query("UPDATE pedidos SET estado = 'pendiente' WHERE id = $1 AND estado = 'postulado'", [id]);
+      await client.query(
+        "UPDATE pedidos SET estado = 'pendiente', publicado_en = CURRENT_TIMESTAMP WHERE id = $1 AND estado = 'postulado'",
+        [id]
+      );
     }
 
     await client.query('COMMIT');

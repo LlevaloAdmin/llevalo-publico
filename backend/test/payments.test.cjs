@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { estadoPagoAlCancelar, referenciaPagoValida } = require('../dist/utils/payments.js');
+const { estadoPagoAlCancelar, referenciaPagoValida, solicitudExpirada } = require('../dist/utils/payments.js');
 
 test('automatically refunds a canceled order paid with corporate balance', () => {
   assert.equal(estadoPagoAlCancelar('saldo_corporativo', 'pagado'), 'reembolsado');
@@ -22,4 +22,11 @@ test('accepts only numeric payment references up to 100 digits', () => {
   assert.equal(referenciaPagoValida(''), false);
   assert.equal(referenciaPagoValida('123abc'), false);
   assert.equal(referenciaPagoValida('1'.repeat(101)), false);
+});
+
+test('expires a published request at 60 seconds, not before', () => {
+  const publicadoEn = new Date('2026-03-01T12:00:00.000Z');
+  assert.equal(solicitudExpirada(publicadoEn, publicadoEn.getTime() + 59_999), false);
+  assert.equal(solicitudExpirada(publicadoEn, publicadoEn.getTime() + 60_000), true);
+  assert.equal(solicitudExpirada(null, publicadoEn.getTime() + 60_000), false);
 });

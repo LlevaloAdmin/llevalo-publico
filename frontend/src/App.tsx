@@ -35,6 +35,8 @@ interface PedidoReal {
   estado_pago?: 'no_aplica' | 'pendiente' | 'pagado' | 'rechazado' | 'reembolsado' | 'reembolso_pendiente';
   referencia_pago?: string | null;
   creado_en?: string;
+  publicado_en?: string | null;
+  motivo_cancelacion?: string | null;
   estado: 'pendiente' | 'postulado' | 'aceptado' | 'entregado_repartidor' | 'completado' | 'cancelado';
   repartidor_lat?: number;
   repartidor_lon?: number;
@@ -341,7 +343,7 @@ export default function App() {
   const [montoRecargaSaldo, setMontoRecargaSaldo] = useState('');
   const [notaRecargaSaldo, setNotaRecargaSaldo] = useState('');
 
-  const [segundosRestantes, setSegundosRestantes] = useState<number>(60);
+  const [horaActual, setHoraActual] = useState(Date.now());
 
   useEffect(() => {
     const alDesconectar = () => setSinConexion(true);
@@ -443,7 +445,7 @@ export default function App() {
 
   useEffect(() => {
     const timer = setInterval(() => {
-      setSegundosRestantes(prev => (prev > 0 ? prev - 1 : 60));
+      setHoraActual(Date.now());
     }, 1000);
     return () => clearInterval(timer);
   }, []);
@@ -866,7 +868,6 @@ export default function App() {
       setReferenciaPago('');
       setCoordsOrigen(null); setCoordsDestino(null);
       setDistanciaKm(0); setTiempoEstimadoMin(0);
-      setSegundosRestantes(60);
       await sincronizarDatos();
     } catch (err: any) { alert(err.message); }
     finally { setEnviandoPedido(false); }
@@ -1070,6 +1071,16 @@ export default function App() {
     ? pedidosReales.find(p => p.cliente_id === usuario.id && p.estado !== 'completado' && p.estado !== 'cancelado')
     : null;
 
+  const pedidoExpiradoReciente = usuario?.rol === 'cliente' && Array.isArray(pedidosReales)
+    ? pedidosReales.find(p => p.cliente_id === usuario.id && p.motivo_cancelacion === 'sin_repartidor')
+    : null;
+
+  const segundosRestantes = (() => {
+    if (pedidoActivoCliente?.estado !== 'pendiente' || !pedidoActivoCliente.publicado_en) return null;
+    const vencimiento = Date.parse(pedidoActivoCliente.publicado_en) + 60_000;
+    return Number.isFinite(vencimiento) ? Math.max(0, Math.ceil((vencimiento - horaActual) / 1000)) : null;
+  })();
+
   const postulacionesPedidoActual = pedidoActivoCliente && Array.isArray(postulacionesReales)
     ? postulacionesReales.filter(p => p.pedido_id === pedidoActivoCliente.id) 
     : [];
@@ -1224,19 +1235,26 @@ export default function App() {
 
           {usuario ? (
             <div className={`flex items-center space-x-2 border px-2.5 py-1 rounded-2xl shadow-sm ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-orange-100'}`}>
-              {fotoLocal ? (
-                <img src={fotoLocal} alt="Avatar" className="w-8 h-8 rounded-full object-cover border-2 border-[#FF5722]" />
-              ) : (
-                <div className="w-8 h-8 rounded-full bg-orange-100 text-[#FF5722] flex items-center justify-center font-bold text-xs">
-                  {usuario.nombre ? usuario.nombre.substring(0, 2).toUpperCase() : 'U'}
-                </div>
-              )}
-              <div className="text-right hidden sm:block cursor-pointer" onClick={() => setActiveTab('perfil')}>
+              <button
+                type="button"
+                aria-label="Abrir perfil"
+                onClick={() => setActiveTab('perfil')}
+                className={`flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl border ${darkMode ? 'border-slate-700 bg-slate-800' : 'border-orange-200 bg-orange-50'}`}
+              >
+                {fotoLocal ? (
+                  <img src={fotoLocal} alt="" className="h-full w-full object-cover" />
+                ) : (
+                  <span className="text-xs font-bold text-[#FF5722]">
+                    {usuario.nombre ? usuario.nombre.substring(0, 2).toUpperCase() : 'U'}
+                  </span>
+                )}
+              </button>
+              <button type="button" className="hidden text-right sm:block" onClick={() => setActiveTab('perfil')}>
                 <p className={`text-xs font-black hover:underline ${darkMode ? 'text-white' : 'text-slate-900'}`}>{usuario.nombre}</p>
                 <p className="text-[10px] font-bold text-[#FF5722] uppercase">{usuario.rol} · Mi Perfil</p>
-              </div>
-              {usuario.es_admin && <button onClick={() => { setActiveTab('admin'); void cargarPanelAdmin(); }} className="rounded-lg border border-orange-200 bg-orange-50 px-2 py-1 text-[10px] font-bold text-[#FF5722] md:hidden">Admin</button>}
-              <button onClick={handleLogout} className="text-xs font-bold text-red-600 hover:bg-red-50 dark:hover:bg-red-950/35 px-2 py-1 rounded-xl border border-red-200 cursor-pointer">Salir</button>
+              </button>
+              {usuario.es_admin && <button onClick={() => { setActiveTab('admin'); void cargarPanelAdmin(); }} className="h-9 rounded-xl border border-orange-200 bg-orange-50 px-2.5 text-[10px] font-bold text-[#FF5722] md:hidden">Admin</button>}
+              <button onClick={handleLogout} className="h-9 rounded-xl border border-red-200 px-3 text-xs font-bold text-red-600 hover:bg-red-50 dark:hover:bg-red-950/35">Salir</button>
             </div>
           ) : (
             <button onClick={() => { setErrorAuth(''); setActiveTab('auth'); }} className={`flex items-center space-x-1.5 border px-4 py-2 rounded-2xl transition text-xs md:text-sm font-bold shadow-sm cursor-pointer ${darkMode ? 'bg-slate-900 border-slate-800 text-white hover:bg-slate-800' : 'bg-white hover:bg-orange-50 border-orange-200 text-slate-800'}`}>
@@ -1348,7 +1366,9 @@ export default function App() {
                   <p className="mt-2 text-xs text-slate-500">
                     {pedidoActivoCliente
                       ? `Pedido ${pedidoActivoCliente.estado}: ${pedidoActivoCliente.descripcion}`
-                      : 'Todavía no tienes pedidos activos. Cuando hagas uno, su estado aparecerá aquí.'}
+                      : pedidoExpiradoReciente
+                        ? 'Tu solicitud se canceló automáticamente porque ningún repartidor se postuló en 60 segundos. Puedes crear una nueva.'
+                        : 'Todavía no tienes pedidos activos. Cuando hagas uno, su estado aparecerá aquí.'}
                   </p>
                   {pedidoActivoCliente && <button onClick={() => setActiveTab('cliente')} className="mt-4 text-xs font-bold text-[#FF5722] hover:underline">Ver pedido y seguimiento</button>}
                 </div>
@@ -1501,6 +1521,12 @@ export default function App() {
                   </button>
                 </div>
 
+                {!pedidoActivoCliente && pedidoExpiradoReciente && (
+                  <div role="status" className="rounded-2xl border border-amber-300 bg-amber-50 p-4 text-xs font-medium text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+                    La solicitud anterior se canceló automáticamente porque ningún repartidor se postuló en 60 segundos. Envía una nueva solicitud cuando quieras.
+                  </div>
+                )}
+
                 {pedidoActivoCliente ? (
                   <div className="space-y-4 pt-2">
                     <div className="bg-amber-500/10 border border-amber-500/30 p-4 rounded-2xl space-y-2">
@@ -1527,8 +1553,14 @@ export default function App() {
                       {pedidoActivoCliente.estado === 'pendiente' && (
                         <div className="flex items-center justify-between pt-1">
                           <div className="flex items-center space-x-1.5 text-xs font-bold text-amber-600">
-                            <Clock size={14} className="animate-spin" />
-                            <span>Buscando repartidor... ({segundosRestantes}s)</span>
+                            <Clock size={14} className={segundosRestantes === 0 ? '' : 'animate-spin'} />
+                            <span>
+                              {segundosRestantes === null
+                                ? 'Esperando que se verifique el pago para publicar el pedido.'
+                                : segundosRestantes === 0
+                                  ? 'Se agotó el tiempo; cancelando la solicitud...'
+                                  : `Buscando repartidor... (${segundosRestantes}s)`}
+                            </span>
                           </div>
                           <button onClick={() => cancelarPedidoActual(pedidoActivoCliente.id)} className="bg-red-600 hover:bg-red-700 text-white text-xs font-bold px-3 py-1.5 rounded-xl transition cursor-pointer">
                             Cancelar Pedido
