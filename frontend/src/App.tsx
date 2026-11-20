@@ -168,9 +168,15 @@ interface ConfiguracionPago {
   saldoCorporativo: number;
 }
 
-const API_URL = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:5000`;
+const API_URL = import.meta.env.VITE_API_URL?.trim().replace(/\/+$/, '')
+  || (import.meta.env.DEV ? `http://${window.location.hostname}:5000` : '');
+
+const assertApiConfigured = () => {
+  if (!API_URL) throw new Error('El servicio de solicitudes no está configurado. Inténtalo más tarde.');
+};
 
 const authenticatedFetch = (url: string, options: RequestInit = {}) => {
+  assertApiConfigured();
   const token = localStorage.getItem('llevalo_token');
   if (!token) throw new Error('Tu sesión expiró. Inicia sesión nuevamente.');
 
@@ -904,6 +910,7 @@ export default function App() {
     const endpoint = authMode === 'login' ? '/api/auth/login' : '/api/auth/register';
 
     try {
+      assertApiConfigured();
       const res = await fetch(`${API_URL}${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1136,7 +1143,7 @@ export default function App() {
             <div className="space-y-6">
               <div className={`inline-flex items-center space-x-2 px-4 py-1.5 rounded-full text-xs font-bold uppercase border ${darkMode ? 'bg-orange-950/60 border-orange-900 text-orange-300' : 'bg-orange-100 border-orange-200 text-[#FF5722]'}`}>
                 <MapPin size={14} className="text-[#FF5722]" />
-                <span>San Diego, Carabobo, Venezuela 🇻🇪</span>
+                <span>Carabobo, Venezuela 🇻🇪</span>
               </div>
               <h1 className={`text-4xl lg:text-7xl font-black tracking-tight leading-[1.08] ${darkMode ? 'text-white' : 'text-slate-900'}`}>
                 Lo que necesites, <span className="text-[#FF5722]">llévalo ya.</span>
@@ -1288,8 +1295,8 @@ export default function App() {
                 <div>
                   <label className={`text-xs font-bold ${darkMode ? 'text-slate-300' : 'text-slate-700'}`}>Contraseña</label>
                   <div className="relative mt-1">
-                    <input type={mostrarPassword ? 'text' : 'password'} required value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" className={`w-full border rounded-xl px-4 py-2 text-sm pr-10 ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
-                    <button type="button" onClick={() => setMostrarPassword(!mostrarPassword)} className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 cursor-pointer">
+                    <input type={mostrarPassword ? 'text' : 'password'} required value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" className={`w-full border rounded-xl px-4 py-2 text-sm pr-12 ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
+                    <button type="button" aria-label={mostrarPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'} aria-pressed={mostrarPassword} onClick={() => setMostrarPassword(!mostrarPassword)} className="password-toggle absolute right-0 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-xl text-slate-400 hover:text-slate-600 cursor-pointer">
                       {mostrarPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                     </button>
                   </div>
@@ -1626,7 +1633,7 @@ export default function App() {
             </div>
 
             <div className="relative lg:col-span-7 h-[min(60dvh,520px)] min-h-[300px] lg:h-[calc(100dvh-140px)] rounded-3xl overflow-hidden border shadow-sm sticky top-20">
-              <button type="button" onClick={() => obtenerUbicacionActual()} disabled={ubicacionCargando} className="absolute left-3 top-3 z-20 inline-flex items-center gap-2 rounded-xl border border-white/80 bg-white/95 px-3 py-2 text-xs font-bold text-slate-800 shadow-md disabled:opacity-60">
+              <button type="button" onClick={() => obtenerUbicacionActual()} disabled={ubicacionCargando} className={`absolute left-3 top-3 z-20 inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold shadow-md disabled:opacity-60 ${darkMode ? 'border-slate-600 bg-slate-800/95 text-slate-100' : 'border-white/80 bg-white/95 text-slate-800'}`}>
                 <Navigation size={15} className={ubicacionCargando ? 'animate-pulse' : 'text-[#FF5722]'} />
                 {ubicacionCargando ? 'Buscando...' : 'Mi ubicación'}
               </button>
@@ -1771,7 +1778,7 @@ export default function App() {
               </div>
 
               <div className="relative lg:col-span-7 h-[min(60dvh,520px)] min-h-[300px] lg:h-[calc(100dvh-140px)] rounded-3xl overflow-hidden border shadow-sm sticky top-20">
-                <button type="button" onClick={() => obtenerUbicacionActual()} disabled={ubicacionCargando} className="absolute left-3 top-3 z-20 inline-flex items-center gap-2 rounded-xl border border-white/80 bg-white/95 px-3 py-2 text-xs font-bold text-slate-800 shadow-md disabled:opacity-60">
+                <button type="button" onClick={() => obtenerUbicacionActual()} disabled={ubicacionCargando} className={`absolute left-3 top-3 z-20 inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold shadow-md disabled:opacity-60 ${darkMode ? 'border-slate-600 bg-slate-800/95 text-slate-100' : 'border-white/80 bg-white/95 text-slate-800'}`}>
                   <Navigation size={15} className={ubicacionCargando ? 'animate-pulse' : 'text-[#FF5722]'} />
                   {ubicacionCargando ? 'Buscando...' : 'Mi ubicación'}
                 </button>

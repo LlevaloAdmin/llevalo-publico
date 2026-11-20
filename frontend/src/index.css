@@ -50,6 +50,42 @@ body {
   flex: 0 0 auto;
 }
 
+.app-shell button.password-toggle svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.maplibre-dark-theme .maplibregl-canvas {
+  filter: brightness(1.4) saturate(0.9);
+}
+
+.maplibre-dark-theme .maplibregl-ctrl-group {
+  overflow: hidden;
+  border: 1px solid #475569;
+  background: #334155;
+}
+
+.maplibre-dark-theme .maplibregl-ctrl-group button {
+  background-color: #334155;
+}
+
+.maplibre-dark-theme .maplibregl-ctrl-group button + button {
+  border-top-color: #475569;
+}
+
+.maplibre-dark-theme .maplibregl-ctrl-group .maplibregl-ctrl-icon {
+  filter: brightness(0) invert(1);
+}
+
+.maplibre-dark-theme .maplibregl-ctrl-attrib {
+  background-color: rgb(30 41 59 / 92%);
+  color: #cbd5e1;
+}
+
+.maplibre-dark-theme .maplibregl-ctrl-attrib a {
+  color: #e2e8f0;
+}
+
 .app-shell input,
 .app-shell textarea,
 .app-shell select {

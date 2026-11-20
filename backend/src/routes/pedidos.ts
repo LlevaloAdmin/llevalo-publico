@@ -217,7 +217,7 @@ router.post('/', requireRole('cliente'), async (req: Request, res: Response): Pr
       `INSERT INTO pedidos
       (cliente_id, cliente_nombre, cliente_cedula, cliente_foto, tipo_servicio, descripcion, origen_texto, origen_lat, origen_lon, destino_texto, destino_lat, destino_lon, distancia_km, tiempo_min, tarifa, metodo_pago, estado_pago, referencia_pago, pago_confirmado_por, pago_confirmado_en, estado)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18,
-              CASE WHEN $17 = 'pagado' THEN $1 ELSE NULL END,
+              CASE WHEN $17 = 'pagado' THEN $19 ELSE NULL END,
               CASE WHEN $17 = 'pagado' THEN CURRENT_TIMESTAMP ELSE NULL END, 'pendiente')
       RETURNING *`,
       [
@@ -226,7 +226,7 @@ router.post('/', requireRole('cliente'), async (req: Request, res: Response): Pr
         typeof cliente_foto === 'string' ? cliente_foto : '',
         tipo_servicio, descripcion.trim(), origen_texto.trim(), origenLat, origenLon,
         destino_texto.trim(), destinoLat, destinoLon, distancia, tiempo, montoCalculado,
-        metodoPago, estadoPago, referenciaPago || null
+        metodoPago, estadoPago, referenciaPago || null, authUser.id
       ]
     );
 
