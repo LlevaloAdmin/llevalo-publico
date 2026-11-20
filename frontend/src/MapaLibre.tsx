@@ -21,6 +21,7 @@ interface MapaLibreProps {
   interactivo?: boolean;
   mostrarRuta?: boolean;
   mostrarPines?: boolean;
+  navegacionActiva?: boolean;
   darkMode?: boolean;
   recentrarUsuario?: number;
 }
@@ -37,6 +38,7 @@ export default function MapaLibre({
   interactivo = true,
   mostrarRuta = false,
   mostrarPines = false,
+  navegacionActiva = false,
   darkMode = false,
   recentrarUsuario = 0
 }: MapaLibreProps) {
@@ -50,6 +52,9 @@ export default function MapaLibre({
   const onErrorRutaRef = useRef(onErrorRuta);
   const routeRequestKeyRef = useRef<string | null>(null);
   const routeAbortControllerRef = useRef<AbortController | null>(null);
+  const routeRequestRef = useRef<((routeKey: string, origen: { lat: number; lng: number }, destino: { lat: number; lng: number }) => Promise<void>) | null>(null);
+  const routeCoordinatesRef = useRef<Array<[number, number]> | null>(null);
+  const lastDirectionsAtRef = useRef(0);
   const interactivoRef = useRef(interactivo);
   const coordsUsuarioRef = useRef(coordsUsuario);
 
@@ -180,6 +185,7 @@ export default function MapaLibre({
       routeAbortControllerRef.current?.abort();
       const controller = new AbortController();
       routeAbortControllerRef.current = controller;
+      lastDirectionsAtRef.current = Date.now();
       try {
         if (!token) throw new Error('Falta configurar VITE_MAPBOX_TOKEN para calcular rutas.');
         const query = await fetch(
@@ -192,6 +198,7 @@ export default function MapaLibre({
         if (json.routes && json.routes.length > 0) {
           const ruta = json.routes[0];
           const routeGeoJSON = ruta.geometry;
+          routeCoordinatesRef.current = routeGeoJSON.coordinates;
 
           if (onRutaCalculadaRef.current && !mini) {
             const km = Math.max(0.5, parseFloat((ruta.distance / 1000).toFixed(1)));
@@ -225,7 +232,7 @@ export default function MapaLibre({
               });
             }
 
-            if (!mini) {
+            if (!mini && !navegacionActiva) {
               const bounds = new maplibregl.LngLatBounds();
               bounds.extend([origen.lng, origen.lat]);
               bounds.extend([destino.lng, destino.lat]);
@@ -245,20 +252,55 @@ export default function MapaLibre({
         onErrorRutaRef.current?.(error instanceof Error ? error.message : 'No se pudo calcular la ruta.');
       }
     };
+    routeRequestRef.current = fetchRoute;
 
     if (mostrarRuta && coordsOrigen && coordsDestino) {
-      const routeKey = `${coordsOrigen.lat},${coordsOrigen.lng};${coordsDestino.lat},${coordsDestino.lng};${darkMode}`;
+      const routeKey = `${navegacionActiva ? 'navigation:' : ''}${coordsOrigen.lat},${coordsOrigen.lng};${coordsDestino.lat},${coordsDestino.lng};${darkMode}`;
       if (routeRequestKeyRef.current !== routeKey) {
         routeRequestKeyRef.current = routeKey;
-        void fetchRoute(routeKey, coordsOrigen, coordsDestino);
+        routeCoordinatesRef.current = null;
+        const routeStart = navegacionActiva && coordsUsuario ? coordsUsuario : coordsOrigen;
+        void fetchRoute(routeKey, routeStart, coordsDestino);
       }
     } else {
       routeRequestKeyRef.current = null;
+      routeCoordinatesRef.current = null;
       routeAbortControllerRef.current?.abort();
       limpiarRutaMapa();
     }
 
-  }, [coordsOrigen, coordsDestino, coordsUsuario, mini, mostrarRuta, mostrarPines, darkMode]);
+  }, [coordsOrigen, coordsDestino, coordsUsuario, mini, mostrarRuta, mostrarPines, navegacionActiva, darkMode]);
+
+  useEffect(() => {
+    const coordinates = routeCoordinatesRef.current;
+    const routeKey = routeRequestKeyRef.current;
+    if (!navegacionActiva || !coordsUsuario || !coordsDestino || !coordinates || !routeKey) return;
+    if (Date.now() - lastDirectionsAtRef.current < 30_000) return;
+
+    const metersPerLatitude = 111_320;
+    const metersPerLongitude = metersPerLatitude * Math.cos(coordsUsuario.lat * Math.PI / 180);
+    let nearestDistance = Number.POSITIVE_INFINITY;
+    for (let index = 1; index < coordinates.length; index += 1) {
+      const previous = coordinates[index - 1];
+      const current = coordinates[index];
+      const ax = (previous[0] - coordsUsuario.lng) * metersPerLongitude;
+      const ay = (previous[1] - coordsUsuario.lat) * metersPerLatitude;
+      const bx = (current[0] - coordsUsuario.lng) * metersPerLongitude;
+      const by = (current[1] - coordsUsuario.lat) * metersPerLatitude;
+      const segmentX = bx - ax;
+      const segmentY = by - ay;
+      const segmentLengthSquared = segmentX * segmentX + segmentY * segmentY;
+      const projection = segmentLengthSquared === 0
+        ? 0
+        : Math.max(0, Math.min(1, -(ax * segmentX + ay * segmentY) / segmentLengthSquared));
+      const distance = Math.hypot(ax + projection * segmentX, ay + projection * segmentY);
+      nearestDistance = Math.min(nearestDistance, distance);
+    }
+
+    if (nearestDistance > 50) {
+      void routeRequestRef.current?.(routeKey, coordsUsuario, coordsDestino);
+    }
+  }, [coordsUsuario, coordsDestino, navegacionActiva]);
 
   useEffect(() => () => {
     routeAbortControllerRef.current?.abort();

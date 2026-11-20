@@ -14,9 +14,12 @@ const verifyAccessToken = (token) => {
             return null;
         const id = Number(payload.id);
         const rol = payload.rol;
-        if (!Number.isSafeInteger(id) || id <= 0 || (rol !== 'cliente' && rol !== 'repartidor'))
+        const rolBase = payload.rol_base ?? rol;
+        if (!Number.isSafeInteger(id) || id <= 0
+            || (rol !== 'cliente' && rol !== 'repartidor')
+            || (rolBase !== 'cliente' && rolBase !== 'repartidor'))
             return null;
-        return { id, rol, es_admin: payload.es_admin === true };
+        return { id, rol, rol_base: rolBase, es_admin: payload.es_admin === true };
     }
     catch {
         return null;
@@ -39,12 +42,28 @@ const requireAuth = (req, res, next) => {
     next();
 };
 exports.requireAuth = requireAuth;
-const requireRole = (rol) => (req, res, next) => {
-    if (req.authUser?.rol !== rol) {
+const requireRole = (rol) => async (req, res, next) => {
+    const authUser = req.authUser;
+    if (!authUser || authUser.rol !== rol) {
         res.status(403).json({ error: 'No tienes permiso para realizar esta acción.' });
         return;
     }
-    next();
+    if (authUser.rol === authUser.rol_base) {
+        next();
+        return;
+    }
+    try {
+        const result = await db_1.pool.query('SELECT es_admin FROM usuarios WHERE id = $1', [authUser.id]);
+        if (result.rows[0]?.es_admin !== true) {
+            res.status(403).json({ error: 'El cambio de perspectiva ya no está autorizado.' });
+            return;
+        }
+        next();
+    }
+    catch (error) {
+        console.error('Error verificando el rol activo:', error);
+        res.status(500).json({ error: 'No se pudo verificar el rol activo.' });
+    }
 };
 exports.requireRole = requireRole;
 const requireAdmin = async (req, res, next) => {

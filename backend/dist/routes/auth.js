@@ -99,7 +99,7 @@ router.post('/register', async (req, res) => {
             cedula?.trim() || null, foto || null, vehiculo?.trim() || null, placa?.trim() || null, vehiculo_foto || null
         ]);
         const user = usuarioPublico(newUser.rows[0]);
-        const token = jsonwebtoken_1.default.sign({ id: user.id, rol: user.rol, es_admin: user.es_admin }, config_1.JWT_SECRET, { expiresIn: '7d' });
+        const token = jsonwebtoken_1.default.sign({ id: user.id, rol: user.rol, rol_base: user.rol, es_admin: user.es_admin }, config_1.JWT_SECRET, { expiresIn: '7d' });
         res.status(201).json({
             mensaje: '¡Cuenta creada con éxito!',
             token,
@@ -128,7 +128,7 @@ router.post('/login', async (req, res) => {
         if (!validPassword) {
             return res.status(400).json({ error: 'Correo o contraseña incorrectos.' });
         }
-        const token = jsonwebtoken_1.default.sign({ id: user.id, rol: user.rol, es_admin: user.es_admin === true }, config_1.JWT_SECRET, { expiresIn: '7d' });
+        const token = jsonwebtoken_1.default.sign({ id: user.id, rol: user.rol, rol_base: user.rol, es_admin: user.es_admin === true }, config_1.JWT_SECRET, { expiresIn: '7d' });
         res.json({
             mensaje: 'Login exitoso',
             token,
@@ -138,6 +138,29 @@ router.post('/login', async (req, res) => {
     catch (error) {
         console.error('Error en login:', error);
         res.status(500).json({ error: 'Error interno al iniciar sesión.' });
+    }
+});
+router.put('/active-role', auth_1.requireAuth, auth_1.requireAdmin, async (req, res) => {
+    const authUser = req.authUser;
+    const rol = req.body?.rol;
+    if (!authUser)
+        return res.status(401).json({ error: 'Sesión inválida.' });
+    if (rol !== 'cliente' && rol !== 'repartidor') {
+        return res.status(400).json({ error: 'El rol solicitado no es válido.' });
+    }
+    try {
+        await ensureProfileColumns();
+        const result = await db_1.pool.query('SELECT id, nombre, email, telefono, rol, cedula, foto, vehiculo, placa, vehiculo_foto, calificacion, es_admin FROM usuarios WHERE id = $1 AND es_admin = TRUE', [authUser.id]);
+        if (result.rows.length === 0)
+            return res.status(403).json({ error: 'Esta acción requiere permisos de administrador.' });
+        const user = result.rows[0];
+        const usuarioActivo = { ...usuarioPublico(user), rol };
+        const token = jsonwebtoken_1.default.sign({ id: user.id, rol, rol_base: user.rol, es_admin: true }, config_1.JWT_SECRET, { expiresIn: '7d' });
+        res.json({ token, usuario: usuarioActivo });
+    }
+    catch (error) {
+        console.error('Error al cambiar la perspectiva del administrador:', error);
+        res.status(500).json({ error: 'No se pudo cambiar la perspectiva de la cuenta.' });
     }
 });
 router.put('/profile', auth_1.requireAuth, async (req, res) => {
@@ -157,14 +180,14 @@ router.put('/profile', auth_1.requireAuth, async (req, res) => {
         const result = authUser.rol === 'repartidor'
             ? await db_1.pool.query(`UPDATE usuarios
          SET cedula = $1, foto = $2, vehiculo = $3, placa = $4, vehiculo_foto = $5
-         WHERE id = $6 AND rol = 'repartidor'
+         WHERE id = $6 AND (rol = 'repartidor' OR es_admin = TRUE)
          RETURNING id, nombre, email, telefono, rol, cedula, foto, vehiculo, placa, vehiculo_foto, calificacion, es_admin`, [cedula.trim(), foto, vehiculo.trim(), placa.trim(), vehiculo_foto, authUser.id])
             : await db_1.pool.query(`UPDATE usuarios SET cedula = $1, foto = $2
-         WHERE id = $3 AND rol = 'cliente'
+         WHERE id = $3 AND (rol = 'cliente' OR es_admin = TRUE)
          RETURNING id, nombre, email, telefono, rol, cedula, foto, vehiculo, placa, vehiculo_foto, calificacion, es_admin`, [cedula.trim(), foto, authUser.id]);
         if (result.rows.length === 0)
             return res.status(404).json({ error: 'No se encontró el perfil de la cuenta.' });
-        res.json({ usuario: usuarioPublico(result.rows[0]) });
+        res.json({ usuario: { ...usuarioPublico(result.rows[0]), rol: authUser.rol } });
     }
     catch (error) {
         console.error('Error al actualizar perfil:', error);

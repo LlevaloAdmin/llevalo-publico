@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Bike, MapPin, ArrowRight, User, Eye, EyeOff, Clock, Send, Power, Star, Moon, Sun, DollarSign, XCircle, Navigation, CheckCircle2, Circle, Package, CarFront } from 'lucide-react';
+import { App as CapacitorApp } from '@capacitor/app';
 import { StatusBar, Style } from '@capacitor/status-bar';
 import { Capacitor } from '@capacitor/core';
 
@@ -54,6 +55,15 @@ const etiquetaMetodoPago = (metodo?: string) => {
   if (metodo === 'efectivo') return 'Efectivo';
   if (metodo === 'saldo_corporativo') return 'Saldo corporativo';
   return 'Sin método de pago';
+};
+
+const medirDistanciaMetros = (
+  primera: { lat: number; lng: number },
+  segunda: { lat: number; lng: number }
+) => {
+  const deltaLat = (primera.lat - segunda.lat) * 111_320;
+  const deltaLng = (primera.lng - segunda.lng) * 111_320 * Math.cos(segunda.lat * Math.PI / 180);
+  return Math.hypot(deltaLat, deltaLng);
 };
 
 interface Postulacion {
@@ -168,6 +178,28 @@ interface ConfiguracionPago {
   saldoCorporativo: number;
 }
 
+interface HistorialPagoAdmin {
+  id: number;
+  pedido_id: number;
+  actor_nombre?: string;
+  actor_rol: string;
+  accion: string;
+  metodo_pago: string;
+  estado_pago: string;
+  monto: string | number;
+  referencia_pago?: string | null;
+  detalle: string;
+  creado_en: string;
+  tipo_servicio: string;
+  descripcion: string;
+  cliente_nombre: string;
+  origen_texto: string;
+  destino_texto: string;
+  distancia_km: number;
+  tiempo_min: number;
+  estado_pedido: string;
+}
+
 const API_URL = import.meta.env.VITE_API_URL?.trim().replace(/\/+$/, '')
   || (import.meta.env.DEV ? `http://${window.location.hostname}:5000` : '');
 
@@ -198,6 +230,8 @@ export default function App() {
   const [serviceType, setServiceType] = useState<TipoServicio>('envios');
   
   const [darkMode, setDarkMode] = useState<boolean>(() => localStorage.getItem('llevalo_dark_mode') === 'true');
+  const [sinConexion, setSinConexion] = useState(() => typeof navigator !== 'undefined' && !navigator.onLine);
+  const [probandoConexion, setProbandoConexion] = useState(false);
 
   const [usuario, setUsuario] = useState<UsuarioSesion | null>(() => {
     const storedUser = localStorage.getItem('llevalo_usuario');
@@ -224,6 +258,7 @@ export default function App() {
 
   const [repartidorOnline, setRepartidorOnline] = useState(true);
   const [cambiandoEstadoRepartidor, setCambiandoEstadoRepartidor] = useState(false);
+  const llegadaProcesadaRef = useRef<string | null>(null);
 
   const [nombre, setNombre] = useState('');
   const [email, setEmail] = useState('');
@@ -297,6 +332,7 @@ export default function App() {
   const [cargandoConfiguracionPago, setCargandoConfiguracionPago] = useState(false);
   const [errorPago, setErrorPago] = useState('');
   const [pagosPendientesAdmin, setPagosPendientesAdmin] = useState<PedidoReal[]>([]);
+  const [historialPagosAdmin, setHistorialPagosAdmin] = useState<HistorialPagoAdmin[]>([]);
   const [cargandoAdmin, setCargandoAdmin] = useState(false);
   const [errorAdmin, setErrorAdmin] = useState('');
   const [mensajeAdmin, setMensajeAdmin] = useState('');
@@ -306,6 +342,17 @@ export default function App() {
   const [notaRecargaSaldo, setNotaRecargaSaldo] = useState('');
 
   const [segundosRestantes, setSegundosRestantes] = useState<number>(60);
+
+  useEffect(() => {
+    const alDesconectar = () => setSinConexion(true);
+    const alConectar = () => setSinConexion(false);
+    window.addEventListener('offline', alDesconectar);
+    window.addEventListener('online', alConectar);
+    return () => {
+      window.removeEventListener('offline', alDesconectar);
+      window.removeEventListener('online', alConectar);
+    };
+  }, []);
 
   useEffect(() => {
     const setupFullScreen = async () => {
@@ -335,6 +382,8 @@ export default function App() {
   };
 
   useEffect(() => {
+    // Both calls apply server responses asynchronously, after this effect starts the requests.
+    // oxlint-disable-next-line react/set-state-in-effect
     actualizarTasaBCVEnVivo();
     const intervalTasa = setInterval(actualizarTasaBCVEnVivo, 300000);
 
@@ -345,6 +394,25 @@ export default function App() {
     const nuevo = !darkMode;
     setDarkMode(nuevo);
     localStorage.setItem('llevalo_dark_mode', String(nuevo));
+  };
+
+  const reintentarConexion = async () => {
+    setProbandoConexion(true);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 5000);
+    try {
+      const response = await fetch(API_URL || window.location.origin, {
+        method: 'HEAD',
+        cache: 'no-store',
+        signal: controller.signal
+      });
+      setSinConexion(response.status >= 500);
+    } catch {
+      setSinConexion(true);
+    } finally {
+      window.clearTimeout(timeout);
+      setProbandoConexion(false);
+    }
   };
 
   const sincronizarDatos = async () => {
@@ -366,6 +434,8 @@ export default function App() {
 
   useEffect(() => {
     if (!usuario) return;
+    // Apply polling results after the request completes, not during the effect's render.
+    // oxlint-disable-next-line react/set-state-in-effect
     sincronizarDatos();
     const intervalo = setInterval(sincronizarDatos, 3000);
     return () => clearInterval(intervalo);
@@ -640,15 +710,19 @@ export default function App() {
     setCargandoAdmin(true);
     setErrorAdmin('');
     try {
-      const [pagosResponse, configResponse] = await Promise.all([
+      const [pagosResponse, configResponse, historialResponse] = await Promise.all([
         authenticatedFetch(`${API_URL}/api/pagos/admin/pendientes`),
-        authenticatedFetch(`${API_URL}/api/pagos/config`)
+        authenticatedFetch(`${API_URL}/api/pagos/config`),
+        authenticatedFetch(`${API_URL}/api/pagos/admin/historial`)
       ]);
       if (!pagosResponse.ok) throw new Error(await mensajeErrorApi(pagosResponse, 'No se pudieron cargar los pagos pendientes'));
       if (!configResponse.ok) throw new Error(await mensajeErrorApi(configResponse, 'No se pudo cargar la configuración de pago'));
+      if (!historialResponse.ok) throw new Error(await mensajeErrorApi(historialResponse, 'No se pudo cargar el historial de pagos'));
       const pagosData = await pagosResponse.json();
       const configData: ConfiguracionPago = await configResponse.json();
+      const historialData = await historialResponse.json();
       setPagosPendientesAdmin(Array.isArray(pagosData.pagos) ? pagosData.pagos : []);
+      setHistorialPagosAdmin(Array.isArray(historialData.historial) ? historialData.historial : []);
       setConfiguracionPago(configData);
       setConfigPagoAdmin(configData.pagoMovil);
     } catch (error) {
@@ -658,12 +732,34 @@ export default function App() {
     }
   };
 
+  const cambiarPerspectivaAdmin = async (rol: 'cliente' | 'repartidor') => {
+    if (!usuario?.es_admin || usuario.rol === rol) return;
+    setErrorAdmin('');
+    try {
+      const response = await authenticatedFetch(`${API_URL}/api/auth/active-role`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rol })
+      });
+      if (!response.ok) throw new Error(await mensajeErrorApi(response, 'No se pudo cambiar la perspectiva'));
+      const data: { token: string; usuario: UsuarioSesion } = await response.json();
+      localStorage.setItem('llevalo_token', data.token);
+      localStorage.setItem('llevalo_usuario', JSON.stringify(data.usuario));
+      setUsuario(data.usuario);
+      setActiveTab(rol);
+      setMensajeAdmin(`Perspectiva de ${rol} activada.`);
+      await sincronizarDatos();
+    } catch (error) {
+      setErrorAdmin(error instanceof Error ? error.message : 'No se pudo cambiar la perspectiva.');
+    }
+  };
+
   const revisarPagoManual = async (pedidoId: number, accion: 'aprobar' | 'rechazar' | 'reembolsar' | 'sin_pago') => {
     const confirmacion = accion === 'rechazar'
-      ? '¿Rechazar el pago y cancelar este viaje?'
+      ? '¿Rechazar el pago y cancelar este pedido?'
       : accion === 'reembolsar'
         ? 'Confirma solo después de devolver el dinero al pasajero. ¿Ya realizaste el reembolso?'
-        : accion === 'sin_pago' ? '¿Confirmas que no se recibió ningún pago por este viaje cancelado?' : '';
+        : accion === 'sin_pago' ? '¿Confirmas que no se recibió ningún pago por este pedido cancelado?' : '';
     if (confirmacion && !window.confirm(confirmacion)) return;
     try {
       const response = await authenticatedFetch(`${API_URL}/api/pagos/admin/pedidos/${pedidoId}`, {
@@ -674,8 +770,8 @@ export default function App() {
       if (!response.ok) throw new Error(await mensajeErrorApi(response, 'No se pudo revisar el pago'));
       await cargarPanelAdmin();
       setMensajeAdmin(
-        accion === 'aprobar' ? 'Pago confirmado; el viaje ya puede aparecer en el radar.'
-          : accion === 'rechazar' ? 'Pago rechazado y viaje cancelado.'
+        accion === 'aprobar' ? 'Pago confirmado; el pedido ya puede aparecer en el radar.'
+          : accion === 'rechazar' ? 'Pago rechazado y pedido cancelado.'
             : accion === 'reembolsar' ? 'Reembolso registrado.'
               : 'Solicitud cerrada: no se recibió el pago.'
       );
@@ -726,24 +822,22 @@ export default function App() {
       alert('Completa el origen y destino, y espera a que se calcule la ruta.');
       return;
     }
-    if (serviceType === 'viajes') {
-      if (metodoPagoViaje === 'pago_movil' && !referenciaPago.trim()) {
-        alert('Ingresa la referencia del Pago Móvil para enviarlo a revisión.');
-        return;
-      }
-      if (metodoPagoViaje === 'pago_movil'
-        && !(configuracionPago?.pagoMovil.banco
-          && configuracionPago.pagoMovil.telefono
-          && configuracionPago.pagoMovil.cedula
-          && configuracionPago.pagoMovil.titular)) {
-        alert('Pago Móvil todavía no está configurado por Llévalo. Selecciona otro método o inténtalo luego.');
-        return;
-      }
-      if (metodoPagoViaje === 'saldo_corporativo'
-        && (configuracionPago?.saldoCorporativo || 0) < Number(tarifaTotal)) {
-        alert('Tu saldo corporativo no es suficiente para este viaje.');
-        return;
-      }
+    if (metodoPagoViaje === 'pago_movil' && !/^\d{1,100}$/.test(referenciaPago.trim())) {
+      alert('Ingresa una referencia de Pago Móvil que contenga solo números.');
+      return;
+    }
+    if (metodoPagoViaje === 'pago_movil'
+      && !(configuracionPago?.pagoMovil.banco
+        && configuracionPago.pagoMovil.telefono
+        && configuracionPago.pagoMovil.cedula
+        && configuracionPago.pagoMovil.titular)) {
+      alert('Pago Móvil todavía no está configurado por Llévalo. Selecciona otro método o inténtalo luego.');
+      return;
+    }
+    if (metodoPagoViaje === 'saldo_corporativo'
+      && (configuracionPago?.saldoCorporativo || 0) < Number(tarifaTotal)) {
+      alert('Tu saldo corporativo no es suficiente para este pedido.');
+      return;
     }
     setEnviandoPedido(true);
 
@@ -763,8 +857,8 @@ export default function App() {
           destino_texto: destinoInput.trim().slice(0, 300),
           destino_lat: coordsDestino.lat, destino_lon: coordsDestino.lng,
           distancia_km: distanciaKm, tiempo_min: tiempoEstimadoMin, tarifa: tarifaTotal,
-          metodo_pago: serviceType === 'viajes' ? metodoPagoViaje : undefined,
-          referencia_pago: serviceType === 'viajes' && metodoPagoViaje === 'pago_movil' ? referenciaPago.trim() : undefined
+          metodo_pago: metodoPagoViaje,
+          referencia_pago: metodoPagoViaje === 'pago_movil' ? referenciaPago.trim() : undefined
         })
       });
       if (!res.ok) throw new Error(await mensajeErrorApi(res, 'No se pudo publicar el pedido'));
@@ -991,16 +1085,57 @@ export default function App() {
   const postulacionesPendientesRepartidor = usuario?.rol === 'repartidor'
     ? postulacionesReales.filter(p => p.repartidor_id === usuario.id && p.estado === 'pendiente')
     : [];
-  const pagoViajeCompleto = serviceType !== 'viajes'
-    || metodoPagoViaje === 'efectivo'
+  const mensajeNavegacion = (() => {
+    if (usuario?.rol !== 'repartidor' || !pedidoAsignadoRepartidor || !coordsUsuarioGPS) return '';
+    const etapa = pedidoAsignadoRepartidor.estado;
+    const destino = etapa === 'aceptado'
+      ? { lat: pedidoAsignadoRepartidor.origen_lat, lng: pedidoAsignadoRepartidor.origen_lon }
+      : { lat: pedidoAsignadoRepartidor.destino_lat, lng: pedidoAsignadoRepartidor.destino_lon };
+    if (medirDistanciaMetros(coordsUsuarioGPS, destino) > 30) return '';
+    if (etapa === 'aceptado') {
+      return pedidoAsignadoRepartidor.metodo_pago === 'efectivo' && pedidoAsignadoRepartidor.estado_pago !== 'pagado'
+        ? 'Llegaste al punto A. Confirma manualmente el efectivo recibido para iniciar el servicio.'
+        : 'Llegaste al punto A. La ruta continúa automáticamente al punto B.';
+    }
+    return 'Llegaste al punto B. Confirma manualmente la entrega para finalizar.';
+  })();
+  const pagoPedidoCompleto = metodoPagoViaje === 'efectivo'
     || (metodoPagoViaje === 'pago_movil'
       && Boolean(configuracionPago?.pagoMovil.banco
         && configuracionPago.pagoMovil.telefono
         && configuracionPago.pagoMovil.cedula
         && configuracionPago.pagoMovil.titular)
-      && Boolean(referenciaPago.trim()))
+      && /^\d{1,100}$/.test(referenciaPago.trim()))
     || (metodoPagoViaje === 'saldo_corporativo'
       && (configuracionPago?.saldoCorporativo || 0) >= Number(tarifaTotal));
+
+  useEffect(() => {
+    if (usuario?.rol !== 'repartidor' || !pedidoAsignadoRepartidor || !coordsUsuarioGPS) {
+      llegadaProcesadaRef.current = null;
+      return;
+    }
+
+    const etapa = pedidoAsignadoRepartidor.estado;
+    const destino = etapa === 'aceptado'
+      ? { lat: pedidoAsignadoRepartidor.origen_lat, lng: pedidoAsignadoRepartidor.origen_lon }
+      : { lat: pedidoAsignadoRepartidor.destino_lat, lng: pedidoAsignadoRepartidor.destino_lon };
+    const distanciaMetros = medirDistanciaMetros(coordsUsuarioGPS, destino);
+    const claveLlegada = `${pedidoAsignadoRepartidor.id}:${etapa}`;
+
+    if (distanciaMetros > 50) {
+      if (llegadaProcesadaRef.current === claveLlegada) llegadaProcesadaRef.current = null;
+      return;
+    }
+    if (distanciaMetros > 30 || llegadaProcesadaRef.current === claveLlegada) return;
+
+    llegadaProcesadaRef.current = claveLlegada;
+    if (etapa === 'aceptado'
+      && !(pedidoAsignadoRepartidor.metodo_pago === 'efectivo' && pedidoAsignadoRepartidor.estado_pago !== 'pagado')) {
+      // The state change is server-driven; the normal polling updates the UI after the response.
+      // oxlint-disable-next-line react/set-state-in-effect
+      void cambiarEstadoPedido(pedidoAsignadoRepartidor.id, 'entregado_repartidor');
+    }
+  }, [coordsUsuarioGPS, pedidoAsignadoRepartidor, usuario?.rol]);
 
   const cambiarEstadoRepartidor = async () => {
     if (!usuario || usuario.rol !== 'repartidor' || cambiandoEstadoRepartidor) return;
@@ -1375,10 +1510,10 @@ export default function App() {
                       </div>
                       <p className={`text-xs font-bold ${darkMode ? 'text-slate-300' : 'text-slate-700'}`}>{pedidoActivoCliente.descripcion}</p>
                       <p className="text-[11px] text-slate-500 font-medium">Estado: <strong className="uppercase text-[#FF5722]">{pedidoActivoCliente.estado}</strong></p>
-                      {pedidoActivoCliente.tipo_servicio === 'viajes' && (
+                      {pedidoActivoCliente.metodo_pago && pedidoActivoCliente.metodo_pago !== 'no_aplica' && (
                         <div className={`rounded-xl border p-3 text-[11px] ${pedidoActivoCliente.estado_pago === 'pagado' ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300' : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300'}`}>
                           <p><strong>{etiquetaMetodoPago(pedidoActivoCliente.metodo_pago)}</strong> · {pedidoActivoCliente.estado_pago === 'pagado' ? 'Pago confirmado' : 'Pago pendiente'}</p>
-                          {pedidoActivoCliente.estado_pago === 'pendiente' && pedidoActivoCliente.metodo_pago === 'pago_movil' && <p className="mt-1">Un administrador verificará la referencia antes de publicar el viaje en el radar.</p>}
+                          {pedidoActivoCliente.estado_pago === 'pendiente' && pedidoActivoCliente.metodo_pago === 'pago_movil' && <p className="mt-1">Un administrador verificará la referencia antes de publicar el pedido en el radar.</p>}
                           {pedidoActivoCliente.estado_pago === 'pendiente' && pedidoActivoCliente.metodo_pago === 'efectivo' && <p className="mt-1">Paga al conductor en el punto de partida antes de iniciar.</p>}
                         </div>
                       )}
@@ -1574,11 +1709,10 @@ export default function App() {
                       </div>
                     )}
 
-                    {serviceType === 'viajes' && (
-                      <div className={`space-y-3 rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-950/70' : 'border-slate-200 bg-white'}`}>
+                    <div className={`space-y-3 rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-950/70' : 'border-slate-200 bg-white'}`}>
                         <div>
                           <h4 className={`text-sm font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Método de pago</h4>
-                          <p className="mt-1 text-[10px] text-slate-500">El pago se confirma antes de comenzar el viaje.</p>
+                          <p className="mt-1 text-[10px] text-slate-500">Selecciona cómo pagarás {serviceType === 'viajes' ? 'el viaje' : 'el envío'}.</p>
                         </div>
                         <div className="grid gap-2 sm:grid-cols-3">
                           {([
@@ -1601,33 +1735,35 @@ export default function App() {
                                 <p><strong>Teléfono:</strong> {configuracionPago.pagoMovil.telefono}</p>
                                 <p><strong>Cédula/RIF:</strong> {configuracionPago.pagoMovil.cedula}</p>
                                 <p><strong>Titular:</strong> {configuracionPago.pagoMovil.titular}</p>
-                                <p className="pt-1 text-[10px] text-amber-700 dark:text-amber-400">Realiza el pago por el monto cotizado y escribe la referencia. Un administrador la verificará antes de ofrecer el viaje.</p>
+                                <p className="pt-1 text-[10px] text-amber-700 dark:text-amber-400">Realiza el pago por el monto cotizado y escribe la referencia. Un administrador la verificará antes de ofrecer el pedido en el radar.</p>
                               </div>
                             ) : !cargandoConfiguracionPago && (
                               <p className="text-amber-700 dark:text-amber-400">Pago Móvil aún no está configurado. Puedes elegir efectivo o saldo corporativo.</p>
                             )}
-                            <input type="text" maxLength={100} value={referenciaPago} onChange={e => setReferenciaPago(e.target.value)} placeholder="Referencia de la operación" className={`w-full rounded-xl border px-3 py-2 ${darkMode ? 'border-slate-800 bg-slate-950 text-white' : 'border-slate-200 bg-white'}`} />
+                            <input type="text" inputMode="numeric" pattern="[0-9]*" maxLength={100} value={referenciaPago} onChange={e => setReferenciaPago(e.target.value.replace(/[^0-9]/g, ''))} placeholder="Referencia numérica de la operación" className={`w-full rounded-xl border px-3 py-2 ${darkMode ? 'border-slate-800 bg-slate-950 text-white' : 'border-slate-200 bg-white'}`} />
                           </div>
                         )}
 
                         {metodoPagoViaje === 'efectivo' && (
                           <p className="rounded-xl bg-amber-50 p-3 text-[11px] leading-relaxed text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
-                            Paga al conductor en el punto de partida. El conductor confirmará que recibió el efectivo antes de iniciar el viaje.
+                            {serviceType === 'viajes'
+                              ? 'Paga al conductor en el punto de partida. El conductor confirmará que recibió el efectivo antes de iniciar el viaje.'
+                              : 'Paga al repartidor al retirar el envío en el punto de origen. El repartidor confirmará que recibió el efectivo.'}
                           </p>
                         )}
 
                         {metodoPagoViaje === 'saldo_corporativo' && (
                           <p className={`rounded-xl p-3 text-[11px] ${darkMode ? 'bg-slate-900 text-slate-300' : 'bg-slate-50 text-slate-600'}`}>
                             Saldo disponible: <strong>${(configuracionPago?.saldoCorporativo || 0).toFixed(2)}</strong>
+                            <span className="mt-1 block">Se descontará al solicitar y se devolverá si cancelas antes de que un repartidor acepte.</span>
                             {(configuracionPago?.saldoCorporativo || 0) < Number(tarifaTotal) && <span className="mt-1 block font-semibold text-amber-700 dark:text-amber-400">Solicita una recarga al administrador de tu cuenta.</span>}
                           </p>
                         )}
                         {errorPago && <p role="alert" className="text-[10px] font-semibold text-red-600">{errorPago}</p>}
                       </div>
-                    )}
 
-                    <button disabled={!rutaCompletaLista || distanciaKm <= 0 || tiempoEstimadoMin <= 0 || !pagoViajeCompleto || enviandoPedido} onClick={handleCrearPedido} className={`w-full py-3 rounded-xl font-bold text-xs transition cursor-pointer shadow-md ${!rutaCompletaLista || distanciaKm <= 0 || tiempoEstimadoMin <= 0 || !pagoViajeCompleto || enviandoPedido ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-[#FF5722] hover:bg-[#F4511E] text-white'}`}>
-                      {enviandoPedido ? 'Procesando...' : serviceType !== 'viajes' ? 'Publicar envío en radar' : metodoPagoViaje === 'saldo_corporativo' ? 'Pagar con saldo y solicitar viaje' : 'Solicitar viaje'}
+                    <button disabled={!rutaCompletaLista || distanciaKm <= 0 || tiempoEstimadoMin <= 0 || !pagoPedidoCompleto || enviandoPedido} onClick={handleCrearPedido} className={`w-full py-3 rounded-xl font-bold text-xs transition cursor-pointer shadow-md ${!rutaCompletaLista || distanciaKm <= 0 || tiempoEstimadoMin <= 0 || !pagoPedidoCompleto || enviandoPedido ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-[#FF5722] hover:bg-[#F4511E] text-white'}`}>
+                      {enviandoPedido ? 'Procesando...' : metodoPagoViaje === 'saldo_corporativo' ? 'Pagar con saldo y solicitar' : serviceType === 'viajes' ? 'Solicitar viaje' : 'Publicar envío en radar'}
                     </button>
                   </div>
                 )}
@@ -1714,19 +1850,18 @@ export default function App() {
 
                     <div className="space-y-2 text-xs">
                       <p><strong>Cliente:</strong> {pedidoAsignadoRepartidor.cliente_nombre}</p>
-                      {pedidoAsignadoRepartidor.tipo_servicio === 'viajes' && <p><strong>Pago:</strong> {etiquetaMetodoPago(pedidoAsignadoRepartidor.metodo_pago)} · {pedidoAsignadoRepartidor.estado_pago === 'pagado' ? 'Confirmado' : 'Pendiente de efectivo'}</p>}
+                      {pedidoAsignadoRepartidor.metodo_pago && pedidoAsignadoRepartidor.metodo_pago !== 'no_aplica' && <p><strong>Pago:</strong> {etiquetaMetodoPago(pedidoAsignadoRepartidor.metodo_pago)} · {pedidoAsignadoRepartidor.estado_pago === 'pagado' ? 'Confirmado' : pedidoAsignadoRepartidor.metodo_pago === 'efectivo' ? 'Pendiente en punto A' : 'Pendiente de revisión'}</p>}
                       <p><strong>Descripción:</strong> {pedidoAsignadoRepartidor.descripcion}</p>
                       <p><strong>Origen (Punto A):</strong> {pedidoAsignadoRepartidor.origen_texto}</p>
                       <p><strong>Destino (Punto B):</strong> {pedidoAsignadoRepartidor.destino_texto}</p>
                     </div>
+                    {mensajeNavegacion && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-[11px] font-semibold text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300">{mensajeNavegacion}</p>}
 
                     {pedidoAsignadoRepartidor.estado === 'aceptado' && (
                       <button onClick={() => cambiarEstadoPedido(pedidoAsignadoRepartidor.id, 'entregado_repartidor')} className="w-full bg-[#FF5722] hover:bg-[#F4511E] text-white text-xs font-bold py-3 rounded-xl transition cursor-pointer shadow-sm">
-                        {pedidoAsignadoRepartidor.tipo_servicio === 'viajes'
-                          ? pedidoAsignadoRepartidor.metodo_pago === 'efectivo' && pedidoAsignadoRepartidor.estado_pago !== 'pagado'
-                            ? 'Confirmar efectivo recibido e iniciar viaje'
-                            : 'Iniciar viaje'
-                          : 'Llegué al Punto A / Retirado'}
+                        {pedidoAsignadoRepartidor.metodo_pago === 'efectivo' && pedidoAsignadoRepartidor.estado_pago !== 'pagado'
+                          ? 'Confirmar efectivo recibido e iniciar'
+                          : pedidoAsignadoRepartidor.tipo_servicio === 'viajes' ? 'Iniciar viaje' : 'Llegué al Punto A / Retirado'}
                       </button>
                     )}
 
@@ -1793,9 +1928,9 @@ export default function App() {
                 <React.Suspense fallback={<div className="flex h-full w-full items-center justify-center bg-slate-100 text-xs font-bold text-slate-500">Cargando mapa...</div>}>
                   <MapaLibre
                     coordsOrigen={
-                      pedidoAsignadoRepartidor?.estado === 'aceptado'
-                        ? (coordsUsuarioGPS || { lat: pedidoAsignadoRepartidor.origen_lat, lng: pedidoAsignadoRepartidor.origen_lon })
-                        : (pedidoAsignadoRepartidor?.estado === 'entregado_repartidor' ? { lat: pedidoAsignadoRepartidor.origen_lat, lng: pedidoAsignadoRepartidor.origen_lon } : null)
+                      pedidoAsignadoRepartidor
+                        ? { lat: pedidoAsignadoRepartidor.origen_lat, lng: pedidoAsignadoRepartidor.origen_lon }
+                        : null
                     }
                     coordsDestino={
                       pedidoAsignadoRepartidor?.estado === 'aceptado'
@@ -1805,6 +1940,7 @@ export default function App() {
                     coordsUsuario={coordsUsuarioGPS}
                     mostrarRuta={Boolean(pedidoAsignadoRepartidor)}
                     mostrarPines={true}
+                    navegacionActiva={Boolean(pedidoAsignadoRepartidor)}
                     darkMode={darkMode}
                     recentrarUsuario={recentrarMapa}
                   />
@@ -1930,9 +2066,13 @@ export default function App() {
                 <h2 className={`mt-1 text-2xl font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Administración de pagos</h2>
                 <p className="mt-1 text-xs text-slate-500">Verifica los comprobantes directamente en la cuenta receptora antes de aprobarlos.</p>
               </div>
-              <button type="button" onClick={() => void cargarPanelAdmin()} disabled={cargandoAdmin} className="rounded-xl border border-orange-200 bg-orange-50 px-4 py-2.5 text-xs font-bold text-[#FF5722] disabled:opacity-50">
-                {cargandoAdmin ? 'Actualizando…' : 'Actualizar panel'}
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" aria-pressed={usuario.rol === 'cliente'} onClick={() => void cambiarPerspectivaAdmin('cliente')} className={`rounded-xl border px-3 py-2.5 text-xs font-bold ${usuario.rol === 'cliente' ? 'border-[#FF5722] bg-orange-50 text-[#FF5722]' : 'border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-300'}`}>Usar como cliente</button>
+                <button type="button" aria-pressed={usuario.rol === 'repartidor'} onClick={() => void cambiarPerspectivaAdmin('repartidor')} className={`rounded-xl border px-3 py-2.5 text-xs font-bold ${usuario.rol === 'repartidor' ? 'border-[#FF5722] bg-orange-50 text-[#FF5722]' : 'border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-300'}`}>Usar como repartidor</button>
+                <button type="button" onClick={() => void cargarPanelAdmin()} disabled={cargandoAdmin} className="rounded-xl border border-orange-200 bg-orange-50 px-4 py-2.5 text-xs font-bold text-[#FF5722] disabled:opacity-50">
+                  {cargandoAdmin ? 'Actualizando…' : 'Actualizar panel'}
+                </button>
+              </div>
             </div>
 
             {errorAdmin && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-700">{errorAdmin}</p>}
@@ -1942,7 +2082,7 @@ export default function App() {
               <div className={`space-y-4 rounded-3xl border p-5 shadow-sm ${darkMode ? 'border-slate-800 bg-slate-900 text-white' : 'border-orange-100 bg-white'}`}>
                 <div>
                   <h3 className="text-base font-black">Pagos y reembolsos de Pago Móvil</h3>
-                  <p className="mt-1 text-xs text-slate-500">Verifica el abono en el banco; si el viaje se canceló, devuelve el monto antes de confirmarlo.</p>
+                  <p className="mt-1 text-xs text-slate-500">Verifica el abono en el banco; si un pedido se canceló, devuelve el monto antes de confirmarlo.</p>
                 </div>
                 {pagosPendientesAdmin.length === 0 ? (
                   <p className="rounded-2xl bg-slate-50 p-4 text-xs text-slate-500 dark:bg-slate-950">No hay pagos ni reembolsos pendientes.</p>
@@ -1954,16 +2094,18 @@ export default function App() {
                         <p className="text-[11px] text-slate-500">{pago.cliente_email}</p>
                       </div>
                       <span className={`rounded-full px-2.5 py-1 text-[10px] font-black ${pago.estado_pago === 'reembolso_pendiente' ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'}`}>
-                        {pago.estado_pago === 'reembolso_pendiente' ? `Reembolso · Viaje #${pago.id}` : `Pago · Viaje #${pago.id}`}
+                        {pago.estado_pago === 'reembolso_pendiente' ? `Reembolso · Pedido #${pago.id}` : `Pago · Pedido #${pago.id}`}
                       </span>
                     </div>
+                    <p className="text-xs"><strong>Servicio:</strong> {etiquetaTipoServicio(pago.tipo_servicio || '')}</p>
                     <p className="text-xs"><strong>Referencia:</strong> {pago.referencia_pago || 'Sin referencia'}</p>
                     <p className="text-xs"><strong>Monto:</strong> ${Number(pago.tarifa).toFixed(2)}</p>
+                    <p className="text-[11px] text-slate-500"><strong>Detalle:</strong> {pago.descripcion}</p>
                     <p className="text-[11px] text-slate-500">{pago.origen_texto} → {pago.destino_texto}</p>
                     {pago.estado_pago === 'reembolso_pendiente' ? (
                       <>
                         <p className="rounded-xl bg-red-50 p-3 text-[11px] text-red-800 dark:bg-red-950/30 dark:text-red-300">
-                          Viaje cancelado. Verifica si recibiste el abono; si se recibió, devuelve ${Number(pago.tarifa).toFixed(2)} antes de confirmar.
+                          Pedido cancelado. Verifica si recibiste el abono; si se recibió, devuelve ${Number(pago.tarifa).toFixed(2)} antes de confirmar.
                         </p>
                         <div className="grid grid-cols-2 gap-2">
                           <button type="button" onClick={() => void revisarPagoManual(pago.id, 'sin_pago')} className="rounded-xl border border-slate-300 bg-white py-2.5 text-xs font-bold text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">No hubo pago</button>
@@ -1984,7 +2126,7 @@ export default function App() {
                 <form onSubmit={guardarConfiguracionPagoAdmin} className={`space-y-4 rounded-3xl border p-5 shadow-sm ${darkMode ? 'border-slate-800 bg-slate-900 text-white' : 'border-orange-100 bg-white'}`}>
                   <div>
                     <h3 className="text-base font-black">Datos para recibir Pago Móvil</h3>
-                    <p className="mt-1 text-xs text-slate-500">Se mostrarán a los clientes al solicitar un viaje.</p>
+                    <p className="mt-1 text-xs text-slate-500">Se mostrarán a los clientes al solicitar un viaje o envío.</p>
                   </div>
                   {([
                     ['banco', 'Banco'],
@@ -2012,9 +2154,58 @@ export default function App() {
                 </form>
               </div>
             </div>
+
+            <div className={`space-y-4 rounded-3xl border p-5 shadow-sm ${darkMode ? 'border-slate-800 bg-slate-900 text-white' : 'border-orange-100 bg-white'}`}>
+              <div>
+                <h3 className="text-base font-black">Historial de pagos y acciones</h3>
+                <p className="mt-1 text-xs text-slate-500">Últimos movimientos, con pedido, método, monto, referencia, actor y hora.</p>
+              </div>
+              {historialPagosAdmin.length === 0 ? (
+                <p className="rounded-2xl bg-slate-50 p-4 text-xs text-slate-500 dark:bg-slate-950">Todavía no hay movimientos de pago.</p>
+              ) : (
+                <div className="max-h-[34rem] space-y-3 overflow-y-auto pr-1">
+                  {historialPagosAdmin.map(evento => (
+                    <article key={evento.id} className={`space-y-2 rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-950' : 'border-slate-100 bg-slate-50'}`}>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-xs font-black">Pedido #{evento.pedido_id} · {etiquetaTipoServicio(evento.tipo_servicio)}</p>
+                        <p className="text-[10px] text-slate-500">{new Date(evento.creado_en).toLocaleString('es-VE')}</p>
+                      </div>
+                      <p className="text-xs"><strong>Cliente:</strong> {evento.cliente_nombre} · <strong>Acción:</strong> {evento.accion.replaceAll('_', ' ')}</p>
+                      <p className="text-xs"><strong>Actor:</strong> {evento.actor_nombre || 'Cuenta eliminada'} ({evento.actor_rol}) · <strong>Pago:</strong> {etiquetaMetodoPago(evento.metodo_pago)} / {evento.estado_pago}</p>
+                      <p className="text-xs"><strong>Monto:</strong> ${Number(evento.monto).toFixed(2)}{evento.referencia_pago ? ` · Referencia: ${evento.referencia_pago}` : ''}</p>
+                      <p className="text-[11px] text-slate-500">{evento.descripcion} · {evento.origen_texto} → {evento.destino_texto}</p>
+                      <p className="text-[11px] text-slate-500">{evento.detalle}</p>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </div>
           </section>
         )}
       </main>
+      {sinConexion && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="offline-title">
+          <div className="w-full max-w-sm space-y-4 rounded-3xl border border-slate-700 bg-slate-900 p-6 text-white shadow-2xl">
+            <div className="flex items-start gap-3">
+              <XCircle size={24} className="mt-0.5 shrink-0 text-amber-400" />
+              <div>
+                <h2 id="offline-title" className="text-lg font-black">Sin conexión</h2>
+                <p className="mt-1 text-sm leading-relaxed text-slate-300">Reconecta tu internet para continuar. Tus solicitudes no se enviarán hasta recuperar la conexión.</p>
+              </div>
+            </div>
+            <button type="button" onClick={() => void reintentarConexion()} disabled={probandoConexion} className="w-full rounded-xl bg-[#FF5722] px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
+              {probandoConexion ? 'Comprobando conexión…' : 'Reintentar conexión'}
+            </button>
+            {Capacitor.getPlatform() === 'android' ? (
+              <button type="button" onClick={() => void CapacitorApp.exitApp()} className="w-full rounded-xl border border-slate-600 px-4 py-3 text-sm font-bold text-slate-200">
+                Salir de la app
+              </button>
+            ) : (
+              <p className="text-center text-[11px] text-slate-400">Para salir, cierra esta pestaña del navegador.</p>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

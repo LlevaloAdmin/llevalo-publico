@@ -5,3 +5,6 @@ export const estadoPagoAlCancelar = (metodoPago: string, estadoPago: string): st
   }
   return estadoPago;
 };
+
+export const referenciaPagoValida = (referencia: unknown): referencia is string =>
+  typeof referencia === 'string' && /^\d{1,100}$/.test(referencia);

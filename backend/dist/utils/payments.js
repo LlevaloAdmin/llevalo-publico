@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.estadoPagoAlCancelar = void 0;
+exports.referenciaPagoValida = exports.estadoPagoAlCancelar = void 0;
 const estadoPagoAlCancelar = (metodoPago, estadoPago) => {
     if (metodoPago === 'saldo_corporativo' && estadoPago === 'pagado')
         return 'reembolsado';
@@ -10,3 +10,5 @@ const estadoPagoAlCancelar = (metodoPago, estadoPago) => {
     return estadoPago;
 };
 exports.estadoPagoAlCancelar = estadoPagoAlCancelar;
+const referenciaPagoValida = (referencia) => typeof referencia === 'string' && /^\d{1,100}$/.test(referencia);
+exports.referenciaPagoValida = referenciaPagoValida;

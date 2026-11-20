@@ -6,6 +6,7 @@ import { pool } from '../db';
 export interface AuthenticatedUser {
   id: number;
   rol: 'cliente' | 'repartidor';
+  rol_base: 'cliente' | 'repartidor';
   es_admin: boolean;
 }
 
@@ -24,8 +25,11 @@ export const verifyAccessToken = (token: string): AuthenticatedUser | null => {
 
     const id = Number(payload.id);
     const rol = payload.rol;
-    if (!Number.isSafeInteger(id) || id <= 0 || (rol !== 'cliente' && rol !== 'repartidor')) return null;
-    return { id, rol, es_admin: payload.es_admin === true };
+    const rolBase = payload.rol_base ?? rol;
+    if (!Number.isSafeInteger(id) || id <= 0
+      || (rol !== 'cliente' && rol !== 'repartidor')
+      || (rolBase !== 'cliente' && rolBase !== 'repartidor')) return null;
+    return { id, rol, rol_base: rolBase, es_admin: payload.es_admin === true };
   } catch {
     return null;
   }
@@ -51,12 +55,28 @@ export const requireAuth = (req: Request, res: Response, next: NextFunction): vo
 };
 
 export const requireRole = (rol: AuthenticatedUser['rol']) =>
-  (req: Request, res: Response, next: NextFunction): void => {
-    if (req.authUser?.rol !== rol) {
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const authUser = req.authUser;
+    if (!authUser || authUser.rol !== rol) {
       res.status(403).json({ error: 'No tienes permiso para realizar esta acción.' });
       return;
     }
-    next();
+    if (authUser.rol === authUser.rol_base) {
+      next();
+      return;
+    }
+
+    try {
+      const result = await pool.query('SELECT es_admin FROM usuarios WHERE id = $1', [authUser.id]);
+      if (result.rows[0]?.es_admin !== true) {
+        res.status(403).json({ error: 'El cambio de perspectiva ya no está autorizado.' });
+        return;
+      }
+      next();
+    } catch (error) {
+      console.error('Error verificando el rol activo:', error);
+      res.status(500).json({ error: 'No se pudo verificar el rol activo.' });
+    }
   };
 
 export const requireAdmin = async (req: Request, res: Response, next: NextFunction): Promise<void> => {

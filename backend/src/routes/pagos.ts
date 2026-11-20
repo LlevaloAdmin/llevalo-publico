@@ -58,12 +58,12 @@ router.get('/admin/pendientes', requireAdmin, async (_req: Request, res: Respons
     await asegurarTablasPago();
     const result = await pool.query(
       `SELECT p.id, p.cliente_id, p.cliente_nombre, u.email AS cliente_email,
-              p.descripcion, p.origen_texto, p.destino_texto, p.distancia_km, p.tarifa,
+              p.tipo_servicio, p.descripcion, p.origen_texto, p.destino_texto,
+              p.distancia_km, p.tiempo_min, p.tarifa, p.metodo_pago,
               p.referencia_pago, p.estado_pago, p.estado, p.creado_en
        FROM pedidos p
        JOIN usuarios u ON u.id = p.cliente_id
-       WHERE p.tipo_servicio = 'viajes'
-         AND p.metodo_pago = 'pago_movil'
+       WHERE p.metodo_pago = 'pago_movil'
          AND ((p.estado_pago = 'pendiente' AND p.estado != 'cancelado')
               OR (p.estado_pago = 'reembolso_pendiente' AND p.estado = 'cancelado'))
        ORDER BY p.creado_en ASC`
@@ -72,6 +72,28 @@ router.get('/admin/pendientes', requireAdmin, async (_req: Request, res: Respons
   } catch (error) {
     console.error('Error al cargar pagos pendientes:', error);
     res.status(500).json({ error: 'No se pudieron cargar los pagos pendientes.' });
+  }
+});
+
+router.get('/admin/historial', requireAdmin, async (_req: Request, res: Response): Promise<any> => {
+  try {
+    await asegurarTablasPago();
+    const result = await pool.query(
+      `SELECT hp.id, hp.pedido_id, hp.actor_id, u.nombre AS actor_nombre, hp.actor_rol,
+              hp.accion, hp.metodo_pago, hp.estado_pago, hp.monto, hp.referencia_pago,
+              hp.detalle, hp.creado_en, p.tipo_servicio, p.descripcion, p.cliente_nombre,
+              p.origen_texto, p.destino_texto, p.distancia_km, p.tiempo_min,
+              p.estado AS estado_pedido
+       FROM historial_pagos hp
+       JOIN pedidos p ON p.id = hp.pedido_id
+       LEFT JOIN usuarios u ON u.id = hp.actor_id
+       ORDER BY hp.creado_en DESC, hp.id DESC
+       LIMIT 100`
+    );
+    res.json({ historial: result.rows });
+  } catch (error) {
+    console.error('Error al consultar el historial de pagos:', error);
+    res.status(500).json({ error: 'No se pudo consultar el historial de pagos.' });
   }
 });
 
@@ -118,8 +140,7 @@ router.put('/admin/pedidos/:id', requireAdmin, async (req: Request, res: Respons
     await client.query('BEGIN');
     const pedido = await client.query(
       `SELECT id FROM pedidos
-       WHERE id = $1 AND tipo_servicio = 'viajes'
-         AND metodo_pago = 'pago_movil'
+       WHERE id = $1 AND metodo_pago = 'pago_movil'
          AND (($2 = FALSE AND estado_pago = 'pendiente' AND estado != 'cancelado')
               OR ($2 = TRUE AND estado_pago = 'reembolso_pendiente' AND estado = 'cancelado'))
        FOR UPDATE`,
@@ -144,6 +165,23 @@ router.put('/admin/pedidos/:id', requireAdmin, async (req: Request, res: Respons
        WHERE id = $4
        RETURNING *`,
       [estadoPago, accion, adminId, id]
+    );
+    await client.query(
+      `INSERT INTO historial_pagos
+       (pedido_id, actor_id, actor_rol, accion, metodo_pago, estado_pago, monto, referencia_pago, detalle)
+       SELECT id, $2, 'admin', $3, metodo_pago, estado_pago, tarifa, referencia_pago, $4
+       FROM pedidos WHERE id = $1`,
+      [
+        id, adminId,
+        accion === 'aprobar' ? 'pago_aprobado'
+          : accion === 'rechazar' ? 'pago_rechazado'
+            : accion === 'reembolsar' ? 'reembolso_aprobado'
+              : 'reembolso_rechazado',
+        accion === 'aprobar' ? 'El administrador confirmó el pago móvil.'
+          : accion === 'rechazar' ? 'El administrador rechazó la referencia y canceló el pedido.'
+            : accion === 'reembolsar' ? 'El administrador confirmó el reembolso del pago móvil.'
+              : 'El administrador confirmó que no se recibió el pago.'
+      ]
     );
     if (accion === 'rechazar') {
       await client.query(

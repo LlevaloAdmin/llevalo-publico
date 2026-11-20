@@ -100,6 +100,20 @@ const initTables = async () => {
         creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
 
+      CREATE TABLE IF NOT EXISTS historial_pagos (
+        id SERIAL PRIMARY KEY,
+        pedido_id INTEGER NOT NULL REFERENCES pedidos(id) ON DELETE CASCADE,
+        actor_id INTEGER REFERENCES usuarios(id) ON DELETE SET NULL,
+        actor_rol VARCHAR(20) NOT NULL,
+        accion VARCHAR(40) NOT NULL,
+        metodo_pago VARCHAR(30) NOT NULL,
+        estado_pago VARCHAR(20) NOT NULL,
+        monto NUMERIC(10, 2) NOT NULL,
+        referencia_pago VARCHAR(100),
+        detalle VARCHAR(250) NOT NULL,
+        creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
       CREATE TABLE IF NOT EXISTS configuracion_pago_movil (
         id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
         banco VARCHAR(100) NOT NULL DEFAULT '',
@@ -147,7 +161,7 @@ router.post('/', (0, auth_1.requireRole)('cliente'), async (req, res) => {
     const montoSolicitado = Number(tarifa);
     const serviciosPermitidos = ['envios', 'viajes', 'comida', 'mercado', 'mandados'];
     const metodosPagoPermitidos = ['pago_movil', 'efectivo', 'saldo_corporativo'];
-    const metodoPago = tipo_servicio === 'viajes' ? metodo_pago : 'no_aplica';
+    const metodoPago = metodo_pago;
     const referenciaPago = typeof referencia_pago === 'string' ? referencia_pago.trim() : '';
     const montoCalculado = (0, pricing_1.calcularTarifa)(tipo_servicio, distancia);
     if (!serviciosPermitidos.includes(tipo_servicio)
@@ -162,8 +176,8 @@ router.post('/', (0, auth_1.requireRole)('cliente'), async (req, res) => {
         || !Number.isSafeInteger(tiempo) || tiempo <= 0 || tiempo > 10000
         || !Number.isFinite(montoSolicitado) || Math.abs(montoSolicitado - montoCalculado) > 0.01
         || montoCalculado > 10000
-        || (tipo_servicio === 'viajes' && !metodosPagoPermitidos.includes(metodoPago))
-        || (metodoPago === 'pago_movil' && (!referenciaPago || referenciaPago.length > 100))) {
+        || !metodosPagoPermitidos.includes(metodoPago)
+        || (metodoPago === 'pago_movil' && !(0, payments_1.referenciaPagoValida)(referenciaPago))) {
         return res.status(400).json({ error: 'Los datos del pedido o de la ruta no son válidos.' });
     }
     const estadoPago = metodoPago === 'no_aplica' ? 'no_aplica'
@@ -174,7 +188,7 @@ router.post('/', (0, auth_1.requireRole)('cliente'), async (req, res) => {
         await exports.tablasPedidosListas;
         client = await db_1.pool.connect();
         await client.query('BEGIN');
-        const cliente = await client.query('SELECT nombre FROM usuarios WHERE id = $1 AND rol = $2', [authUser.id, 'cliente']);
+        const cliente = await client.query('SELECT nombre FROM usuarios WHERE id = $1 AND (rol = $2 OR es_admin = TRUE)', [authUser.id, 'cliente']);
         if (cliente.rows.length === 0) {
             await client.query('ROLLBACK');
             return res.status(401).json({ error: 'La cuenta de cliente ya no está disponible.' });
@@ -191,7 +205,7 @@ router.post('/', (0, auth_1.requireRole)('cliente'), async (req, res) => {
             const saldo = await client.query('SELECT saldo FROM saldos_corporativos WHERE cliente_id = $1 FOR UPDATE', [authUser.id]);
             if (saldo.rows.length === 0 || Number(saldo.rows[0].saldo) < montoCalculado) {
                 await client.query('ROLLBACK');
-                return res.status(409).json({ error: 'Tu saldo corporativo no es suficiente para este viaje.' });
+                return res.status(409).json({ error: 'Tu saldo corporativo no es suficiente para este pedido.' });
             }
         }
         const result = await client.query(`INSERT INTO pedidos
@@ -214,7 +228,19 @@ router.post('/', (0, auth_1.requireRole)('cliente'), async (req, res) => {
          RETURNING saldo`, [montoCalculado, authUser.id]);
             await client.query(`INSERT INTO movimientos_saldo
          (cliente_id, monto, saldo_resultante, tipo, pedido_id, nota)
-         VALUES ($1, $2, $3, 'pedido', $4, $5)`, [authUser.id, -montoCalculado, saldo.rows[0].saldo, result.rows[0].id, `Pago de viaje ${result.rows[0].id}`]);
+         VALUES ($1, $2, $3, 'pedido', $4, $5)`, [authUser.id, -montoCalculado, saldo.rows[0].saldo, result.rows[0].id, `Pago de pedido ${result.rows[0].id}`]);
+        }
+        if (metodoPago === 'pago_movil' || metodoPago === 'saldo_corporativo') {
+            await client.query(`INSERT INTO historial_pagos
+         (pedido_id, actor_id, actor_rol, accion, metodo_pago, estado_pago, monto, referencia_pago, detalle)
+         VALUES ($1, $2, 'cliente', $3, $4, $5, $6, $7, $8)`, [
+                result.rows[0].id, authUser.id,
+                metodoPago === 'pago_movil' ? 'referencia_enviada' : 'pago_con_saldo',
+                metodoPago, estadoPago, montoCalculado, referenciaPago || null,
+                metodoPago === 'pago_movil'
+                    ? 'El cliente envió una referencia para revisión.'
+                    : 'El monto se debitó del saldo corporativo.'
+            ]);
         }
         await client.query('COMMIT');
         res.status(201).json({ mensaje: 'Pedido publicado', pedido: result.rows[0] });
@@ -248,7 +274,7 @@ router.get('/', async (req, res) => {
                 repartidor_calificacion, repartidor_lat, repartidor_lon, creado_en
          FROM pedidos
          WHERE (estado IN ('pendiente', 'postulado')
-                AND (tipo_servicio <> 'viajes' OR metodo_pago IN ('efectivo', 'no_aplica') OR estado_pago = 'pagado'))
+                AND (metodo_pago IN ('efectivo', 'no_aplica') OR estado_pago = 'pagado'))
             OR (repartidor_id = $1 AND estado IN ('aceptado', 'entregado_repartidor'))
          ORDER BY creado_en DESC`, [authUser.id]);
         const postulacionesRes = authUser.rol === 'cliente'
@@ -301,7 +327,7 @@ router.post('/:id/postular', (0, auth_1.requireRole)('repartidor'), async (req, 
             await client.query('ROLLBACK');
             return res.status(409).json({ error: 'Este pedido ya no acepta postulaciones.' });
         }
-        const repartidor = await client.query('SELECT nombre FROM usuarios WHERE id = $1 AND rol = $2', [authUser.id, 'repartidor']);
+        const repartidor = await client.query('SELECT nombre FROM usuarios WHERE id = $1 AND (rol = $2 OR es_admin = TRUE)', [authUser.id, 'repartidor']);
         if (repartidor.rows.length === 0) {
             await client.query('ROLLBACK');
             return res.status(401).json({ error: 'La cuenta de repartidor ya no está disponible.' });
@@ -512,14 +538,27 @@ router.put('/:id/estado', async (req, res) => {
            RETURNING saldo`, [authUser.id, Number(cancelado.rows[0].tarifa)]);
                 await client.query(`INSERT INTO movimientos_saldo
            (cliente_id, monto, saldo_resultante, tipo, pedido_id, nota)
-           VALUES ($1, $2, $3, 'reembolso', $4, $5)`, [authUser.id, Number(cancelado.rows[0].tarifa), saldo.rows[0].saldo, id, `Reembolso de viaje ${id}`]);
+           VALUES ($1, $2, $3, 'reembolso', $4, $5)`, [authUser.id, Number(cancelado.rows[0].tarifa), saldo.rows[0].saldo, id, `Reembolso de pedido ${id}`]);
+            }
+            if (['reembolso_pendiente', 'reembolsado'].includes(cancelado.rows[0].estado_pago)) {
+                await client.query(`INSERT INTO historial_pagos
+           (pedido_id, actor_id, actor_rol, accion, metodo_pago, estado_pago, monto, referencia_pago, detalle)
+           VALUES ($1, $2, 'cliente', $3, $4, $5, $6, $7, $8)`, [
+                    id, authUser.id,
+                    cancelado.rows[0].estado_pago === 'reembolsado' ? 'saldo_reembolsado' : 'reembolso_solicitado',
+                    cancelado.rows[0].metodo_pago, cancelado.rows[0].estado_pago,
+                    cancelado.rows[0].tarifa, cancelado.rows[0].referencia_pago,
+                    cancelado.rows[0].estado_pago === 'reembolsado'
+                        ? 'El monto fue devuelto al saldo corporativo al cancelar el pedido.'
+                        : 'El cliente canceló el pedido y solicitó verificar el pago para procesar el reembolso.'
+                ]);
             }
             await client.query('COMMIT');
             const estadoPagoFinal = cancelado.rows[0].estado_pago;
             const mensaje = estadoPagoFinal === 'reembolso_pendiente'
-                ? 'Viaje cancelado. El administrador debe verificar el pago y procesar el reembolso.'
+                ? 'Pedido cancelado. El administrador debe verificar el pago y procesar el reembolso.'
                 : estadoPagoFinal === 'reembolsado'
-                    ? 'Viaje cancelado. El monto fue devuelto a tu saldo corporativo.'
+                    ? 'Pedido cancelado. El monto fue devuelto a tu saldo corporativo.'
                     : 'Pedido cancelado.';
             return res.json({ mensaje, pedido: cancelado.rows[0] });
         }
@@ -551,8 +590,7 @@ router.put('/:id/estado', async (req, res) => {
                 return res.status(409).json({ error: 'El pedido no existe o no admite ese cambio de estado.' });
             }
             const pedido = actual.rows[0];
-            if (pedido.tipo_servicio === 'viajes'
-                && pedido.metodo_pago !== 'no_aplica'
+            if (pedido.metodo_pago !== 'no_aplica'
                 && pedido.metodo_pago !== 'efectivo'
                 && pedido.estado_pago !== 'pagado') {
                 await client.query('ROLLBACK');
@@ -574,6 +612,14 @@ router.put('/:id/estado', async (req, res) => {
              END
          WHERE id = $2 AND repartidor_id = $1 AND estado = 'aceptado'
          RETURNING *`, [authUser.id, id]);
+            if (update.rows[0].metodo_pago === 'efectivo' && update.rows[0].estado_pago === 'pagado') {
+                await client.query(`INSERT INTO historial_pagos
+           (pedido_id, actor_id, actor_rol, accion, metodo_pago, estado_pago, monto, referencia_pago, detalle)
+           VALUES ($1, $2, 'repartidor', 'efectivo_recibido', $3, $4, $5, NULL, $6)`, [
+                    id, authUser.id, update.rows[0].metodo_pago, update.rows[0].estado_pago,
+                    update.rows[0].tarifa, 'El repartidor confirmó la recepción del efectivo en el punto de retiro.'
+                ]);
+            }
             await client.query('COMMIT');
             return res.json({ mensaje: 'Estado actualizado', pedido: update.rows[0] });
         }
