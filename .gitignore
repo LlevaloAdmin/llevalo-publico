@@ -22,4 +22,5 @@ backend/dist/utils/*
 !backend/dist/utils/payments.js
 !backend/dist/utils/exchangeRates.js
 !backend/dist/utils/orderCode.js
+!backend/dist/utils/orderSearch.js
 !backend/dist/utils/pricingSettings.js

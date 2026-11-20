@@ -2,7 +2,7 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "npm run build && node --test test/pricing.test.cjs test/payments.test.cjs"
+    "test": "npm run build && node --test test/pricing.test.cjs test/payments.test.cjs test/orderSearch.test.cjs test/exchangeRates.test.cjs"
   },
   "dependencies": {
     "axios": "^1.21.1",

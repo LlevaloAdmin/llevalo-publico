@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Activity, Bike, MapPin, ArrowLeft, ArrowRight, Camera, User, Eye, EyeOff, Clock, Send, Power, Star, Moon, Sun, DollarSign, XCircle, Navigation, CheckCircle2, Circle, Package, CarFront, LogOut, Users, UserRound } from 'lucide-react';
+import { Activity, Bike, MapPin, ArrowLeft, ArrowRight, Camera, User, Eye, EyeOff, Clock, Send, Power, Star, Moon, Sun, DollarSign, XCircle, Navigation, CheckCircle2, Circle, Package, CarFront, LogOut, Users, UserRound, ChevronDown } from 'lucide-react';
 import { App as CapacitorApp } from '@capacitor/app';
 import { StatusBar, Style } from '@capacitor/status-bar';
 import { Capacitor, type PluginListenerHandle } from '@capacitor/core';
@@ -222,6 +222,7 @@ interface MetricasAdmin {
 }
 
 type MonedaVisualizacion = 'VES' | 'EUR' | 'USDT';
+type ModoBusquedaAdmin = 'codigo' | 'fecha' | 'texto';
 
 interface ConfiguracionTarifas {
   enviosPorKm: number;
@@ -286,6 +287,53 @@ const formatoMoneda = (monto: number, moneda: MonedaVisualizacion) => {
   if (moneda === 'EUR') return `€${formatted}`;
   return `${formatted} USDT`;
 };
+
+const crearParametrosBusquedaAdmin = (
+  modo: ModoBusquedaAdmin,
+  consulta: string,
+  fecha: string,
+  hora: string
+) => {
+  const parametros = new URLSearchParams({ modo });
+  if (modo !== 'fecha') parametros.set('q', consulta);
+  if (modo === 'fecha') {
+    if (fecha) parametros.set('fecha', fecha);
+    if (hora) parametros.set('hora', hora);
+    const referenciaLocal = fecha ? new Date(`${fecha}T${hora || '12:00'}`) : new Date();
+    if (Number.isFinite(referenciaLocal.getTime())) {
+      parametros.set('desfase', String(referenciaLocal.getTimezoneOffset()));
+    }
+  }
+  return parametros;
+};
+
+interface AdminAccordionProps {
+  title: string;
+  description: string;
+  darkMode: boolean;
+  badge?: React.ReactNode;
+  children: React.ReactNode;
+}
+
+function AdminAccordion({ title, description, darkMode, badge, children }: AdminAccordionProps) {
+  return (
+    <details className={`admin-accordion rounded-3xl border shadow-sm ${darkMode ? 'border-slate-800 bg-slate-900 text-white' : 'border-orange-100 bg-white'}`}>
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 p-5 transition-colors duration-200 hover:bg-slate-50 dark:hover:bg-slate-800/50">
+        <div className="min-w-0">
+          <h3 className="text-base font-black">{title}</h3>
+          <p className="mt-1 text-xs text-slate-500">{description}</p>
+        </div>
+        <span className="flex shrink-0 items-center gap-2">
+          {badge}
+          <ChevronDown size={18} className="admin-accordion-chevron text-slate-500" />
+        </span>
+      </summary>
+      <div className={`admin-accordion-content border-t p-4 md:p-5 ${darkMode ? 'border-slate-800' : 'border-slate-100'}`}>
+        {children}
+      </div>
+    </details>
+  );
+}
 
 export default function App() {
   type Tab = 'home' | 'cliente' | 'repartidor' | 'perfil' | 'auth' | 'admin';
@@ -386,8 +434,15 @@ export default function App() {
   const [tasasCambio, setTasasCambio] = useState<TasasCambio | null>(null);
   const [cargandoTarifas, setCargandoTarifas] = useState(false);
   const [errorTarifas, setErrorTarifas] = useState('');
+  const [modoBusquedaAdmin, setModoBusquedaAdmin] = useState<ModoBusquedaAdmin>('codigo');
   const [busquedaAdmin, setBusquedaAdmin] = useState('');
+  const [fechaBusquedaAdmin, setFechaBusquedaAdmin] = useState('');
+  const [horaBusquedaAdmin, setHoraBusquedaAdmin] = useState('');
+  const [sugerenciasBusquedaAdmin, setSugerenciasBusquedaAdmin] = useState<PedidoBusquedaAdmin[]>([]);
+  const [errorAutocompletadoAdmin, setErrorAutocompletadoAdmin] = useState('');
+  const [mostrarSugerenciasAdmin, setMostrarSugerenciasAdmin] = useState(false);
   const [resultadosBusquedaAdmin, setResultadosBusquedaAdmin] = useState<PedidoBusquedaAdmin[]>([]);
+  const [busquedaEjecutadaAdmin, setBusquedaEjecutadaAdmin] = useState(false);
   const [cargandoBusquedaAdmin, setCargandoBusquedaAdmin] = useState(false);
   const [configuracionTarifasAdmin, setConfiguracionTarifasAdmin] = useState<ConfiguracionTarifas>({
     enviosPorKm: 0.5,
@@ -922,6 +977,54 @@ export default function App() {
     return () => clearInterval(interval);
   }, [usuarioId, cargarTarifas]);
 
+  useEffect(() => {
+    const consulta = busquedaAdmin.trim();
+    const filtroValido = modoBusquedaAdmin === 'fecha'
+      ? Boolean(fechaBusquedaAdmin || horaBusquedaAdmin)
+      : consulta.length >= 2 && (modoBusquedaAdmin !== 'codigo' || /^\d+$/.test(consulta));
+    if (!usuario?.es_admin || activeTab !== 'admin' || !filtroValido) return;
+
+    let vigente = true;
+    const timeout = window.setTimeout(() => {
+      const cargarSugerencias = async () => {
+        try {
+          const parametros = crearParametrosBusquedaAdmin(
+            modoBusquedaAdmin,
+            consulta,
+            fechaBusquedaAdmin,
+            horaBusquedaAdmin
+          );
+          const response = await authenticatedFetch(`${API_URL}/api/pedidos/admin/buscar?${parametros}`);
+          if (!response.ok) throw new Error(await mensajeErrorApi(response, 'No se pudieron cargar las sugerencias'));
+          const data: { pedidos: PedidoBusquedaAdmin[] } = await response.json();
+          if (vigente) {
+            setSugerenciasBusquedaAdmin(Array.isArray(data.pedidos) ? data.pedidos : []);
+            setErrorAutocompletadoAdmin('');
+          }
+        } catch (error) {
+          if (vigente) {
+            setSugerenciasBusquedaAdmin([]);
+            setErrorAutocompletadoAdmin(error instanceof Error ? error.message : 'No se pudieron cargar las sugerencias.');
+            console.error('Error al autocompletar la búsqueda de pedidos:', error);
+          }
+        }
+      };
+      void cargarSugerencias();
+    }, 350);
+
+    return () => {
+      vigente = false;
+      window.clearTimeout(timeout);
+    };
+  }, [
+    activeTab,
+    busquedaAdmin,
+    fechaBusquedaAdmin,
+    horaBusquedaAdmin,
+    modoBusquedaAdmin,
+    usuario?.es_admin
+  ]);
+
   const irAPedidos = () => {
     navegarA('cliente');
     void cargarConfiguracionPago();
@@ -1071,14 +1174,30 @@ export default function App() {
   const buscarPedidosAdmin = async (event: React.FormEvent) => {
     event.preventDefault();
     const consulta = busquedaAdmin.trim();
-    if (consulta.length < 2) {
-      setErrorAdmin('Escribe al menos dos caracteres para buscar pedidos.');
+    const filtroValido = modoBusquedaAdmin === 'fecha'
+      ? Boolean(fechaBusquedaAdmin || horaBusquedaAdmin)
+      : consulta.length >= 2 && (modoBusquedaAdmin !== 'codigo' || /^\d+$/.test(consulta));
+    if (!filtroValido) {
+      setErrorAdmin(modoBusquedaAdmin === 'fecha'
+        ? 'Selecciona una fecha, una hora o ambas para buscar.'
+        : modoBusquedaAdmin === 'codigo'
+          ? 'Escribe al menos dos números del código del pedido.'
+          : 'Escribe al menos dos caracteres para buscar pedidos.');
       return;
     }
     setCargandoBusquedaAdmin(true);
     setErrorAdmin('');
+    setMostrarSugerenciasAdmin(false);
+    setErrorAutocompletadoAdmin('');
+    setBusquedaEjecutadaAdmin(true);
     try {
-      const response = await authenticatedFetch(`${API_URL}/api/pedidos/admin/buscar?q=${encodeURIComponent(consulta)}`);
+      const parametros = crearParametrosBusquedaAdmin(
+        modoBusquedaAdmin,
+        consulta,
+        fechaBusquedaAdmin,
+        horaBusquedaAdmin
+      );
+      const response = await authenticatedFetch(`${API_URL}/api/pedidos/admin/buscar?${parametros}`);
       if (!response.ok) throw new Error(await mensajeErrorApi(response, 'No se pudieron buscar los pedidos'));
       const data: { pedidos: PedidoBusquedaAdmin[] } = await response.json();
       setResultadosBusquedaAdmin(Array.isArray(data.pedidos) ? data.pedidos : []);
@@ -1594,8 +1713,8 @@ export default function App() {
           {usuario ? (
             <>
               {tasasCambio && (
-                <span className={`inline-flex rounded-xl border px-2 py-1.5 text-[9px] font-semibold sm:px-2.5 sm:text-[10px] ${darkMode ? 'border-slate-800 bg-slate-900 text-slate-300' : 'border-orange-100 bg-white text-slate-600'}`}>
-                  1 USD = {formatoMoneda(tasasCambio.bolivaresPorDolar, 'VES')}
+                <span className={`inline-flex rounded-xl border px-3 py-2 text-sm font-bold sm:px-3.5 sm:text-base ${darkMode ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-orange-100 bg-white text-slate-700'}`}>
+                  {formatoMoneda(tasasCambio.bolivaresPorDolar, 'VES')}
                 </span>
               )}
               <button
@@ -1647,7 +1766,7 @@ export default function App() {
         )}
       </header>
 
-      <main className="flex-1 flex flex-col p-4 md:p-6 max-w-7xl mx-auto w-full">
+      <main className="app-page flex-1 flex flex-col p-4 md:p-6 max-w-7xl mx-auto w-full">
         {activeTab === 'home' && !usuario && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center py-8 lg:py-14">
             <div className="space-y-6">
@@ -2450,6 +2569,7 @@ export default function App() {
                     aria-label="Cambiar foto de perfil"
                     onClick={() => inputFotoPerfilRef.current?.click()}
                     disabled={guardandoPerfil}
+                    aria-busy={guardandoPerfil}
                     className="group relative flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-full border-4 border-white/70 bg-white/20 text-2xl font-black shadow-md disabled:opacity-70"
                   >
                     {fotoLocal ? <img src={fotoLocal} alt="" className="h-full w-full object-cover" /> : usuario.nombre.slice(0, 1).toUpperCase()}
@@ -2459,10 +2579,8 @@ export default function App() {
                   </button>
                   <input ref={inputFotoPerfilRef} type="file" accept="image/*" onChange={manejarCambioFotoPerfil} className="hidden" />
                   <div className="text-center sm:text-left">
-                    <p className="text-xs font-bold uppercase tracking-[0.18em] text-white/80">Mi cuenta</p>
-                    <h2 className="mt-1 text-2xl font-black">{usuario.nombre}</h2>
+                    <h2 className="text-2xl font-black">{usuario.nombre}</h2>
                     <span className="mt-2 inline-flex rounded-full bg-white/20 px-3 py-1 text-[11px] font-bold capitalize">{usuario.rol === 'repartidor' ? 'Repartidor' : 'Cliente'}</span>
-                    <p className="mt-1 text-[10px] text-white/80">{guardandoPerfil ? 'Actualizando foto…' : 'Pulsa la foto para cambiarla'}</p>
                   </div>
                 </div>
               </div>
@@ -2514,9 +2632,6 @@ export default function App() {
                         {darkMode ? <Sun size={15} /> : <Moon size={15} />}
                       </span>
                     </button>
-                  </div>
-                  <div className={`rounded-2xl border p-4 text-xs leading-relaxed ${darkMode ? 'border-orange-900/50 bg-orange-950/20 text-slate-300' : 'border-orange-100 bg-orange-50 text-slate-600'}`}>
-                    Mantén tus datos y, si eres repartidor, la información de tu vehículo actualizada para que los clientes puedan identificarte.
                   </div>
                 </div>
 
@@ -2573,50 +2688,173 @@ export default function App() {
             {errorAdmin && <p role="alert" className={`rounded-xl border p-3 text-xs font-semibold ${darkMode ? 'border-red-900 bg-red-950/30 text-red-300' : 'border-red-200 bg-red-50 text-red-700'}`}>{errorAdmin}</p>}
             {mensajeAdmin && <p role="status" className={`rounded-xl border p-3 text-xs font-semibold ${darkMode ? 'border-emerald-900 bg-emerald-950/30 text-emerald-300' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>{mensajeAdmin}</p>}
 
-            <section className={`space-y-4 rounded-3xl border p-5 shadow-sm ${darkMode ? 'border-slate-800 bg-slate-900 text-white' : 'border-orange-100 bg-white'}`}>
-              <div>
-                <h3 className="text-base font-black">Buscar pedido</h3>
-                <p className="mt-1 text-xs text-slate-500">Busca por código LLV, cliente, correo, repartidor, servicio, referencia o dirección.</p>
-              </div>
-              <form onSubmit={buscarPedidosAdmin} className="flex flex-col gap-2 sm:flex-row">
-                <input
-                  type="search"
-                  value={busquedaAdmin}
-                  onChange={event => setBusquedaAdmin(event.target.value)}
-                  placeholder="LLV-000039, correo o sector"
-                  className={`min-w-0 flex-1 rounded-xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-700 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50'}`}
-                />
-                <button type="submit" disabled={cargandoBusquedaAdmin} className="rounded-xl bg-[#FF5722] px-5 py-2.5 text-xs font-bold text-white disabled:opacity-50">
-                  {cargandoBusquedaAdmin ? 'Buscando…' : 'Buscar'}
-                </button>
-              </form>
-              {resultadosBusquedaAdmin.length > 0 && (
-                <ol className="max-h-80 space-y-2 overflow-y-auto">
-                  {resultadosBusquedaAdmin.map(pedido => (
-                    <li key={pedido.id} className={`rounded-2xl border p-3 ${darkMode ? 'border-slate-800 bg-slate-950/60' : 'border-slate-100 bg-slate-50'}`}>
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <p className="text-xs font-black text-[#FF5722]">{pedido.codigo} · {etiquetaTipoServicio(pedido.tipo_servicio)}</p>
-                        <span className="text-[10px] capitalize text-slate-500">{pedido.estado}</span>
+            <AdminAccordion
+              title="Buscar pedido"
+              description="Por código numérico, fecha/hora o datos del pedido."
+              darkMode={darkMode}
+              badge={resultadosBusquedaAdmin.length > 0 ? <span className="rounded-full bg-orange-50 px-2.5 py-1 text-[10px] font-bold text-[#FF5722]">{resultadosBusquedaAdmin.length} resultados</span> : undefined}
+            >
+              <div className="space-y-4">
+                <label className="block text-xs font-bold">
+                  Buscar por
+                  <select
+                    value={modoBusquedaAdmin}
+                    onChange={event => {
+                      const modo = event.target.value;
+                      if (modo === 'codigo' || modo === 'fecha' || modo === 'texto') {
+                        setModoBusquedaAdmin(modo);
+                        if (modo === 'codigo') {
+                          setBusquedaAdmin(actual => actual.replace(/\D/g, ''));
+                        }
+                        setResultadosBusquedaAdmin([]);
+                        setBusquedaEjecutadaAdmin(false);
+                        setSugerenciasBusquedaAdmin([]);
+                        setErrorAutocompletadoAdmin('');
+                        setMostrarSugerenciasAdmin(false);
+                        setErrorAdmin('');
+                      }
+                    }}
+                    className={`mt-1 w-full rounded-xl border px-3 py-2.5 text-sm sm:max-w-xs ${darkMode ? 'border-slate-700 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50'}`}
+                  >
+                    <option value="codigo">Código del pedido (solo números)</option>
+                    <option value="fecha">Fecha y hora</option>
+                    <option value="texto">Cliente, correo, sector u otro dato</option>
+                  </select>
+                </label>
+                <form onSubmit={buscarPedidosAdmin} className="flex flex-col gap-2 sm:flex-row">
+                  <div className="relative min-w-0 flex-1">
+                    {modoBusquedaAdmin === 'fecha' ? (
+                      <>
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          <label className="text-[11px] font-semibold text-slate-500">
+                            Fecha (opcional)
+                            <input
+                              type="date"
+                              value={fechaBusquedaAdmin}
+                              onChange={event => {
+                                setFechaBusquedaAdmin(event.target.value);
+                                setResultadosBusquedaAdmin([]);
+                                setBusquedaEjecutadaAdmin(false);
+                                setErrorAdmin('');
+                                setSugerenciasBusquedaAdmin([]);
+                                setErrorAutocompletadoAdmin('');
+                                setMostrarSugerenciasAdmin(true);
+                              }}
+                              onFocus={() => setMostrarSugerenciasAdmin(true)}
+                              onBlur={() => window.setTimeout(() => setMostrarSugerenciasAdmin(false), 120)}
+                              className={`mt-1 w-full rounded-xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-700 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50'}`}
+                            />
+                          </label>
+                          <label className="text-[11px] font-semibold text-slate-500">
+                            Hora (opcional)
+                            <input
+                              type="time"
+                              value={horaBusquedaAdmin}
+                              onChange={event => {
+                                setHoraBusquedaAdmin(event.target.value);
+                                setResultadosBusquedaAdmin([]);
+                                setBusquedaEjecutadaAdmin(false);
+                                setErrorAdmin('');
+                                setSugerenciasBusquedaAdmin([]);
+                                setErrorAutocompletadoAdmin('');
+                                setMostrarSugerenciasAdmin(true);
+                              }}
+                              onFocus={() => setMostrarSugerenciasAdmin(true)}
+                              onBlur={() => window.setTimeout(() => setMostrarSugerenciasAdmin(false), 120)}
+                              className={`mt-1 w-full rounded-xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-700 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50'}`}
+                            />
+                          </label>
+                        </div>
+                        <p className="mt-1 text-[10px] text-slate-500">Selecciona fecha, hora o ambas.</p>
+                      </>
+                    ) : (
+                      <input
+                        type="search"
+                        inputMode={modoBusquedaAdmin === 'codigo' ? 'numeric' : 'search'}
+                        pattern={modoBusquedaAdmin === 'codigo' ? '[0-9]*' : undefined}
+                        maxLength={modoBusquedaAdmin === 'codigo' ? 12 : 120}
+                        value={busquedaAdmin}
+                        onChange={event => {
+                          const value = modoBusquedaAdmin === 'codigo'
+                            ? event.target.value.replace(/\D/g, '')
+                            : event.target.value;
+                          setBusquedaAdmin(value);
+                          setResultadosBusquedaAdmin([]);
+                          setBusquedaEjecutadaAdmin(false);
+                          setErrorAdmin('');
+                          setSugerenciasBusquedaAdmin([]);
+                          setErrorAutocompletadoAdmin('');
+                          setMostrarSugerenciasAdmin(true);
+                        }}
+                        onFocus={() => setMostrarSugerenciasAdmin(true)}
+                        onBlur={() => window.setTimeout(() => setMostrarSugerenciasAdmin(false), 120)}
+                        placeholder={modoBusquedaAdmin === 'codigo' ? 'Ej.: 000039' : 'Correo, cliente o sector'}
+                        className={`w-full rounded-xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-700 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50'}`}
+                      />
+                    )}
+                    {mostrarSugerenciasAdmin && sugerenciasBusquedaAdmin.length > 0 && (
+                      <div role="listbox" aria-label="Pedidos sugeridos" className={`absolute inset-x-0 top-full z-30 mt-1 max-h-64 overflow-y-auto rounded-2xl border p-1 shadow-xl ${darkMode ? 'border-slate-700 bg-slate-900' : 'border-slate-200 bg-white'}`}>
+                        {sugerenciasBusquedaAdmin.slice(0, 6).map(pedido => (
+                          <button
+                            key={pedido.id}
+                            type="button"
+                            role="option"
+                            aria-selected="false"
+                            onMouseDown={event => event.preventDefault()}
+                            onClick={() => {
+                              setModoBusquedaAdmin('codigo');
+                              setBusquedaAdmin(String(pedido.id));
+                              setResultadosBusquedaAdmin([pedido]);
+                              setBusquedaEjecutadaAdmin(true);
+                              setMostrarSugerenciasAdmin(false);
+                            }}
+                            className={`flex w-full flex-col items-start rounded-xl px-3 py-2 text-left ${darkMode ? 'hover:bg-slate-800' : 'hover:bg-orange-50'}`}
+                          >
+                            <span className="text-xs font-bold text-[#FF5722]">{pedido.codigo} · {pedido.cliente_nombre}</span>
+                            <span className="text-[10px] text-slate-500">{pedido.origen_texto} · {new Date(pedido.creado_en || '').toLocaleString('es-VE')}</span>
+                          </button>
+                        ))}
                       </div>
-                      <p className="mt-1 text-xs font-semibold">{pedido.cliente_nombre} · {pedido.cliente_email}</p>
-                      <p className="mt-1 text-[11px] text-slate-500">{pedido.origen_texto} → {pedido.destino_texto}</p>
-                      <p className="mt-1 text-[11px] text-slate-500">
-                        {mostrarMontoPedido(pedido.tarifa)} · {etiquetaMetodoPago(pedido.metodo_pago)} · {new Date(pedido.creado_en || '').toLocaleString('es-VE')}
-                      </p>
-                    </li>
-                  ))}
-                </ol>
-              )}
-              {busquedaAdmin.trim().length >= 2 && resultadosBusquedaAdmin.length === 0 && !cargandoBusquedaAdmin && (
-                <p className="rounded-xl bg-slate-50 p-3 text-xs text-slate-500 dark:bg-slate-950">No se encontraron pedidos con esa búsqueda.</p>
-              )}
-            </section>
-
-            <section className={`space-y-4 rounded-3xl border p-5 shadow-sm ${darkMode ? 'border-slate-800 bg-slate-900 text-white' : 'border-orange-100 bg-white'}`}>
-              <div>
-                <h3 className="text-base font-black">Tarifas y moneda de visualización</h3>
-                <p className="mt-1 text-xs text-slate-500">Configura los valores base en USD. Todos verán su equivalente en la moneda seleccionada; Pago Móvil se mantiene en bolívares.</p>
+                    )}
+                  </div>
+                  <button type="submit" disabled={cargandoBusquedaAdmin} className="rounded-xl bg-[#FF5722] px-5 py-2.5 text-xs font-bold text-white disabled:opacity-50">
+                    {cargandoBusquedaAdmin ? 'Buscando…' : 'Buscar'}
+                  </button>
+                </form>
+                {errorAutocompletadoAdmin && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">{errorAutocompletadoAdmin}</p>}
+                {busquedaEjecutadaAdmin && modoBusquedaAdmin === 'fecha' && resultadosBusquedaAdmin.length === 0 && !cargandoBusquedaAdmin && !errorAdmin && (
+                  <p className="rounded-xl bg-slate-50 p-3 text-xs text-slate-500 dark:bg-slate-950">No se encontraron pedidos en ese momento.</p>
+                )}
+                {busquedaEjecutadaAdmin && modoBusquedaAdmin !== 'fecha' && resultadosBusquedaAdmin.length === 0 && !cargandoBusquedaAdmin && !errorAdmin && (
+                  <p className="rounded-xl bg-slate-50 p-3 text-xs text-slate-500 dark:bg-slate-950">No se encontraron pedidos con esa búsqueda.</p>
+                )}
+                {resultadosBusquedaAdmin.length > 0 && (
+                  <ol className="max-h-80 space-y-2 overflow-y-auto">
+                    {resultadosBusquedaAdmin.map(pedido => (
+                      <li key={pedido.id} className={`rounded-2xl border p-3 ${darkMode ? 'border-slate-800 bg-slate-950/60' : 'border-slate-100 bg-slate-50'}`}>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-xs font-black text-[#FF5722]">{pedido.codigo} · {etiquetaTipoServicio(pedido.tipo_servicio)}</p>
+                          <span className="text-[10px] capitalize text-slate-500">{pedido.estado}</span>
+                        </div>
+                        <p className="mt-1 text-xs font-semibold">{pedido.cliente_nombre} · {pedido.cliente_email}</p>
+                        <p className="mt-1 text-[11px] text-slate-500">{pedido.origen_texto} → {pedido.destino_texto}</p>
+                        <p className="mt-1 text-[11px] text-slate-500">
+                          {mostrarMontoPedido(pedido.tarifa)} · {etiquetaMetodoPago(pedido.metodo_pago)} · {new Date(pedido.creado_en || '').toLocaleString('es-VE')}
+                        </p>
+                      </li>
+                    ))}
+                  </ol>
+                )}
               </div>
+            </AdminAccordion>
+
+            <AdminAccordion
+              title="Tarifas y moneda"
+              description="Valores globales y moneda de visualización."
+              darkMode={darkMode}
+              badge={tasasCambio ? <span className="text-xs font-bold text-[#FF5722]">{formatoMoneda(tasasCambio.bolivaresPorDolar, 'VES')}</span> : undefined}
+            >
+              <div className="space-y-4">
               <form onSubmit={guardarTarifasAdmin} className="grid gap-3 sm:grid-cols-2">
                 {([
                   ['enviosPorKm', 'Envíos por kilómetro (USD)'],
@@ -2657,7 +2895,7 @@ export default function App() {
                 </label>
                 <div className={`rounded-xl border p-3 text-[11px] sm:col-span-2 ${darkMode ? 'border-slate-800 bg-slate-950/60 text-slate-300' : 'border-slate-100 bg-slate-50 text-slate-600'}`}>
                   {tasasCambio && configuracionTarifas && (
-                    <p>1 USD = {formatoMoneda(convertirDolares(1, configuracionTarifasAdmin.monedaVisualizacion, tasasCambio), configuracionTarifasAdmin.monedaVisualizacion)} · Tasas consultadas {new Date(tasasCambio.actualizadoEn).toLocaleString('es-VE')}.</p>
+                    <p className="text-sm font-bold">{formatoMoneda(convertirDolares(1, configuracionTarifasAdmin.monedaVisualizacion, tasasCambio), configuracionTarifasAdmin.monedaVisualizacion)} <span className="text-[10px] font-normal text-slate-500">· Actualizado {new Date(tasasCambio.actualizadoEn).toLocaleString('es-VE')}</span></p>
                   )}
                   {tasasCambio?.desactualizada && <p className="mt-1 text-amber-600 dark:text-amber-300">Mostrando la última tasa disponible; la actualización externa falló.</p>}
                   <p className="mt-1">Las tarifas y pagos históricos siguen contabilizados en USD. Los cambios se reflejan automáticamente en las cuentas activas.</p>
@@ -2667,22 +2905,22 @@ export default function App() {
                   {cargandoTarifas ? 'Cargando tarifas…' : 'Guardar tarifas globales'}
                 </button>
               </form>
-            </section>
-
-            <section className={`space-y-5 rounded-3xl border p-5 shadow-sm ${darkMode ? 'border-slate-800 bg-slate-900 text-white' : 'border-orange-100 bg-white'}`}>
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <Activity size={18} className="text-[#FF5722]" />
-                    <h3 className="text-base font-black">Monitor de actividad</h3>
-                  </div>
-                  <p className="mt-1 text-xs text-slate-500">Las cuentas activas se actualizan automáticamente cada 15 segundos.</p>
-                </div>
-                <span className="inline-flex items-center gap-2 rounded-full bg-emerald-500/10 px-3 py-1.5 text-[10px] font-bold text-emerald-600 dark:text-emerald-400">
-                  <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-500" /> En vivo
-                </span>
               </div>
+            </AdminAccordion>
 
+            <AdminAccordion
+              title="Monitor de actividad"
+              description="Cuentas activas y acciones recientes."
+              darkMode={darkMode}
+              badge={
+                <span className="inline-flex items-center gap-2 rounded-full bg-emerald-500/10 px-3 py-1.5 text-[10px] font-bold text-emerald-600 dark:text-emerald-400">
+                  <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-500" />
+                  {metricasAdmin ? `${metricasAdmin.usuarios_activos} activos` : 'En vivo'}
+                </span>
+              }
+            >
+              <div className="space-y-5">
+              <p className="text-[11px] text-slate-500">Las cuentas activas se actualizan automáticamente cada 15 segundos.</p>
               <div className="grid gap-3 grid-cols-2 lg:grid-cols-5">
                 <article className={`rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-950/60' : 'border-slate-100 bg-slate-50'}`}>
                   <Users size={17} className="text-[#FF5722]" />
@@ -2745,8 +2983,15 @@ export default function App() {
                   </ol>
                 )}
               </div>
-            </section>
+              </div>
+            </AdminAccordion>
 
+            <AdminAccordion
+              title="Pagos y configuración"
+              description="Revisar pagos, editar Pago Móvil y acreditar saldo."
+              darkMode={darkMode}
+              badge={pagosPendientesAdmin.length > 0 ? <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-bold text-amber-800">{pagosPendientesAdmin.length} pendientes</span> : undefined}
+            >
             <div className="grid gap-6 lg:grid-cols-2">
               <div className={`space-y-4 rounded-3xl border p-5 shadow-sm ${darkMode ? 'border-slate-800 bg-slate-900 text-white' : 'border-orange-100 bg-white'}`}>
                 <div>
@@ -2824,12 +3069,15 @@ export default function App() {
                 </form>
               </div>
             </div>
+            </AdminAccordion>
 
-            <div className={`space-y-4 rounded-3xl border p-5 shadow-sm ${darkMode ? 'border-slate-800 bg-slate-900 text-white' : 'border-orange-100 bg-white'}`}>
-              <div>
-                <h3 className="text-base font-black">Historial de pagos y acciones</h3>
-                <p className="mt-1 text-xs text-slate-500">Últimos movimientos, con pedido, método, monto, referencia, actor y hora.</p>
-              </div>
+            <AdminAccordion
+              title="Historial de pagos y acciones"
+              description="Últimos movimientos, con pedido, método, monto, referencia, actor y hora."
+              darkMode={darkMode}
+              badge={historialPagosAdmin.length > 0 ? <span className="text-xs font-semibold text-slate-500">{historialPagosAdmin.length} movimientos</span> : undefined}
+            >
+              <div className="space-y-4">
               {historialPagosAdmin.length === 0 ? (
                 <p className="rounded-2xl bg-slate-50 p-4 text-xs text-slate-500 dark:bg-slate-950">Todavía no hay movimientos de pago.</p>
               ) : (
@@ -2849,7 +3097,8 @@ export default function App() {
                   ))}
                 </div>
               )}
-            </div>
+              </div>
+            </AdminAccordion>
           </section>
         )}
       </main>

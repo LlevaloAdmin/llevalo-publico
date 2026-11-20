@@ -25,6 +25,15 @@ const asegurarTablaConfiguracion = () => {
           CHECK (moneda_visualizacion IN ('VES', 'EUR', 'USDT')),
         actualizado_en TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
+      ALTER TABLE configuracion_tarifas
+        ADD COLUMN IF NOT EXISTS moneda_visualizacion VARCHAR(8) NOT NULL DEFAULT 'VES';
+      ALTER TABLE configuracion_tarifas
+        ADD COLUMN IF NOT EXISTS actualizado_en TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP;
+      ALTER TABLE configuracion_tarifas
+        DROP CONSTRAINT IF EXISTS configuracion_tarifas_moneda_visualizacion_check;
+      ALTER TABLE configuracion_tarifas
+        ADD CONSTRAINT configuracion_tarifas_moneda_visualizacion_check
+        CHECK (moneda_visualizacion IN ('VES', 'EUR', 'USDT'));
       INSERT INTO configuracion_tarifas (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
     `).then(() => undefined).catch((error) => {
       configuracionLista = null;

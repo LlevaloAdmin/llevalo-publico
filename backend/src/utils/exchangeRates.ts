@@ -14,13 +14,17 @@ interface CoinGeckoRate {
   tether?: { usd?: unknown };
 }
 
+interface CoinPaprikaRate {
+  quotes?: { USD?: { price?: unknown } };
+}
+
 const CACHE_MS = 60_000;
 let cachedRates: TasasCambio | null = null;
 let cachedAt = 0;
 
 const descargarJson = async <T>(url: string): Promise<T> => {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 5_000);
+  const timeout = setTimeout(() => controller.abort(), 10_000);
   try {
     const response = await fetch(url, { signal: controller.signal });
     if (!response.ok) throw new Error(`El proveedor de tasa respondió HTTP ${response.status}.`);
@@ -38,18 +42,42 @@ const validarTasa = (valor: unknown, proveedor: string): number => {
   return tasa;
 };
 
+const obtenerDolaresPorUsdt = async (): Promise<number> => {
+  let errorCoinGecko: unknown;
+  try {
+    const coinGecko = await descargarJson<CoinGeckoRate>(
+      'https://api.coingecko.com/api/v3/simple/price?ids=tether&vs_currencies=usd'
+    );
+    return validarTasa(coinGecko.tether?.usd, 'CoinGecko USDT');
+  } catch (error) {
+    errorCoinGecko = error;
+  }
+
+  try {
+    const coinPaprika = await descargarJson<CoinPaprikaRate>(
+      'https://api.coinpaprika.com/v1/tickers/usdt-tether'
+    );
+    return validarTasa(coinPaprika.quotes?.USD?.price, 'CoinPaprika USDT');
+  } catch (errorCoinPaprika) {
+    const mensajeError = (error: unknown) =>
+      error instanceof Error ? error.message : 'Error desconocido.';
+    throw new Error(
+      `No se pudo consultar USDT. CoinGecko: ${mensajeError(errorCoinGecko)} CoinPaprika: ${mensajeError(errorCoinPaprika)}`
+    );
+  }
+};
+
 export const obtenerTasasCambio = async (): Promise<TasasCambio> => {
   if (cachedRates && Date.now() - cachedAt < CACHE_MS) return cachedRates;
 
   try {
-    const [dolar, euro, tether] = await Promise.all([
+    const [dolar, euro, dolaresPorUsdt] = await Promise.all([
       descargarJson<DolarApiRate>('https://ve.dolarapi.com/v1/dolares/oficial'),
       descargarJson<DolarApiRate>('https://ve.dolarapi.com/v1/euros/oficial'),
-      descargarJson<CoinGeckoRate>('https://api.coingecko.com/api/v3/simple/price?ids=tether&vs_currencies=usd')
+      obtenerDolaresPorUsdt()
     ]);
     const bolivaresPorDolar = validarTasa(dolar.promedio, 'DolarAPI USD oficial');
     const bolivaresPorEuro = validarTasa(euro.promedio, 'DolarAPI EUR oficial');
-    const dolaresPorUsdt = validarTasa(tether.tether?.usd, 'CoinGecko USDT');
     cachedRates = {
       bolivaresPorDolar,
       eurosPorDolar: bolivaresPorDolar / bolivaresPorEuro,

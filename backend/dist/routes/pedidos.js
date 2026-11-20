@@ -9,6 +9,7 @@ const pricingSettings_1 = require("../utils/pricingSettings");
 const payments_1 = require("../utils/payments");
 const activity_1 = require("../utils/activity");
 const orderCode_1 = require("../utils/orderCode");
+const orderSearch_1 = require("../utils/orderSearch");
 const router = (0, express_1.Router)();
 const initTables = async () => {
     try {
@@ -155,13 +156,73 @@ const initTables = async () => {
 exports.tablasPedidosListas = initTables();
 router.use(auth_1.requireAuth);
 router.get('/admin/buscar', auth_1.requireAdmin, async (req, res) => {
+    const modo = typeof req.query.modo === 'string' ? req.query.modo : 'texto';
     const consulta = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 120) : '';
-    if (consulta.length < 2) {
+    const fecha = typeof req.query.fecha === 'string' ? req.query.fecha.trim() : '';
+    const hora = typeof req.query.hora === 'string' ? req.query.hora.trim() : '';
+    const desfaseQuery = req.query.desfase;
+    const desfase = desfaseQuery === undefined
+        ? 0
+        : typeof desfaseQuery === 'string' && desfaseQuery.trim()
+            ? Number(desfaseQuery)
+            : Number.NaN;
+    if (!['codigo', 'fecha', 'texto'].includes(modo)) {
+        return res.status(400).json({ error: 'El tipo de búsqueda no es válido.' });
+    }
+    if (modo === 'codigo' && (consulta.length < 2 || !/^\d+$/.test(consulta))) {
+        return res.status(400).json({ error: 'El código del pedido debe contener solo números.' });
+    }
+    if (modo === 'texto' && consulta.length < 2) {
         return res.status(400).json({ error: 'Escribe al menos dos caracteres para buscar.' });
     }
-    const digitos = consulta.replace(/\D/g, '');
-    const id = digitos && Number.isSafeInteger(Number(digitos)) ? Number(digitos) : null;
+    if (modo === 'fecha' && ((!fecha && !hora)
+        || (fecha && !(0, orderSearch_1.fechaIsoValida)(fecha))
+        || (hora && !(0, orderSearch_1.horaPedidoValida)(hora))
+        || !(0, orderSearch_1.desfaseHorarioValido)(desfase))) {
+        return res.status(400).json({ error: 'Selecciona una fecha válida, una hora válida o ambas.' });
+    }
     try {
+        const condiciones = [];
+        const parametros = [];
+        if (modo === 'codigo' || modo === 'texto') {
+            const patron = `$${parametros.length + 1}`;
+            parametros.push(`%${consulta}%`);
+            const idParam = `$${parametros.length + 1}`;
+            const digitos = consulta.replace(/\D/g, '');
+            const id = digitos && Number.isSafeInteger(Number(digitos)) ? Number(digitos) : null;
+            parametros.push(id);
+            condiciones.push(`(
+        concat('LLV-', lpad(p.id::text, 6, '0')) ILIKE ${patron}
+        OR p.id = ${idParam}
+        OR p.cliente_nombre ILIKE ${patron}
+        OR COALESCE(u.email, '') ILIKE ${patron}
+        OR COALESCE(u.telefono, '') ILIKE ${patron}
+        OR COALESCE(p.cliente_cedula, '') ILIKE ${patron}
+        OR COALESCE(p.repartidor_nombre, '') ILIKE ${patron}
+        OR p.tipo_servicio ILIKE ${patron}
+        OR p.descripcion ILIKE ${patron}
+        OR p.origen_texto ILIKE ${patron}
+        OR p.destino_texto ILIKE ${patron}
+        OR p.estado ILIKE ${patron}
+        OR COALESCE(p.motivo_cancelacion, '') ILIKE ${patron}
+        OR p.tarifa::text ILIKE ${patron}
+        OR p.distancia_km::text ILIKE ${patron}
+        OR COALESCE(p.referencia_pago, '') ILIKE ${patron}
+      )`);
+        }
+        let desfaseParam = '';
+        if (modo === 'fecha') {
+            parametros.push(desfase);
+            desfaseParam = `$${parametros.length}`;
+        }
+        if (modo === 'fecha' && fecha) {
+            parametros.push(fecha);
+            condiciones.push(`(p.creado_en - (${desfaseParam}::integer * INTERVAL '1 minute'))::date = $${parametros.length}::date`);
+        }
+        if (modo === 'fecha' && hora) {
+            parametros.push(hora);
+            condiciones.push(`date_trunc('minute', p.creado_en - (${desfaseParam}::integer * INTERVAL '1 minute'))::time = $${parametros.length}::time`);
+        }
         const result = await db_1.pool.query(`SELECT p.id, concat('LLV-', lpad(p.id::text, 6, '0')) AS codigo,
               p.cliente_nombre, u.email AS cliente_email, p.repartidor_nombre,
               p.tipo_servicio, p.descripcion, p.origen_texto, p.destino_texto,
@@ -169,24 +230,9 @@ router.get('/admin/buscar', auth_1.requireAdmin, async (req, res) => {
               p.creado_en, p.motivo_cancelacion
        FROM pedidos p
        LEFT JOIN usuarios u ON u.id = p.cliente_id
-       WHERE concat('LLV-', lpad(p.id::text, 6, '0')) ILIKE $1
-          OR p.id = $2
-          OR p.cliente_nombre ILIKE $1
-          OR COALESCE(u.email, '') ILIKE $1
-          OR COALESCE(u.telefono, '') ILIKE $1
-          OR COALESCE(p.cliente_cedula, '') ILIKE $1
-          OR COALESCE(p.repartidor_nombre, '') ILIKE $1
-          OR p.tipo_servicio ILIKE $1
-          OR p.descripcion ILIKE $1
-          OR p.origen_texto ILIKE $1
-          OR p.destino_texto ILIKE $1
-          OR p.estado ILIKE $1
-          OR COALESCE(p.motivo_cancelacion, '') ILIKE $1
-          OR p.tarifa::text ILIKE $1
-          OR p.distancia_km::text ILIKE $1
-          OR COALESCE(p.referencia_pago, '') ILIKE $1
+       WHERE ${condiciones.join(' AND ')}
        ORDER BY p.creado_en DESC, p.id DESC
-       LIMIT 100`, [`%${consulta}%`, id]);
+       LIMIT 100`, parametros);
         res.json({ pedidos: result.rows });
     }
     catch (error) {
