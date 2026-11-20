@@ -20,3 +20,6 @@ backend/dist/routes/*
 backend/dist/utils/*
 !backend/dist/utils/pricing.js
 !backend/dist/utils/payments.js
+!backend/dist/utils/exchangeRates.js
+!backend/dist/utils/orderCode.js
+!backend/dist/utils/pricingSettings.js

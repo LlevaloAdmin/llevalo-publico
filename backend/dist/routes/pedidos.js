@@ -5,8 +5,10 @@ const express_1 = require("express");
 const db_1 = require("../db");
 const auth_1 = require("../middleware/auth");
 const pricing_1 = require("../utils/pricing");
+const pricingSettings_1 = require("../utils/pricingSettings");
 const payments_1 = require("../utils/payments");
 const activity_1 = require("../utils/activity");
+const orderCode_1 = require("../utils/orderCode");
 const router = (0, express_1.Router)();
 const initTables = async () => {
     try {
@@ -152,6 +154,46 @@ const initTables = async () => {
 };
 exports.tablasPedidosListas = initTables();
 router.use(auth_1.requireAuth);
+router.get('/admin/buscar', auth_1.requireAdmin, async (req, res) => {
+    const consulta = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 120) : '';
+    if (consulta.length < 2) {
+        return res.status(400).json({ error: 'Escribe al menos dos caracteres para buscar.' });
+    }
+    const digitos = consulta.replace(/\D/g, '');
+    const id = digitos && Number.isSafeInteger(Number(digitos)) ? Number(digitos) : null;
+    try {
+        const result = await db_1.pool.query(`SELECT p.id, concat('LLV-', lpad(p.id::text, 6, '0')) AS codigo,
+              p.cliente_nombre, u.email AS cliente_email, p.repartidor_nombre,
+              p.tipo_servicio, p.descripcion, p.origen_texto, p.destino_texto,
+              p.distancia_km, p.tarifa, p.metodo_pago, p.estado_pago, p.estado,
+              p.creado_en, p.motivo_cancelacion
+       FROM pedidos p
+       LEFT JOIN usuarios u ON u.id = p.cliente_id
+       WHERE concat('LLV-', lpad(p.id::text, 6, '0')) ILIKE $1
+          OR p.id = $2
+          OR p.cliente_nombre ILIKE $1
+          OR COALESCE(u.email, '') ILIKE $1
+          OR COALESCE(u.telefono, '') ILIKE $1
+          OR COALESCE(p.cliente_cedula, '') ILIKE $1
+          OR COALESCE(p.repartidor_nombre, '') ILIKE $1
+          OR p.tipo_servicio ILIKE $1
+          OR p.descripcion ILIKE $1
+          OR p.origen_texto ILIKE $1
+          OR p.destino_texto ILIKE $1
+          OR p.estado ILIKE $1
+          OR COALESCE(p.motivo_cancelacion, '') ILIKE $1
+          OR p.tarifa::text ILIKE $1
+          OR p.distancia_km::text ILIKE $1
+          OR COALESCE(p.referencia_pago, '') ILIKE $1
+       ORDER BY p.creado_en DESC, p.id DESC
+       LIMIT 100`, [`%${consulta}%`, id]);
+        res.json({ pedidos: result.rows });
+    }
+    catch (error) {
+        console.error('Error buscando pedidos en administración:', error);
+        res.status(500).json({ error: 'No se pudieron buscar los pedidos.' });
+    }
+});
 const getOrderId = (value) => {
     if (typeof value !== 'string' && typeof value !== 'number')
         return null;
@@ -265,7 +307,15 @@ router.post('/', (0, auth_1.requireRole)('cliente'), async (req, res) => {
     const metodosPagoPermitidos = ['pago_movil', 'efectivo', 'saldo_corporativo'];
     const metodoPago = metodo_pago;
     const referenciaPago = typeof referencia_pago === 'string' ? referencia_pago.trim() : '';
-    const montoCalculado = (0, pricing_1.calcularTarifa)(tipo_servicio, distancia);
+    let tarifas;
+    try {
+        tarifas = await (0, pricingSettings_1.obtenerConfiguracionTarifas)();
+    }
+    catch (error) {
+        console.error('No se pudo cargar la configuración de tarifas al crear un pedido:', error);
+        return res.status(503).json({ error: 'No se pudieron cargar las tarifas actuales.' });
+    }
+    const montoCalculado = (0, pricing_1.calcularTarifa)(tipo_servicio, distancia, tarifas);
     if (!serviciosPermitidos.includes(tipo_servicio)
         || typeof descripcion !== 'string' || !descripcion.trim() || descripcion.length > 500
         || typeof origen_texto !== 'string' || !origen_texto.trim() || origen_texto.length > 300
@@ -459,7 +509,7 @@ router.post('/:id/postular', (0, auth_1.requireRole)('repartidor'), async (req, 
         const nueva = await client.query(`INSERT INTO postulaciones (pedido_id, repartidor_id, repartidor_nombre, vehiculo, placa, vehiculo_foto, calificacion, estado)
        VALUES ($1, $2, $3, $4, $5, $6, $7, 'pendiente') RETURNING *`, [id, authUser.id, repartidor.rows[0].nombre, vehiculo || 'Moto', placa || 'ABC-123', vehiculo_foto || '', 5.0]);
         await client.query("UPDATE pedidos SET estado = 'postulado' WHERE id = $1 AND estado = 'pendiente'", [id]);
-        await (0, activity_1.registrarActividad)(client, authUser.id, authUser.rol, 'repartidor_postulado', `Se postuló al pedido #${id}.`, id);
+        await (0, activity_1.registrarActividad)(client, authUser.id, authUser.rol, 'repartidor_postulado', `Se postuló al pedido ${(0, orderCode_1.codigoPedido)(id)}.`, id);
         await client.query('COMMIT');
         res.json({ mensaje: 'Postulación enviada', postulacion: nueva.rows[0] });
     }
@@ -499,7 +549,7 @@ router.delete('/:id/postular/:repartidor_id', (0, auth_1.requireRole)('repartido
             await client.query('ROLLBACK');
             return res.status(409).json({ error: 'La postulación ya no está activa.' });
         }
-        await (0, activity_1.registrarActividad)(client, authUser.id, authUser.rol, 'postulacion_cancelada', `Canceló su postulación al pedido #${id} (${pedido.rows[0].tipo_servicio}, $${pedido.rows[0].tarifa}). ${pedido.rows[0].origen_texto} → ${pedido.rows[0].destino_texto}.`, id);
+        await (0, activity_1.registrarActividad)(client, authUser.id, authUser.rol, 'postulacion_cancelada', `Canceló su postulación al pedido ${(0, orderCode_1.codigoPedido)(id)} (${pedido.rows[0].tipo_servicio}, $${pedido.rows[0].tarifa}). ${pedido.rows[0].origen_texto} → ${pedido.rows[0].destino_texto}.`, id);
         const restantes = await client.query("SELECT id FROM postulaciones WHERE pedido_id = $1 AND estado = 'pendiente'", [id]);
         if (restantes.rows.length === 0) {
             await client.query("UPDATE pedidos SET estado = 'pendiente', publicado_en = CURRENT_TIMESTAMP WHERE id = $1 AND estado = 'postulado'", [id]);
@@ -554,7 +604,7 @@ router.put('/:id/aceptar-postulacion', (0, auth_1.requireRole)('cliente'), async
         const pedidoActualizado = await client.query(`UPDATE pedidos
        SET estado = 'aceptado', repartidor_id = $1, repartidor_nombre = $2, repartidor_vehiculo = $3, repartidor_placa = $4, repartidor_vehiculo_foto = $5, repartidor_calificacion = $6
        WHERE id = $7 AND cliente_id = $8 RETURNING *`, [elegido.repartidor_id, elegido.repartidor_nombre, elegido.vehiculo, elegido.placa, elegido.vehiculo_foto, elegido.calificacion, id, authUser.id]);
-        await (0, activity_1.registrarActividad)(client, authUser.id, authUser.rol, 'repartidor_asignado', `Seleccionó a ${elegido.repartidor_nombre} para el pedido #${id}. ${pedidoActualizado.rows[0].tipo_servicio} por $${pedidoActualizado.rows[0].tarifa}. ${pedidoActualizado.rows[0].origen_texto} → ${pedidoActualizado.rows[0].destino_texto}.`, id);
+        await (0, activity_1.registrarActividad)(client, authUser.id, authUser.rol, 'repartidor_asignado', `Seleccionó a ${elegido.repartidor_nombre} para el pedido ${(0, orderCode_1.codigoPedido)(id)}. ${pedidoActualizado.rows[0].tipo_servicio} por $${pedidoActualizado.rows[0].tarifa}. ${pedidoActualizado.rows[0].origen_texto} → ${pedidoActualizado.rows[0].destino_texto}.`, id);
         await client.query('COMMIT');
         res.json({ mensaje: 'Repartidor seleccionado', pedido: pedidoActualizado.rows[0] });
     }
@@ -675,7 +725,7 @@ router.put('/:id/estado', async (req, res) => {
                         : 'El cliente canceló el pedido y solicitó verificar el pago para procesar el reembolso.'
                 ]);
             }
-            await (0, activity_1.registrarActividad)(client, authUser.id, authUser.rol, 'pedido_cancelado_cliente', `Canceló el pedido #${id} (${cancelado.rows[0].tipo_servicio}) por $${cancelado.rows[0].tarifa}, pagado con ${cancelado.rows[0].metodo_pago}. ${cancelado.rows[0].origen_texto} → ${cancelado.rows[0].destino_texto}.`, id);
+            await (0, activity_1.registrarActividad)(client, authUser.id, authUser.rol, 'pedido_cancelado_cliente', `Canceló el pedido ${(0, orderCode_1.codigoPedido)(id)} (${cancelado.rows[0].tipo_servicio}) por $${cancelado.rows[0].tarifa}, pagado con ${cancelado.rows[0].metodo_pago}. ${cancelado.rows[0].origen_texto} → ${cancelado.rows[0].destino_texto}.`, id);
             await client.query('COMMIT');
             const estadoPagoFinal = cancelado.rows[0].estado_pago;
             const mensaje = estadoPagoFinal === 'reembolso_pendiente'
@@ -741,7 +791,7 @@ router.put('/:id/estado', async (req, res) => {
                         : 'El repartidor canceló antes de iniciar; el pago móvil quedó pendiente de reembolso.'
                 ]);
             }
-            await (0, activity_1.registrarActividad)(client, authUser.id, authUser.rol, 'pedido_cancelado_repartidor', `Canceló el pedido #${id} antes de iniciar (${pedido.tipo_servicio}) por $${pedido.tarifa}, pagado con ${pedido.metodo_pago}. ${pedido.origen_texto} → ${pedido.destino_texto}.`, id);
+            await (0, activity_1.registrarActividad)(client, authUser.id, authUser.rol, 'pedido_cancelado_repartidor', `Canceló el pedido ${(0, orderCode_1.codigoPedido)(id)} antes de iniciar (${pedido.tipo_servicio}) por $${pedido.tarifa}, pagado con ${pedido.metodo_pago}. ${pedido.origen_texto} → ${pedido.destino_texto}.`, id);
             await client.query('COMMIT');
             return res.json({ mensaje: 'Trabajo cancelado. El cliente puede crear una nueva solicitud.', pedido: cancelado.rows[0] });
         }
@@ -803,7 +853,7 @@ router.put('/:id/estado', async (req, res) => {
                     update.rows[0].tarifa, 'El repartidor confirmó la recepción del efectivo en el punto de retiro.'
                 ]);
             }
-            await (0, activity_1.registrarActividad)(client, authUser.id, authUser.rol, 'pedido_iniciado', `Inició el pedido #${id} (${update.rows[0].tipo_servicio}) por $${update.rows[0].tarifa}.`, id);
+            await (0, activity_1.registrarActividad)(client, authUser.id, authUser.rol, 'pedido_iniciado', `Inició el pedido ${(0, orderCode_1.codigoPedido)(id)} (${update.rows[0].tipo_servicio}) por $${update.rows[0].tarifa}.`, id);
             await client.query('COMMIT');
             return res.json({ mensaje: 'Estado actualizado', pedido: update.rows[0] });
         }
@@ -835,7 +885,7 @@ router.put('/:id/estado', async (req, res) => {
                 return res.status(409).json({ error: 'El pedido no existe o no admite ese cambio de estado.' });
             }
             const pedido = resultado.rows[0];
-            await (0, activity_1.registrarActividad)(client, authUser.id, authUser.rol, 'pedido_completado', `Completó el pedido #${id} (${pedido.tipo_servicio}) por $${pedido.tarifa}.`, id);
+            await (0, activity_1.registrarActividad)(client, authUser.id, authUser.rol, 'pedido_completado', `Completó el pedido ${(0, orderCode_1.codigoPedido)(id)} (${pedido.tipo_servicio}) por $${pedido.tarifa}.`, id);
             await client.query('COMMIT');
             return res.json({ mensaje: 'Estado actualizado', pedido });
         }

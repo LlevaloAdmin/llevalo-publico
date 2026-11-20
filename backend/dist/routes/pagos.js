@@ -4,6 +4,10 @@ const express_1 = require("express");
 const db_1 = require("../db");
 const auth_1 = require("../middleware/auth");
 const pedidos_1 = require("./pedidos");
+const exchangeRates_1 = require("../utils/exchangeRates");
+const activity_1 = require("../utils/activity");
+const pricing_1 = require("../utils/pricing");
+const pricingSettings_1 = require("../utils/pricingSettings");
 const router = (0, express_1.Router)();
 let tablasPagoListas = null;
 const asegurarTablasPago = () => {
@@ -46,6 +50,47 @@ router.get('/config', async (req, res) => {
     catch (error) {
         console.error('Error al consultar métodos de pago:', error);
         res.status(500).json({ error: 'No se pudieron cargar los métodos de pago.' });
+    }
+});
+router.get('/tarifas', async (_req, res) => {
+    try {
+        const tarifas = await (0, pricingSettings_1.obtenerConfiguracionTarifas)();
+        try {
+            const tasas = await (0, exchangeRates_1.obtenerTasasCambio)();
+            res.json({ tarifas, tasas });
+        }
+        catch (error) {
+            console.error('No se pudieron consultar las tasas externas:', error);
+            res.json({ tarifas, tasas: null, errorTasas: 'La tasa de cambio no está disponible en este momento.' });
+        }
+    }
+    catch (error) {
+        console.error('Error al consultar tarifas:', error);
+        res.status(503).json({ error: 'No se pudieron cargar las tarifas configuradas. Inténtalo nuevamente.' });
+    }
+});
+router.put('/admin/tarifas', auth_1.requireAdmin, async (req, res) => {
+    const { enviosPorKm, viajesCortoPorKm, viajesLargoPorKm, tarifaMinima, monedaVisualizacion } = req.body ?? {};
+    const configuracionRecibida = { enviosPorKm, viajesCortoPorKm, viajesLargoPorKm, tarifaMinima, monedaVisualizacion };
+    if (!(0, pricing_1.esConfiguracionTarifasValida)(configuracionRecibida)) {
+        return res.status(400).json({ error: 'Revisa las tarifas y selecciona una moneda de visualización válida.' });
+    }
+    try {
+        const tarifas = await (0, pricingSettings_1.guardarConfiguracionTarifas)(configuracionRecibida);
+        const actorId = req.authUser?.id;
+        if (actorId) {
+            try {
+                await (0, activity_1.registrarActividadDirecta)(actorId, 'admin', 'configuracion_tarifas_actualizada', `Actualizó tarifas por kilómetro y moneda de visualización (${tarifas.monedaVisualizacion}).`);
+            }
+            catch (activityError) {
+                console.error('No se pudo registrar la actualización de tarifas:', activityError);
+            }
+        }
+        res.json({ tarifas });
+    }
+    catch (error) {
+        console.error('Error al guardar tarifas:', error);
+        res.status(500).json({ error: 'No se pudieron guardar las tarifas.' });
     }
 });
 router.get('/admin/pendientes', auth_1.requireAdmin, async (_req, res) => {
@@ -193,8 +238,8 @@ router.post('/admin/saldo', auth_1.requireAdmin, async (req, res) => {
     if (typeof email !== 'string' || email.length > 254
         || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
         || !Number.isFinite(monto) || monto <= 0 || monto > 10000
-        || nota.length > 250) {
-        return res.status(400).json({ error: 'Los datos de la recarga no son válidos.' });
+        || !nota || nota.length > 250) {
+        return res.status(400).json({ error: 'Indica un cliente, un monto válido y la referencia del abono verificado.' });
     }
     let client = null;
     try {
@@ -214,7 +259,8 @@ router.post('/admin/saldo', auth_1.requireAdmin, async (req, res) => {
        RETURNING saldo`, [clienteId, monto]);
         await client.query(`INSERT INTO movimientos_saldo
        (cliente_id, monto, saldo_resultante, tipo, administrador_id, nota)
-       VALUES ($1, $2, $3, 'recarga', $4, $5)`, [clienteId, monto, saldo.rows[0].saldo, adminId, nota || 'Recarga corporativa']);
+       VALUES ($1, $2, $3, 'recarga', $4, $5)`, [clienteId, monto, saldo.rows[0].saldo, adminId, nota]);
+        await (0, activity_1.registrarActividad)(client, adminId, 'admin', 'saldo_acreditado', `Acreditó $${monto.toFixed(2)} de saldo corporativo a ${email.trim().toLowerCase()}. ${nota || 'Sin referencia adicional.'}`);
         await client.query('COMMIT');
         res.json({ saldoCorporativo: Number(saldo.rows[0].saldo) });
     }

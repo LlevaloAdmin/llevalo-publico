@@ -1,10 +1,12 @@
 import { Router, Request, Response } from 'express';
 import type { PoolClient } from 'pg';
 import { pool } from '../db';
-import { requireAuth, requireRole } from '../middleware/auth';
+import { requireAdmin, requireAuth, requireRole } from '../middleware/auth';
 import { calcularTarifa } from '../utils/pricing';
+import { obtenerConfiguracionTarifas } from '../utils/pricingSettings';
 import { estadoPagoAlCancelar, referenciaPagoValida, solicitudExpirada } from '../utils/payments';
 import { registrarActividad } from '../utils/activity';
+import { codigoPedido } from '../utils/orderCode';
 
 const router = Router();
 
@@ -153,6 +155,50 @@ export const tablasPedidosListas = initTables();
 
 router.use(requireAuth);
 
+router.get('/admin/buscar', requireAdmin, async (req: Request, res: Response): Promise<any> => {
+  const consulta = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 120) : '';
+  if (consulta.length < 2) {
+    return res.status(400).json({ error: 'Escribe al menos dos caracteres para buscar.' });
+  }
+  const digitos = consulta.replace(/\D/g, '');
+  const id = digitos && Number.isSafeInteger(Number(digitos)) ? Number(digitos) : null;
+
+  try {
+    const result = await pool.query(
+      `SELECT p.id, concat('LLV-', lpad(p.id::text, 6, '0')) AS codigo,
+              p.cliente_nombre, u.email AS cliente_email, p.repartidor_nombre,
+              p.tipo_servicio, p.descripcion, p.origen_texto, p.destino_texto,
+              p.distancia_km, p.tarifa, p.metodo_pago, p.estado_pago, p.estado,
+              p.creado_en, p.motivo_cancelacion
+       FROM pedidos p
+       LEFT JOIN usuarios u ON u.id = p.cliente_id
+       WHERE concat('LLV-', lpad(p.id::text, 6, '0')) ILIKE $1
+          OR p.id = $2
+          OR p.cliente_nombre ILIKE $1
+          OR COALESCE(u.email, '') ILIKE $1
+          OR COALESCE(u.telefono, '') ILIKE $1
+          OR COALESCE(p.cliente_cedula, '') ILIKE $1
+          OR COALESCE(p.repartidor_nombre, '') ILIKE $1
+          OR p.tipo_servicio ILIKE $1
+          OR p.descripcion ILIKE $1
+          OR p.origen_texto ILIKE $1
+          OR p.destino_texto ILIKE $1
+          OR p.estado ILIKE $1
+          OR COALESCE(p.motivo_cancelacion, '') ILIKE $1
+          OR p.tarifa::text ILIKE $1
+          OR p.distancia_km::text ILIKE $1
+          OR COALESCE(p.referencia_pago, '') ILIKE $1
+       ORDER BY p.creado_en DESC, p.id DESC
+       LIMIT 100`,
+      [`%${consulta}%`, id]
+    );
+    res.json({ pedidos: result.rows });
+  } catch (error) {
+    console.error('Error buscando pedidos en administración:', error);
+    res.status(500).json({ error: 'No se pudieron buscar los pedidos.' });
+  }
+});
+
 const getOrderId = (value: string | string[] | number | undefined): number | null => {
   if (typeof value !== 'string' && typeof value !== 'number') return null;
   if (typeof value === 'string' && !/^\d+$/.test(value)) return null;
@@ -290,7 +336,14 @@ router.post('/', requireRole('cliente'), async (req: Request, res: Response): Pr
   const metodosPagoPermitidos = ['pago_movil', 'efectivo', 'saldo_corporativo'];
   const metodoPago = metodo_pago;
   const referenciaPago = typeof referencia_pago === 'string' ? referencia_pago.trim() : '';
-  const montoCalculado = calcularTarifa(tipo_servicio, distancia);
+  let tarifas;
+  try {
+    tarifas = await obtenerConfiguracionTarifas();
+  } catch (error) {
+    console.error('No se pudo cargar la configuración de tarifas al crear un pedido:', error);
+    return res.status(503).json({ error: 'No se pudieron cargar las tarifas actuales.' });
+  }
+  const montoCalculado = calcularTarifa(tipo_servicio, distancia, tarifas);
 
   if (!serviciosPermitidos.includes(tipo_servicio)
     || typeof descripcion !== 'string' || !descripcion.trim() || descripcion.length > 500
@@ -554,7 +607,7 @@ router.post('/:id/postular', requireRole('repartidor'), async (req: Request, res
       authUser.id,
       authUser.rol,
       'repartidor_postulado',
-      `Se postuló al pedido #${id}.`,
+      `Se postuló al pedido ${codigoPedido(id)}.`,
       id
     );
     await client.query('COMMIT');
@@ -605,7 +658,7 @@ router.delete('/:id/postular/:repartidor_id', requireRole('repartidor'), async (
       authUser.id,
       authUser.rol,
       'postulacion_cancelada',
-      `Canceló su postulación al pedido #${id} (${pedido.rows[0].tipo_servicio}, $${pedido.rows[0].tarifa}). ${pedido.rows[0].origen_texto} → ${pedido.rows[0].destino_texto}.`,
+      `Canceló su postulación al pedido ${codigoPedido(id)} (${pedido.rows[0].tipo_servicio}, $${pedido.rows[0].tarifa}). ${pedido.rows[0].origen_texto} → ${pedido.rows[0].destino_texto}.`,
       id
     );
 
@@ -684,7 +737,7 @@ router.put('/:id/aceptar-postulacion', requireRole('cliente'), async (req: Reque
       authUser.id,
       authUser.rol,
       'repartidor_asignado',
-      `Seleccionó a ${elegido.repartidor_nombre} para el pedido #${id}. ${pedidoActualizado.rows[0].tipo_servicio} por $${pedidoActualizado.rows[0].tarifa}. ${pedidoActualizado.rows[0].origen_texto} → ${pedidoActualizado.rows[0].destino_texto}.`,
+      `Seleccionó a ${elegido.repartidor_nombre} para el pedido ${codigoPedido(id)}. ${pedidoActualizado.rows[0].tipo_servicio} por $${pedidoActualizado.rows[0].tarifa}. ${pedidoActualizado.rows[0].origen_texto} → ${pedidoActualizado.rows[0].destino_texto}.`,
       id
     );
 
@@ -841,7 +894,7 @@ router.put('/:id/estado', async (req: Request, res: Response): Promise<any> => {
         authUser.id,
         authUser.rol,
         'pedido_cancelado_cliente',
-        `Canceló el pedido #${id} (${cancelado.rows[0].tipo_servicio}) por $${cancelado.rows[0].tarifa}, pagado con ${cancelado.rows[0].metodo_pago}. ${cancelado.rows[0].origen_texto} → ${cancelado.rows[0].destino_texto}.`,
+        `Canceló el pedido ${codigoPedido(id)} (${cancelado.rows[0].tipo_servicio}) por $${cancelado.rows[0].tarifa}, pagado con ${cancelado.rows[0].metodo_pago}. ${cancelado.rows[0].origen_texto} → ${cancelado.rows[0].destino_texto}.`,
         id
       );
       await client.query('COMMIT');
@@ -930,7 +983,7 @@ router.put('/:id/estado', async (req: Request, res: Response): Promise<any> => {
         authUser.id,
         authUser.rol,
         'pedido_cancelado_repartidor',
-        `Canceló el pedido #${id} antes de iniciar (${pedido.tipo_servicio}) por $${pedido.tarifa}, pagado con ${pedido.metodo_pago}. ${pedido.origen_texto} → ${pedido.destino_texto}.`,
+        `Canceló el pedido ${codigoPedido(id)} antes de iniciar (${pedido.tipo_servicio}) por $${pedido.tarifa}, pagado con ${pedido.metodo_pago}. ${pedido.origen_texto} → ${pedido.destino_texto}.`,
         id
       );
       await client.query('COMMIT');
@@ -1007,7 +1060,7 @@ router.put('/:id/estado', async (req: Request, res: Response): Promise<any> => {
         authUser.id,
         authUser.rol,
         'pedido_iniciado',
-        `Inició el pedido #${id} (${update.rows[0].tipo_servicio}) por $${update.rows[0].tarifa}.`,
+        `Inició el pedido ${codigoPedido(id)} (${update.rows[0].tipo_servicio}) por $${update.rows[0].tarifa}.`,
         id
       );
       await client.query('COMMIT');
@@ -1046,7 +1099,7 @@ router.put('/:id/estado', async (req: Request, res: Response): Promise<any> => {
         authUser.id,
         authUser.rol,
         'pedido_completado',
-        `Completó el pedido #${id} (${pedido.tipo_servicio}) por $${pedido.tarifa}.`,
+        `Completó el pedido ${codigoPedido(id)} (${pedido.tipo_servicio}) por $${pedido.tarifa}.`,
         id
       );
       await client.query('COMMIT');

@@ -70,11 +70,11 @@ router.post('/register', async (req: Request, res: Response): Promise<any> => {
 
   if (typeof nombre !== 'string' || !nombre.trim() || nombre.length > 120
     || typeof email !== 'string' || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+    || typeof cedula !== 'string' || !/^V-\d{5,10}$/i.test(cedula.trim())
     || typeof password !== 'string'
     || password.length < 8 || password.length > 128 || !/[A-Z]/.test(password) || !/[a-z]/.test(password)
     || !/\d/.test(password) || !/[^A-Za-z0-9]/.test(password)
     || (telefono !== undefined && (typeof telefono !== 'string' || telefono.length > 30))
-    || (cedula !== undefined && (typeof cedula !== 'string' || cedula.length > 30))
     || (foto !== undefined && (typeof foto !== 'string' || foto.length > 1_000_000))
     || (vehiculo !== undefined && (typeof vehiculo !== 'string' || vehiculo.length > 100))
     || (placa !== undefined && (typeof placa !== 'string' || placa.length > 30))
@@ -290,9 +290,8 @@ router.put('/profile', requireAuth, async (req: Request, res: Response): Promise
   const authUser = req.authUser;
   if (!authUser) return res.status(401).json({ error: 'Sesión inválida.' });
 
-  const { cedula, foto, vehiculo, placa, vehiculo_foto } = req.body ?? {};
-  if (typeof cedula !== 'string' || cedula.length > 30
-    || typeof foto !== 'string' || foto.length > 1_000_000
+  const { foto, vehiculo, placa, vehiculo_foto } = req.body ?? {};
+  if (typeof foto !== 'string' || foto.length > 1_000_000
     || (authUser.rol === 'repartidor' && (
       typeof vehiculo !== 'string' || !vehiculo.trim() || vehiculo.length > 100
       || typeof placa !== 'string' || placa.length > 30
@@ -306,16 +305,16 @@ router.put('/profile', requireAuth, async (req: Request, res: Response): Promise
     const result = authUser.rol === 'repartidor'
       ? await pool.query(
         `UPDATE usuarios
-         SET cedula = $1, foto = $2, vehiculo = $3, placa = $4, vehiculo_foto = $5
-         WHERE id = $6 AND (rol = 'repartidor' OR es_admin = TRUE)
+         SET foto = $1, vehiculo = $2, placa = $3, vehiculo_foto = $4
+         WHERE id = $5 AND (rol = 'repartidor' OR es_admin = TRUE)
          RETURNING id, nombre, email, telefono, rol, cedula, foto, vehiculo, placa, vehiculo_foto, calificacion, es_admin`,
-        [cedula.trim(), foto, vehiculo.trim(), placa.trim(), vehiculo_foto, authUser.id]
+        [foto, vehiculo.trim(), placa.trim(), vehiculo_foto, authUser.id]
       )
       : await pool.query(
-        `UPDATE usuarios SET cedula = $1, foto = $2
-         WHERE id = $3 AND (rol = 'cliente' OR es_admin = TRUE)
+        `UPDATE usuarios SET foto = $1
+         WHERE id = $2 AND (rol = 'cliente' OR es_admin = TRUE)
          RETURNING id, nombre, email, telefono, rol, cedula, foto, vehiculo, placa, vehiculo_foto, calificacion, es_admin`,
-        [cedula.trim(), foto, authUser.id]
+        [foto, authUser.id]
       );
 
     if (result.rows.length === 0) return res.status(404).json({ error: 'No se encontró el perfil de la cuenta.' });

@@ -3,6 +3,10 @@ import type { PoolClient } from 'pg';
 import { pool } from '../db';
 import { requireAdmin, requireAuth } from '../middleware/auth';
 import { tablasPedidosListas } from './pedidos';
+import { obtenerTasasCambio } from '../utils/exchangeRates';
+import { registrarActividad, registrarActividadDirecta } from '../utils/activity';
+import { esConfiguracionTarifasValida } from '../utils/pricing';
+import { guardarConfiguracionTarifas, obtenerConfiguracionTarifas } from '../utils/pricingSettings';
 
 const router = Router();
 let tablasPagoListas: Promise<void> | null = null;
@@ -50,6 +54,51 @@ router.get('/config', async (req: Request, res: Response): Promise<any> => {
   } catch (error) {
     console.error('Error al consultar métodos de pago:', error);
     res.status(500).json({ error: 'No se pudieron cargar los métodos de pago.' });
+  }
+});
+
+router.get('/tarifas', async (_req: Request, res: Response): Promise<any> => {
+  try {
+    const tarifas = await obtenerConfiguracionTarifas();
+    try {
+      const tasas = await obtenerTasasCambio();
+      res.json({ tarifas, tasas });
+    } catch (error) {
+      console.error('No se pudieron consultar las tasas externas:', error);
+      res.json({ tarifas, tasas: null, errorTasas: 'La tasa de cambio no está disponible en este momento.' });
+    }
+  } catch (error) {
+    console.error('Error al consultar tarifas:', error);
+    res.status(503).json({ error: 'No se pudieron cargar las tarifas configuradas. Inténtalo nuevamente.' });
+  }
+});
+
+router.put('/admin/tarifas', requireAdmin, async (req: Request, res: Response): Promise<any> => {
+  const { enviosPorKm, viajesCortoPorKm, viajesLargoPorKm, tarifaMinima, monedaVisualizacion } = req.body ?? {};
+  const configuracionRecibida: unknown = { enviosPorKm, viajesCortoPorKm, viajesLargoPorKm, tarifaMinima, monedaVisualizacion };
+  if (!esConfiguracionTarifasValida(configuracionRecibida)) {
+    return res.status(400).json({ error: 'Revisa las tarifas y selecciona una moneda de visualización válida.' });
+  }
+
+  try {
+    const tarifas = await guardarConfiguracionTarifas(configuracionRecibida);
+    const actorId = req.authUser?.id;
+    if (actorId) {
+      try {
+        await registrarActividadDirecta(
+          actorId,
+          'admin',
+          'configuracion_tarifas_actualizada',
+          `Actualizó tarifas por kilómetro y moneda de visualización (${tarifas.monedaVisualizacion}).`
+        );
+      } catch (activityError) {
+        console.error('No se pudo registrar la actualización de tarifas:', activityError);
+      }
+    }
+    res.json({ tarifas });
+  } catch (error) {
+    console.error('Error al guardar tarifas:', error);
+    res.status(500).json({ error: 'No se pudieron guardar las tarifas.' });
   }
 });
 
@@ -215,8 +264,8 @@ router.post('/admin/saldo', requireAdmin, async (req: Request, res: Response): P
   if (typeof email !== 'string' || email.length > 254
     || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
     || !Number.isFinite(monto) || monto <= 0 || monto > 10000
-    || nota.length > 250) {
-    return res.status(400).json({ error: 'Los datos de la recarga no son válidos.' });
+    || !nota || nota.length > 250) {
+    return res.status(400).json({ error: 'Indica un cliente, un monto válido y la referencia del abono verificado.' });
   }
 
   let client: PoolClient | null = null;
@@ -246,7 +295,14 @@ router.post('/admin/saldo', requireAdmin, async (req: Request, res: Response): P
       `INSERT INTO movimientos_saldo
        (cliente_id, monto, saldo_resultante, tipo, administrador_id, nota)
        VALUES ($1, $2, $3, 'recarga', $4, $5)`,
-      [clienteId, monto, saldo.rows[0].saldo, adminId, nota || 'Recarga corporativa']
+      [clienteId, monto, saldo.rows[0].saldo, adminId, nota]
+    );
+    await registrarActividad(
+      client,
+      adminId,
+      'admin',
+      'saldo_acreditado',
+      `Acreditó $${monto.toFixed(2)} de saldo corporativo a ${email.trim().toLowerCase()}. ${nota || 'Sin referencia adicional.'}`
     );
     await client.query('COMMIT');
     res.json({ saldoCorporativo: Number(saldo.rows[0].saldo) });

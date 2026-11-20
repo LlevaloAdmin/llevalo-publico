@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Activity, Bike, MapPin, ArrowRight, User, Eye, EyeOff, Clock, Send, Power, Star, Moon, Sun, DollarSign, XCircle, Navigation, CheckCircle2, Circle, Package, CarFront, LogOut, Users, UserRound } from 'lucide-react';
+import { Activity, Bike, MapPin, ArrowLeft, ArrowRight, Camera, User, Eye, EyeOff, Clock, Send, Power, Star, Moon, Sun, DollarSign, XCircle, Navigation, CheckCircle2, Circle, Package, CarFront, LogOut, Users, UserRound } from 'lucide-react';
 import { App as CapacitorApp } from '@capacitor/app';
 import { StatusBar, Style } from '@capacitor/status-bar';
-import { Capacitor } from '@capacitor/core';
+import { Capacitor, type PluginListenerHandle } from '@capacitor/core';
 
 const MapaLibre = React.lazy(() => import('./MapaLibre'));
 
@@ -221,6 +221,30 @@ interface MetricasAdmin {
   repartidores_activos: number;
 }
 
+type MonedaVisualizacion = 'VES' | 'EUR' | 'USDT';
+
+interface ConfiguracionTarifas {
+  enviosPorKm: number;
+  viajesCortoPorKm: number;
+  viajesLargoPorKm: number;
+  tarifaMinima: number;
+  monedaVisualizacion: MonedaVisualizacion;
+}
+
+interface TasasCambio {
+  bolivaresPorDolar: number;
+  eurosPorDolar: number;
+  usdtPorDolar: number;
+  actualizadoEn: string;
+  desactualizada: boolean;
+}
+
+interface PedidoBusquedaAdmin extends PedidoReal {
+  codigo: string;
+  cliente_email: string;
+  repartidor_nombre?: string;
+}
+
 const API_URL = import.meta.env.VITE_API_URL?.trim().replace(/\/+$/, '')
   || (import.meta.env.DEV ? `http://${window.location.hostname}:5000` : '');
 
@@ -248,8 +272,25 @@ const mensajeErrorApi = async (response: Response, mensajePredeterminado: string
 
 const horaInicial = Date.now();
 
+const codigoPedido = (id: number) => `LLV-${String(id).padStart(6, '0')}`;
+
+const convertirDolares = (monto: number, moneda: MonedaVisualizacion, tasas: TasasCambio) => {
+  if (moneda === 'VES') return monto * tasas.bolivaresPorDolar;
+  if (moneda === 'EUR') return monto * tasas.eurosPorDolar;
+  return monto * tasas.usdtPorDolar;
+};
+
+const formatoMoneda = (monto: number, moneda: MonedaVisualizacion) => {
+  const formatted = monto.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (moneda === 'VES') return `Bs. ${formatted}`;
+  if (moneda === 'EUR') return `€${formatted}`;
+  return `${formatted} USDT`;
+};
+
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'home' | 'cliente' | 'repartidor' | 'perfil' | 'auth' | 'admin'>('home');
+  type Tab = 'home' | 'cliente' | 'repartidor' | 'perfil' | 'auth' | 'admin';
+  const [activeTab, setActiveTab] = useState<Tab>('home');
+  const historialNavegacionRef = useRef<Tab[]>([]);
   const [serviceType, setServiceType] = useState<TipoServicio>('envios');
   
   const [darkMode, setDarkMode] = useState<boolean>(() => localStorage.getItem('llevalo_dark_mode') === 'true');
@@ -288,6 +329,7 @@ export default function App() {
   const [telefono, setTelefono] = useState('');
   const [cedulaNumero, setCedulaNumero] = useState(() => usuario?.cedula?.replace(/^[VvEe]-/, '') || '');
   const [fotoLocal, setFotoLocal] = useState(() => usuario?.foto || '');
+  const inputFotoPerfilRef = useRef<HTMLInputElement>(null);
   const fotoVehiculoLocal = usuario?.vehiculo_foto || '';
   const [tipoVehiculo, setTipoVehiculo] = useState(() => usuario?.vehiculo || 'Moto Suzuki GN 125');
   const [placaVehiculo, setPlacaVehiculo] = useState(() => usuario?.placa || '');
@@ -332,18 +374,55 @@ export default function App() {
     origen: null,
     destino: null
   });
+  const geocodificacionGPSRef = useRef<AbortController | null>(null);
   const [distanciaKm, setDistanciaKm] = useState<number>(0);
   const [tiempoEstimadoMin, setTiempoEstimadoMin] = useState<number>(0);
   
   const rutaCompletaLista = Boolean(coordsOrigen && coordsDestino && origenInput.trim() && destinoInput.trim());
+  const esperandoNombreDireccion = [origenInput, destinoInput]
+    .some(input => /^Buscando (sector cercano|lugar)/i.test(input));
+
+  const [configuracionTarifas, setConfiguracionTarifas] = useState<ConfiguracionTarifas | null>(null);
+  const [tasasCambio, setTasasCambio] = useState<TasasCambio | null>(null);
+  const [cargandoTarifas, setCargandoTarifas] = useState(false);
+  const [errorTarifas, setErrorTarifas] = useState('');
+  const [busquedaAdmin, setBusquedaAdmin] = useState('');
+  const [resultadosBusquedaAdmin, setResultadosBusquedaAdmin] = useState<PedidoBusquedaAdmin[]>([]);
+  const [cargandoBusquedaAdmin, setCargandoBusquedaAdmin] = useState(false);
+  const [configuracionTarifasAdmin, setConfiguracionTarifasAdmin] = useState<ConfiguracionTarifas>({
+    enviosPorKm: 0.5,
+    viajesCortoPorKm: 0.38,
+    viajesLargoPorKm: 0.28,
+    tarifaMinima: 1.5,
+    monedaVisualizacion: 'VES'
+  });
 
   const costoPorKm = serviceType === 'viajes'
-    ? (distanciaKm >= 1 ? 0.28 : 0.38)
-    : 0.50;
-  const tarifaTotal = rutaCompletaLista ? Math.max(1.5, distanciaKm * costoPorKm).toFixed(2) : '0.00';
-
-  const [tasaBCV, setTasaBCV] = useState<number>(904.45);
-  const tarifaEnBolivares = (parseFloat(tarifaTotal) * tasaBCV).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    ? (distanciaKm >= 1
+      ? configuracionTarifas?.viajesLargoPorKm ?? 0.28
+      : configuracionTarifas?.viajesCortoPorKm ?? 0.38)
+    : configuracionTarifas?.enviosPorKm ?? 0.5;
+  const tarifaTotal = rutaCompletaLista
+    ? Math.max(configuracionTarifas?.tarifaMinima ?? 1.5, distanciaKm * costoPorKm).toFixed(2)
+    : '0.00';
+  const tarifaUsd = Number(tarifaTotal);
+  const tarifaEnMonedaSeleccionada = configuracionTarifas && tasasCambio
+    ? formatoMoneda(convertirDolares(tarifaUsd, configuracionTarifas.monedaVisualizacion, tasasCambio), configuracionTarifas.monedaVisualizacion)
+    : null;
+  const tarifaEnBolivares = tasasCambio
+    ? formatoMoneda(convertirDolares(tarifaUsd, 'VES', tasasCambio), 'VES')
+    : null;
+  const mostrarMontoPedido = (monto: string | number) => {
+    const montoUsd = Number(monto);
+    if (!Number.isFinite(montoUsd)) return 'Monto no disponible';
+    const baseUsd = `$${montoUsd.toFixed(2)} USD`;
+    if (!configuracionTarifas || !tasasCambio) return baseUsd;
+    const equivalente = formatoMoneda(
+      convertirDolares(montoUsd, configuracionTarifas.monedaVisualizacion, tasasCambio),
+      configuracionTarifas.monedaVisualizacion
+    );
+    return `${equivalente} aprox. · ${baseUsd}`;
+  };
 
   const [pedidosReales, setPedidosReales] = useState<PedidoReal[]>([]);
   const [postulacionesReales, setPostulacionesReales] = useState<Postulacion[]>([]);
@@ -369,6 +448,54 @@ export default function App() {
   const [horaActual, setHoraActual] = useState(horaInicial);
   const usuarioId = usuario?.id;
 
+  const navegarA = (tab: Tab) => {
+    if (tab === activeTab) return;
+    if (tab === 'home') historialNavegacionRef.current = [];
+    else historialNavegacionRef.current.push(activeTab);
+    setActiveTab(tab);
+    window.history.pushState({ llevaloNavigation: true, tab }, '');
+  };
+
+  const volverMenu = useCallback(() => {
+    if (activeTab === 'auth' && authMode !== 'choice') {
+      setAuthMode('choice');
+      return;
+    }
+    const anterior = historialNavegacionRef.current.pop();
+    if (anterior) setActiveTab(anterior);
+    else if (activeTab !== 'home') setActiveTab('home');
+  }, [activeTab, authMode]);
+
+  useEffect(() => {
+    const alRetroceder = () => {
+      const modoAuthAnterior = activeTab === 'auth' && authMode !== 'choice';
+      volverMenu();
+      if (modoAuthAnterior) window.history.pushState({ llevaloNavigation: true, tab: 'auth' }, '');
+    };
+    window.addEventListener('popstate', alRetroceder);
+    return () => window.removeEventListener('popstate', alRetroceder);
+  }, [activeTab, authMode, volverMenu]);
+
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    let descartado = false;
+    let listener: PluginListenerHandle | undefined;
+    void CapacitorApp.addListener('backButton', () => {
+      if (activeTab === 'home' && historialNavegacionRef.current.length === 0) {
+        void CapacitorApp.exitApp();
+      } else {
+        volverMenu();
+      }
+    }).then(handle => {
+      if (descartado) void handle.remove();
+      else listener = handle;
+    }).catch(error => console.error('No se pudo registrar el botón atrás:', error));
+    return () => {
+      descartado = true;
+      void listener?.remove();
+    };
+  }, [activeTab, volverMenu]);
+
   useEffect(() => {
     const alDesconectar = () => setSinConexion(true);
     const alConectar = () => setSinConexion(false);
@@ -392,29 +519,6 @@ export default function App() {
     };
     void setupFullScreen();
   }, [darkMode]);
-
-  const actualizarTasaBCVEnVivo = async () => {
-    try {
-      const res = await fetch('https://ve.dolarapi.com/v1/dolares/oficial');
-      if (res.ok) {
-        const data = await res.json();
-        if (data && data.promedio) {
-          setTasaBCV(Number(data.promedio));
-        }
-      }
-    } catch {
-      console.warn('No se pudo actualizar tasa BCV en tiempo real, usando respaldo.');
-    }
-  };
-
-  useEffect(() => {
-    // Both calls apply server responses asynchronously, after this effect starts the requests.
-    // oxlint-disable-next-line react/set-state-in-effect
-    actualizarTasaBCVEnVivo();
-    const intervalTasa = setInterval(actualizarTasaBCVEnVivo, 300000);
-
-    return () => clearInterval(intervalTasa);
-  }, []);
 
   const toggleDarkMode = () => {
     const nuevo = !darkMode;
@@ -453,6 +557,9 @@ export default function App() {
         localStorage.removeItem('llevalo_token');
         localStorage.removeItem('llevalo_usuario');
         setUsuario(null);
+        setFotoLocal('');
+        setCedulaNumero('');
+        historialNavegacionRef.current = [];
         setActiveTab('home');
       }
     } catch (e) { console.error('Error sincronizando:', e); }
@@ -544,6 +651,7 @@ export default function App() {
 
   const manejarClicEnMapa = async (lat: number, lng: number) => {
     if (!modoSeleccionMapa) return;
+    geocodificacionGPSRef.current?.abort();
     const tipoActual = modoSeleccionMapa;
     setErrorGeocoding('');
     setErrorRuta('');
@@ -596,6 +704,7 @@ export default function App() {
   };
 
   const obtenerUbicacionActual = (objetivo: 'origen' | 'destino' | null = null) => {
+    geocodificacionGPSRef.current?.abort();
     objetivoUbicacionRef.current = objetivo;
     setErrorUbicacion('');
     setErrorRuta('');
@@ -617,21 +726,51 @@ export default function App() {
         setCoordsUsuarioGPS(ubicacion);
         setRecentrarMapa(value => value + 1);
 
-        if (objetivoUbicacionRef.current === 'origen') {
+        const objetivoActual = objetivoUbicacionRef.current;
+        if (objetivoActual === 'origen') {
           setDistanciaKm(0);
           setTiempoEstimadoMin(0);
           setCoordsOrigen(ubicacion);
-          setOrigenInput('Mi ubicación actual');
+          setOrigenInput('Buscando sector cercano…');
           setSugerenciasOrigen([]);
-        } else if (objetivoUbicacionRef.current === 'destino') {
+        } else if (objetivoActual === 'destino') {
           setDistanciaKm(0);
           setTiempoEstimadoMin(0);
           setCoordsDestino(ubicacion);
-          setDestinoInput('Mi ubicación actual');
+          setDestinoInput('Buscando sector cercano…');
           setSugerenciasDestino([]);
         }
 
         setUbicacionCargando(false);
+        if (objetivoActual) {
+          geocodificacionGPSRef.current?.abort();
+          const controller = new AbortController();
+          geocodificacionGPSRef.current = controller;
+          void (async () => {
+            try {
+              const params = new URLSearchParams({
+                lat: String(ubicacion.lat),
+                lon: String(ubicacion.lng),
+                radius: '0.5',
+                limit: '1'
+              });
+              const response = await fetch(`https://photon.komoot.io/reverse?${params}`, { signal: controller.signal });
+              if (!response.ok) throw new Error(`Photon respondió HTTP ${response.status}`);
+              const data = await response.json();
+              const properties = data?.features?.[0]?.properties as PropiedadesPhoton | undefined;
+              const direccion = properties ? formatearDireccionPhoton(properties) : '';
+              const nombre = direccion || 'Sector cercano no identificado';
+              if (objetivoActual === 'origen') setOrigenInput(nombre);
+              else setDestinoInput(nombre);
+            } catch (error) {
+              if (error instanceof DOMException && error.name === 'AbortError') return;
+              console.error('No se pudo identificar el sector cercano a la ubicación:', error);
+              setErrorGeocoding('No se pudo identificar el sector cercano; conservamos las coordenadas del GPS.');
+              if (objetivoActual === 'origen') setOrigenInput('Ubicación actual · sector cercano no disponible');
+              else setDestinoInput('Ubicación actual · sector cercano no disponible');
+            }
+          })();
+        }
       },
       (error) => {
         const mensaje = error.code === error.PERMISSION_DENIED
@@ -647,6 +786,7 @@ export default function App() {
   };
 
   const buscarDireccionGeocoding = (query: string, tipo: 'origen' | 'destino') => {
+    geocodificacionGPSRef.current?.abort();
     const setInput = tipo === 'origen' ? setOrigenInput : setDestinoInput;
     const setCoords = tipo === 'origen' ? setCoordsOrigen : setCoordsDestino;
     const setSugerencias = tipo === 'origen' ? setSugerenciasOrigen : setSugerenciasDestino;
@@ -721,6 +861,7 @@ export default function App() {
   };
 
   const seleccionarSugerencia = (item: SugerenciaDireccion, tipo: 'origen' | 'destino') => {
+    geocodificacionGPSRef.current?.abort();
     if (debounceTimerRef.current[tipo]) clearTimeout(debounceTimerRef.current[tipo]!);
     geocodingControllerRef.current[tipo]?.abort();
     setErrorGeocoding('');
@@ -755,9 +896,36 @@ export default function App() {
     }
   }, [usuario?.id]);
 
+  const cargarTarifas = useCallback(async () => {
+    if (!usuario?.id) return;
+    setCargandoTarifas(true);
+    try {
+      const response = await authenticatedFetch(`${API_URL}/api/pagos/tarifas`);
+      if (!response.ok) throw new Error(await mensajeErrorApi(response, 'No se pudieron cargar las tarifas'));
+      const data: { tarifas: ConfiguracionTarifas; tasas: TasasCambio | null; errorTasas?: string } = await response.json();
+      setConfiguracionTarifas(data.tarifas);
+      setTasasCambio(data.tasas);
+      setErrorTarifas(data.errorTasas || '');
+    } catch (error) {
+      setErrorTarifas(error instanceof Error ? error.message : 'No se pudieron cargar las tarifas y tasas actuales.');
+    } finally {
+      setCargandoTarifas(false);
+    }
+  }, [usuario?.id]);
+
+  useEffect(() => {
+    if (!usuarioId) return;
+    // Load and refresh the shared configuration for both web and Capacitor clients.
+    // oxlint-disable-next-line react/set-state-in-effect
+    void cargarTarifas();
+    const interval = window.setInterval(() => void cargarTarifas(), 60_000);
+    return () => clearInterval(interval);
+  }, [usuarioId, cargarTarifas]);
+
   const irAPedidos = () => {
-    setActiveTab('cliente');
+    navegarA('cliente');
     void cargarConfiguracionPago();
+    void cargarTarifas();
   };
 
   const cargarPanelAdmin = async () => {
@@ -765,21 +933,28 @@ export default function App() {
     setCargandoAdmin(true);
     setErrorAdmin('');
     try {
-      const [pagosResponse, configResponse, historialResponse] = await Promise.all([
+      const [pagosResponse, configResponse, historialResponse, tarifasResponse] = await Promise.all([
         authenticatedFetch(`${API_URL}/api/pagos/admin/pendientes`),
         authenticatedFetch(`${API_URL}/api/pagos/config`),
-        authenticatedFetch(`${API_URL}/api/pagos/admin/historial`)
+        authenticatedFetch(`${API_URL}/api/pagos/admin/historial`),
+        authenticatedFetch(`${API_URL}/api/pagos/tarifas`)
       ]);
       if (!pagosResponse.ok) throw new Error(await mensajeErrorApi(pagosResponse, 'No se pudieron cargar los pagos pendientes'));
       if (!configResponse.ok) throw new Error(await mensajeErrorApi(configResponse, 'No se pudo cargar la configuración de pago'));
       if (!historialResponse.ok) throw new Error(await mensajeErrorApi(historialResponse, 'No se pudo cargar el historial de pagos'));
+      if (!tarifasResponse.ok) throw new Error(await mensajeErrorApi(tarifasResponse, 'No se pudieron cargar las tarifas'));
       const pagosData = await pagosResponse.json();
       const configData: ConfiguracionPago = await configResponse.json();
       const historialData = await historialResponse.json();
+      const tarifasData: { tarifas: ConfiguracionTarifas; tasas: TasasCambio | null; errorTasas?: string } = await tarifasResponse.json();
       setPagosPendientesAdmin(Array.isArray(pagosData.pagos) ? pagosData.pagos : []);
       setHistorialPagosAdmin(Array.isArray(historialData.historial) ? historialData.historial : []);
       setConfiguracionPago(configData);
       setConfigPagoAdmin(configData.pagoMovil);
+      setConfiguracionTarifas(tarifasData.tarifas);
+      setConfiguracionTarifasAdmin(tarifasData.tarifas);
+      setTasasCambio(tarifasData.tasas);
+      setErrorTarifas(tarifasData.errorTasas || '');
     } catch (error) {
       setErrorAdmin(error instanceof Error ? error.message : 'No se pudo cargar el panel de administración.');
     } finally {
@@ -824,7 +999,7 @@ export default function App() {
       localStorage.setItem('llevalo_token', data.token);
       localStorage.setItem('llevalo_usuario', JSON.stringify(data.usuario));
       setUsuario(data.usuario);
-      setActiveTab(rol);
+      navegarA(rol);
       setMensajeAdmin(`Perspectiva de ${rol} activada.`);
       await sincronizarDatos();
     } catch (error) {
@@ -874,8 +1049,50 @@ export default function App() {
     }
   };
 
+  const guardarTarifasAdmin = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setErrorAdmin('');
+    try {
+      const response = await authenticatedFetch(`${API_URL}/api/pagos/admin/tarifas`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(configuracionTarifasAdmin)
+      });
+      if (!response.ok) throw new Error(await mensajeErrorApi(response, 'No se pudieron guardar las tarifas'));
+      const data: { tarifas: ConfiguracionTarifas } = await response.json();
+      setConfiguracionTarifas(data.tarifas);
+      setConfiguracionTarifasAdmin(data.tarifas);
+      setMensajeAdmin('Tarifas y moneda de visualización actualizadas para todas las cuentas.');
+    } catch (error) {
+      setErrorAdmin(error instanceof Error ? error.message : 'No se pudieron guardar las tarifas.');
+    }
+  };
+
+  const buscarPedidosAdmin = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const consulta = busquedaAdmin.trim();
+    if (consulta.length < 2) {
+      setErrorAdmin('Escribe al menos dos caracteres para buscar pedidos.');
+      return;
+    }
+    setCargandoBusquedaAdmin(true);
+    setErrorAdmin('');
+    try {
+      const response = await authenticatedFetch(`${API_URL}/api/pedidos/admin/buscar?q=${encodeURIComponent(consulta)}`);
+      if (!response.ok) throw new Error(await mensajeErrorApi(response, 'No se pudieron buscar los pedidos'));
+      const data: { pedidos: PedidoBusquedaAdmin[] } = await response.json();
+      setResultadosBusquedaAdmin(Array.isArray(data.pedidos) ? data.pedidos : []);
+    } catch (error) {
+      setErrorAdmin(error instanceof Error ? error.message : 'No se pudieron buscar los pedidos.');
+      setResultadosBusquedaAdmin([]);
+    } finally {
+      setCargandoBusquedaAdmin(false);
+    }
+  };
+
   const recargarSaldoCorporativo = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (!window.confirm(`¿Confirmas que verificaste el abono de $${Number(montoRecargaSaldo).toFixed(2)} USD para ${emailRecargaSaldo.trim()}?`)) return;
     try {
       const response = await authenticatedFetch(`${API_URL}/api/pagos/admin/saldo`, {
         method: 'POST',
@@ -888,7 +1105,7 @@ export default function App() {
       setMontoRecargaSaldo('');
       setNotaRecargaSaldo('');
       setErrorAdmin('');
-      setMensajeAdmin(`Recarga aplicada. Nuevo saldo: $${Number(data.saldoCorporativo).toFixed(2)}.`);
+      setMensajeAdmin(`Saldo acreditado. Nuevo saldo base: $${Number(data.saldoCorporativo).toFixed(2)}.`);
     } catch (error) {
       setErrorAdmin(error instanceof Error ? error.message : 'No se pudo recargar el saldo.');
     }
@@ -896,7 +1113,17 @@ export default function App() {
 
   const handleCrearPedido = async () => {
     if (!usuario) return;
-    if (!rutaCompletaLista || !coordsOrigen || !coordsDestino || distanciaKm <= 0 || tiempoEstimadoMin <= 0) {
+    if (!configuracionTarifas) {
+      alert(errorTarifas || 'Espera a que se carguen las tarifas y tasas actuales.');
+      void cargarTarifas();
+      return;
+    }
+    if (metodoPagoViaje === 'pago_movil' && !tasasCambio) {
+      alert(errorTarifas || 'Pago Móvil requiere que la tasa oficial de bolívares esté disponible.');
+      void cargarTarifas();
+      return;
+    }
+    if (!rutaCompletaLista || esperandoNombreDireccion || !coordsOrigen || !coordsDestino || distanciaKm <= 0 || tiempoEstimadoMin <= 0) {
       alert('Completa el origen y destino, y espera a que se calcule la ruta.');
       return;
     }
@@ -1060,6 +1287,10 @@ export default function App() {
       alert('Por favor cumple con todos los requisitos de seguridad para la contraseña.');
       return;
     }
+    if (authMode === 'register' && !/^\d{5,10}$/.test(cedulaNumero.trim())) {
+      setErrorAuth('Ingresa una cédula válida de 5 a 10 dígitos.');
+      return;
+    }
     if (errorPlaca) {
       alert('Por favor corrige los errores en la placa antes de continuar.');
       return;
@@ -1072,7 +1303,7 @@ export default function App() {
       ? { email, password }
       : { 
           nombre, email, telefono, 
-          cedula: cedulaNumero ? cedulaCompleta : 'V-00000000', foto: fotoLocal, 
+          cedula: cedulaCompleta, foto: fotoLocal,
           vehiculo: tipoVehiculo, placa: placaVehiculo || 'ABC-123', 
           vehiculo_foto: fotoVehiculoLocal, calificacion: 4.9,
           password, rol: authRoleSelection 
@@ -1097,10 +1328,49 @@ export default function App() {
       setFotoLocal(data.usuario.foto || '');
       setTipoVehiculo(data.usuario.vehiculo || 'Moto Suzuki GN 125');
       setPlacaVehiculo(data.usuario.placa || '');
+      historialNavegacionRef.current = [];
       setActiveTab('home');
     } catch (err: any) {
       setErrorAuth(err.message);
     }
+  };
+
+  const guardarFotoPerfil = async (foto: string) => {
+    if (!usuario) return;
+    const fotoAnterior = fotoLocal;
+    setFotoLocal(foto);
+    setGuardandoPerfil(true);
+    setErrorPerfil('');
+    try {
+      const response = await authenticatedFetch(`${API_URL}/api/auth/profile`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          foto,
+          ...(usuario.rol === 'repartidor' ? {
+            vehiculo: tipoVehiculo,
+            placa: placaVehiculo,
+            vehiculo_foto: fotoVehiculoLocal
+          } : {})
+        })
+      });
+      if (!response.ok) throw new Error(await mensajeErrorApi(response, 'No se pudo actualizar la foto'));
+      const data = await response.json();
+      const actualizado: UsuarioSesion = data.usuario;
+      setUsuario(actualizado);
+      setFotoLocal(actualizado.foto || '');
+      localStorage.setItem('llevalo_usuario', JSON.stringify(actualizado));
+    } catch (error) {
+      setFotoLocal(fotoAnterior);
+      setErrorPerfil(error instanceof Error ? error.message : 'No se pudo actualizar la foto de perfil.');
+    } finally {
+      setGuardandoPerfil(false);
+    }
+  };
+
+  const manejarCambioFotoPerfil = (event: React.ChangeEvent<HTMLInputElement>) => {
+    convertirImagenSegura(event, foto => { void guardarFotoPerfil(foto); });
+    event.target.value = '';
   };
 
   const guardarPerfil = async (e: React.FormEvent) => {
@@ -1108,13 +1378,11 @@ export default function App() {
     if (!usuario) return;
     setGuardandoPerfil(true);
     setErrorPerfil('');
-    const cedulaCompleta = `V-${cedulaNumero.trim()}`;
     try {
       const response = await authenticatedFetch(`${API_URL}/api/auth/profile`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          cedula: cedulaCompleta,
           foto: fotoLocal,
           ...(usuario.rol === 'repartidor' ? {
             vehiculo: tipoVehiculo,
@@ -1128,7 +1396,7 @@ export default function App() {
       const actualizado: UsuarioSesion = data.usuario;
       setUsuario(actualizado);
       localStorage.setItem('llevalo_usuario', JSON.stringify(actualizado));
-      setActiveTab(usuario.rol === 'cliente' ? 'cliente' : 'repartidor');
+      navegarA(usuario.rol === 'cliente' ? 'cliente' : 'repartidor');
     } catch (error) {
       setErrorPerfil(error instanceof Error ? error.message : 'No se pudo guardar el perfil.');
     } finally {
@@ -1150,6 +1418,7 @@ export default function App() {
     localStorage.removeItem('llevalo_token');
     localStorage.removeItem('llevalo_usuario');
     setUsuario(null);
+    historialNavegacionRef.current = [];
     setActiveTab('home');
   };
 
@@ -1302,36 +1571,50 @@ export default function App() {
   return (
     <div className={`app-shell flex flex-col font-sans transition-colors duration-300 ${darkMode ? 'dark bg-slate-950 text-slate-100' : 'bg-[#FDFBF7] text-slate-800'}`}>
       <header className={`border-b backdrop-blur sticky top-0 z-50 px-4 md:px-10 py-3 flex flex-wrap justify-between items-center gap-y-2 shadow-sm transition-colors ${darkMode ? 'bg-slate-950/90 border-slate-800' : 'bg-[#FDFBF7]/90 border-orange-100'}`}>
-        <div className="flex items-center space-x-3" aria-label="Llévalo">
-          <div className="bg-[#FF5722] text-white w-9 h-9 rounded-2xl font-black text-lg flex items-center justify-center shadow-md">L</div>
-          <span className={`text-xl md:text-2xl font-black tracking-tight ${darkMode ? 'text-white' : 'text-slate-900'}`}>Llévalo</span>
-        </div>
+        {usuario ? (
+          <div className="flex items-center space-x-3" aria-label="Llévalo">
+            <div className="bg-[#FF5722] text-white w-9 h-9 rounded-2xl font-black text-lg flex items-center justify-center shadow-md">L</div>
+            <span className={`text-xl md:text-2xl font-black tracking-tight ${darkMode ? 'text-white' : 'text-slate-900'}`}>Llévalo</span>
+          </div>
+        ) : (
+          <button type="button" onClick={() => navegarA('home')} className="flex items-center space-x-3" aria-label="Volver al inicio">
+            <div className="bg-[#FF5722] text-white w-9 h-9 rounded-2xl font-black text-lg flex items-center justify-center shadow-md">L</div>
+            <span className={`text-xl md:text-2xl font-black tracking-tight ${darkMode ? 'text-white' : 'text-slate-900'}`}>Llévalo</span>
+          </button>
+        )}
         
         <nav className={`hidden md:flex space-x-2 p-1.5 rounded-2xl border ${darkMode ? 'bg-slate-900/80 border-slate-800' : 'bg-orange-50/80 border-orange-100'}`}>
-          <button onClick={() => setActiveTab('home')} className={`px-5 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${activeTab === 'home' ? 'bg-[#FF5722] text-white shadow-sm' : (darkMode ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900')}`}>{usuario ? 'Mi Panel' : 'Inicio'}</button>
+          <button onClick={() => navegarA('home')} className={`px-5 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${activeTab === 'home' ? 'bg-[#FF5722] text-white shadow-sm' : (darkMode ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900')}`}>{usuario ? 'Mi Panel' : 'Inicio'}</button>
           {usuario && usuario.rol === 'cliente' && <button onClick={irAPedidos} className={`px-5 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${activeTab === 'cliente' ? 'bg-[#FF5722] text-white shadow-sm' : (darkMode ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900')}`}>Pedir</button>}
-          {usuario && usuario.rol === 'repartidor' && <button onClick={() => setActiveTab('repartidor')} className={`px-5 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${activeTab === 'repartidor' ? 'bg-[#FF5722] text-white shadow-sm' : (darkMode ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900')}`}>Radar de Trabajos</button>}
-          {usuario?.es_admin && <button onClick={() => { setActiveTab('admin'); void cargarPanelAdmin(); }} className={`px-5 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${activeTab === 'admin' ? 'bg-[#FF5722] text-white shadow-sm' : (darkMode ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900')}`}>Administración</button>}
+          {usuario && usuario.rol === 'repartidor' && <button onClick={() => navegarA('repartidor')} className={`px-5 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${activeTab === 'repartidor' ? 'bg-[#FF5722] text-white shadow-sm' : (darkMode ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900')}`}>Radar de Trabajos</button>}
+          {usuario?.es_admin && <button onClick={() => { navegarA('admin'); void cargarPanelAdmin(); }} className={`px-5 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${activeTab === 'admin' ? 'bg-[#FF5722] text-white shadow-sm' : (darkMode ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900')}`}>Administración</button>}
         </nav>
 
         <div className="flex items-center space-x-2 md:space-x-3">
           {usuario ? (
-            <button
-              type="button"
-              aria-label="Abrir perfil"
-              onClick={() => setActiveTab('perfil')}
-              className={`flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full border-2 shadow-sm transition hover:scale-105 ${darkMode ? 'border-slate-700 bg-slate-800' : 'border-orange-200 bg-orange-50'}`}
-            >
-              {fotoLocal ? (
-                <img src={fotoLocal} alt="" className="h-full w-full object-cover" />
-              ) : (
-                <span className="text-xs font-bold text-[#FF5722]">
-                  {usuario.nombre ? usuario.nombre.substring(0, 2).toUpperCase() : 'U'}
+            <>
+              {tasasCambio && (
+                <span className={`inline-flex rounded-xl border px-2 py-1.5 text-[9px] font-semibold sm:px-2.5 sm:text-[10px] ${darkMode ? 'border-slate-800 bg-slate-900 text-slate-300' : 'border-orange-100 bg-white text-slate-600'}`}>
+                  1 USD = {formatoMoneda(tasasCambio.bolivaresPorDolar, 'VES')}
                 </span>
               )}
-            </button>
+              <button
+                type="button"
+                aria-label="Abrir perfil"
+                onClick={() => navegarA('perfil')}
+                className={`flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-2xl border-2 shadow-sm transition hover:scale-105 ${darkMode ? 'border-slate-700 bg-slate-800' : 'border-orange-200 bg-orange-50'}`}
+              >
+                {fotoLocal ? (
+                  <img src={fotoLocal} alt="" className="h-full w-full object-cover" />
+                ) : (
+                  <span className="text-xs font-bold text-[#FF5722]">
+                    {usuario.nombre ? usuario.nombre.substring(0, 2).toUpperCase() : 'U'}
+                  </span>
+                )}
+              </button>
+            </>
           ) : (
-            <button onClick={() => { setErrorAuth(''); setAuthMode('choice'); setActiveTab('auth'); }} className={`flex items-center space-x-1.5 border px-4 py-2 rounded-2xl transition text-xs md:text-sm font-bold shadow-sm cursor-pointer ${darkMode ? 'bg-slate-900 border-slate-800 text-white hover:bg-slate-800' : 'bg-white hover:bg-orange-50 border-orange-200 text-slate-800'}`}>
+            <button onClick={() => { setErrorAuth(''); setAuthMode('choice'); navegarA('auth'); }} className={`flex items-center space-x-1.5 border px-4 py-2 rounded-2xl transition text-xs md:text-sm font-bold shadow-sm cursor-pointer ${darkMode ? 'bg-slate-900 border-slate-800 text-white hover:bg-slate-800' : 'bg-white hover:bg-orange-50 border-orange-200 text-slate-800'}`}>
               <User size={16} className="text-[#FF5722]" />
               <span>Ingresar</span>
             </button>
@@ -1340,7 +1623,7 @@ export default function App() {
 
         {usuario && (
           <nav aria-label="Navegación móvil" className={`flex w-full flex-wrap items-center gap-2 md:hidden ${darkMode ? 'text-slate-200' : 'text-slate-700'}`}>
-            <button type="button" aria-pressed={activeTab === 'home'} onClick={() => setActiveTab('home')} className={`flex min-w-[5rem] flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold ${activeTab === 'home' ? 'border-orange-200 bg-orange-50 text-[#FF5722]' : 'border-transparent'}`}>
+            <button type="button" aria-pressed={activeTab === 'home'} onClick={() => navegarA('home')} className={`flex min-w-[5rem] flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold ${activeTab === 'home' ? 'border-orange-200 bg-orange-50 text-[#FF5722]' : 'border-transparent'}`}>
               <MapPin size={17} /> Inicio
             </button>
             {usuario.rol === 'cliente' ? (
@@ -1348,16 +1631,16 @@ export default function App() {
                 <Package size={17} /> Pedir
               </button>
             ) : (
-              <button type="button" aria-pressed={activeTab === 'repartidor'} onClick={() => setActiveTab('repartidor')} className={`flex min-w-[5rem] flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold ${activeTab === 'repartidor' ? 'border-orange-200 bg-orange-50 text-[#FF5722]' : 'border-transparent'}`}>
+              <button type="button" aria-pressed={activeTab === 'repartidor'} onClick={() => navegarA('repartidor')} className={`flex min-w-[5rem] flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold ${activeTab === 'repartidor' ? 'border-orange-200 bg-orange-50 text-[#FF5722]' : 'border-transparent'}`}>
                 <Bike size={17} /> Radar
               </button>
             )}
             {usuario.es_admin && (
-              <button type="button" aria-pressed={activeTab === 'admin'} onClick={() => { setActiveTab('admin'); void cargarPanelAdmin(); }} className={`flex min-w-[5rem] flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold ${activeTab === 'admin' ? 'border-orange-200 bg-orange-50 text-[#FF5722]' : 'border-transparent'}`}>
+              <button type="button" aria-pressed={activeTab === 'admin'} onClick={() => { navegarA('admin'); void cargarPanelAdmin(); }} className={`flex min-w-[5rem] flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold ${activeTab === 'admin' ? 'border-orange-200 bg-orange-50 text-[#FF5722]' : 'border-transparent'}`}>
                 <DollarSign size={17} /> Admin
               </button>
             )}
-            <button type="button" aria-pressed={activeTab === 'perfil'} onClick={() => setActiveTab('perfil')} className={`flex min-w-[5rem] flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold ${activeTab === 'perfil' ? 'border-orange-200 bg-orange-50 text-[#FF5722]' : 'border-transparent'}`}>
+            <button type="button" aria-pressed={activeTab === 'perfil'} onClick={() => navegarA('perfil')} className={`flex min-w-[5rem] flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold ${activeTab === 'perfil' ? 'border-orange-200 bg-orange-50 text-[#FF5722]' : 'border-transparent'}`}>
               <User size={17} /> Perfil
             </button>
           </nav>
@@ -1380,7 +1663,7 @@ export default function App() {
               </p>
 
               <div className="pt-2">
-                <button onClick={() => { setAuthMode('choice'); setAuthRoleSelection('cliente'); setActiveTab('auth'); }} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-[#FF5722] px-8 py-4 font-bold text-white shadow-lg transition hover:bg-[#F4511E] cursor-pointer sm:w-fit">
+                <button onClick={() => { setAuthMode('choice'); setAuthRoleSelection('cliente'); navegarA('auth'); }} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-[#FF5722] px-8 py-4 font-bold text-white shadow-lg transition hover:bg-[#F4511E] cursor-pointer sm:w-fit">
                   <span>Empezar aquí</span>
                   <ArrowRight size={18} />
                 </button>
@@ -1416,7 +1699,7 @@ export default function App() {
                       Hacer un pedido <ArrowRight size={17} />
                     </button>
                   ) : (
-                    <button onClick={() => setActiveTab('repartidor')} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-[#FF5722] px-6 py-3.5 text-sm font-bold text-white shadow-md transition hover:bg-[#F4511E]">
+                    <button onClick={() => navegarA('repartidor')} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-[#FF5722] px-6 py-3.5 text-sm font-bold text-white shadow-md transition hover:bg-[#F4511E]">
                       <Bike size={17} /> Abrir radar
                     </button>
                   )}
@@ -1461,7 +1744,7 @@ export default function App() {
                   <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-orange-100 text-[#FF5722]"><MapPin size={20} /></div>
                   <h2 className="font-black">Estado de conexión</h2>
                   <p className="mt-2 text-xs text-slate-500">{repartidorOnline ? 'Estás conectado y puedes recibir pedidos.' : 'Estás desconectado y no recibirás nuevas solicitudes.'}</p>
-                  <button onClick={() => setActiveTab('repartidor')} className="mt-4 text-xs font-bold text-[#FF5722] hover:underline">Ir al radar de trabajos</button>
+                  <button onClick={() => navegarA('repartidor')} className="mt-4 text-xs font-bold text-[#FF5722] hover:underline">Ir al radar de trabajos</button>
                 </div>
               </div>
             )}
@@ -1511,6 +1794,13 @@ export default function App() {
         {activeTab === 'auth' && (
           <div className="max-w-md mx-auto w-full py-8">
             <div className={`border p-6 md:p-8 rounded-3xl shadow-sm space-y-6 ${darkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-orange-100'}`}>
+              <button
+                type="button"
+                onClick={() => authMode === 'choice' ? navegarA('home') : setAuthMode('choice')}
+                className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-bold ${darkMode ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-600 hover:bg-orange-50'}`}
+              >
+                <ArrowLeft size={15} /> {authMode === 'choice' ? 'Volver al inicio' : 'Volver a opciones'}
+              </button>
               <div className="text-center space-y-1">
                 <h2 className={`text-2xl font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>
                   {authMode === 'choice' ? 'Bienvenido a Llévalo' : authMode === 'login' ? '¡Bienvenido de nuevo!' : 'Crea tu cuenta'}
@@ -1567,7 +1857,7 @@ export default function App() {
                         <span className={`inline-flex items-center px-3 rounded-l-xl border border-r-0 text-xs font-bold ${darkMode ? 'bg-slate-800 border-slate-700 text-slate-300' : 'bg-orange-100 border-orange-200 text-[#FF5722]'}`}>
                           V-
                         </span>
-                        <input type="text" required value={cedulaNumero} onChange={e => setCedulaNumero(e.target.value.replace(/\D/g, ''))} placeholder="28123456" maxLength={8} className={`w-full border rounded-r-xl px-4 py-2 text-sm ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
+                        <input type="text" required inputMode="numeric" minLength={5} value={cedulaNumero} onChange={e => setCedulaNumero(e.target.value.replace(/\D/g, ''))} placeholder="28123456" maxLength={10} className={`w-full border rounded-r-xl px-4 py-2 text-sm ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
                       </div>
                     </div>
                   </>
@@ -1674,7 +1964,7 @@ export default function App() {
                     <div className="bg-amber-500/10 border border-amber-500/30 p-4 rounded-2xl space-y-2">
                       <div className="flex justify-between items-center">
                         <span className="text-xs font-black uppercase text-amber-600 dark:text-amber-400">Estado del servicio en curso</span>
-                        <span className="text-xs font-bold text-slate-500">${pedidoActivoCliente.tarifa}</span>
+                        <span className="text-xs font-bold text-slate-500">{mostrarMontoPedido(pedidoActivoCliente.tarifa)}</span>
                       </div>
                       <p className={`text-xs font-bold ${darkMode ? 'text-slate-300' : 'text-slate-700'}`}>{pedidoActivoCliente.descripcion}</p>
                       <p className="text-[11px] text-slate-500 font-medium">Estado: <strong className="uppercase text-[#FF5722]">{pedidoActivoCliente.estado}</strong></p>
@@ -1877,10 +2167,23 @@ export default function App() {
                           <p>Tiempo: <strong>~{tiempoEstimadoMin} min</strong></p>
                         </div>
                         <div className="text-right">
-                          <p className="text-sm font-black text-[#FF5722]">${tarifaTotal}</p>
-                          <p className="text-[10px] text-slate-400">Bs. {tarifaEnBolivares}</p>
+                          <p className="text-sm font-black text-[#FF5722]">{tarifaEnMonedaSeleccionada || `$${tarifaTotal}`}</p>
+                          <p className="text-[10px] text-slate-400">Base: ${tarifaTotal} USD</p>
+                          {tarifaEnBolivares && metodoPagoViaje === 'pago_movil' && (
+                            <p className="text-[10px] text-slate-400">Pago Móvil: {tarifaEnBolivares}</p>
+                          )}
                         </div>
                       </div>
+                    )}
+                    {errorTarifas && (
+                      <p role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+                        {errorTarifas}
+                      </p>
+                    )}
+                    {tasasCambio?.desactualizada && (
+                      <p role="status" className="text-[10px] text-amber-700 dark:text-amber-300">
+                        No se pudo renovar la tasa; los equivalentes usan el último valor disponible del {new Date(tasasCambio.actualizadoEn).toLocaleString('es-VE')}.
+                      </p>
                     )}
 
                     <div className={`space-y-3 rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-950/70' : 'border-slate-200 bg-white'}`}>
@@ -1936,8 +2239,8 @@ export default function App() {
                         {errorPago && <p role="alert" className="text-[10px] font-semibold text-red-600">{errorPago}</p>}
                       </div>
 
-                    <button disabled={!rutaCompletaLista || distanciaKm <= 0 || tiempoEstimadoMin <= 0 || !pagoPedidoCompleto || enviandoPedido} onClick={handleCrearPedido} className={`w-full py-3 rounded-xl font-bold text-xs transition cursor-pointer shadow-md ${!rutaCompletaLista || distanciaKm <= 0 || tiempoEstimadoMin <= 0 || !pagoPedidoCompleto || enviandoPedido ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-[#FF5722] hover:bg-[#F4511E] text-white'}`}>
-                      {enviandoPedido ? 'Procesando...' : metodoPagoViaje === 'saldo_corporativo' ? 'Pagar con saldo y solicitar' : serviceType === 'viajes' ? 'Solicitar viaje' : 'Publicar envío en radar'}
+                    <button disabled={!rutaCompletaLista || esperandoNombreDireccion || distanciaKm <= 0 || tiempoEstimadoMin <= 0 || !pagoPedidoCompleto || enviandoPedido || cargandoTarifas || !configuracionTarifas || (metodoPagoViaje === 'pago_movil' && !tasasCambio)} onClick={handleCrearPedido} className={`w-full py-3 rounded-xl font-bold text-xs transition cursor-pointer shadow-md ${!rutaCompletaLista || esperandoNombreDireccion || distanciaKm <= 0 || tiempoEstimadoMin <= 0 || !pagoPedidoCompleto || enviandoPedido || cargandoTarifas || !configuracionTarifas || (metodoPagoViaje === 'pago_movil' && !tasasCambio) ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-[#FF5722] hover:bg-[#F4511E] text-white'}`}>
+                      {cargandoTarifas ? 'Actualizando tarifas…' : enviandoPedido ? 'Procesando…' : metodoPagoViaje === 'saldo_corporativo' ? 'Pagar con saldo y solicitar' : serviceType === 'viajes' ? 'Solicitar viaje' : 'Publicar envío en radar'}
                     </button>
                   </div>
                 )}
@@ -2019,7 +2322,7 @@ export default function App() {
                   <div className={`border p-5 rounded-3xl shadow-sm space-y-4 ${darkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-orange-100'}`}>
                     <div className="flex justify-between items-center">
                       <span className="text-xs font-black uppercase text-emerald-500">Servicio Asignado Activo</span>
-                      <span className="text-xs font-bold text-slate-500">${pedidoAsignadoRepartidor.tarifa}</span>
+                      <span className="text-xs font-bold text-slate-500">{mostrarMontoPedido(pedidoAsignadoRepartidor.tarifa)}</span>
                     </div>
 
                     <div className="space-y-2 text-xs">
@@ -2072,7 +2375,7 @@ export default function App() {
                           <div key={p.id} className={`border p-4 rounded-3xl shadow-sm space-y-3 ${darkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-orange-100'}`}>
                             <div className="flex justify-between items-center">
                               <span className="text-[10px] font-black uppercase px-2.5 py-1 rounded-full bg-orange-100 text-[#FF5722]">{etiquetaTipoServicio(p.tipo_servicio)} · {p.distancia_km} km</span>
-                              <span className="text-sm font-black text-[#FF5722]">${p.tarifa}</span>
+                              <span className="text-sm font-black text-[#FF5722]">{mostrarMontoPedido(p.tarifa)}</span>
                             </div>
 
                             <p className="text-xs font-bold">{p.descripcion}</p>
@@ -2142,18 +2445,31 @@ export default function App() {
             <div className={`overflow-hidden rounded-3xl border shadow-sm ${darkMode ? 'border-slate-800 bg-slate-900 text-white' : 'border-orange-100 bg-white'}`}>
               <div className="bg-gradient-to-r from-[#FF5722] to-orange-400 px-6 py-7 text-white md:px-8">
                 <div className="flex flex-col items-center gap-4 sm:flex-row">
-                  <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-full border-4 border-white/70 bg-white/20 text-2xl font-black shadow-md">
-                    {fotoLocal ? <img src={fotoLocal} alt="Foto de perfil" className="h-full w-full object-cover" /> : usuario.nombre.slice(0, 1).toUpperCase()}
-                  </div>
+                  <button
+                    type="button"
+                    aria-label="Cambiar foto de perfil"
+                    onClick={() => inputFotoPerfilRef.current?.click()}
+                    disabled={guardandoPerfil}
+                    className="group relative flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-full border-4 border-white/70 bg-white/20 text-2xl font-black shadow-md disabled:opacity-70"
+                  >
+                    {fotoLocal ? <img src={fotoLocal} alt="" className="h-full w-full object-cover" /> : usuario.nombre.slice(0, 1).toUpperCase()}
+                    <span className="absolute inset-0 flex items-center justify-center bg-slate-950/45 text-white opacity-0 transition group-hover:opacity-100 group-focus-visible:opacity-100">
+                      <Camera size={21} />
+                    </span>
+                  </button>
+                  <input ref={inputFotoPerfilRef} type="file" accept="image/*" onChange={manejarCambioFotoPerfil} className="hidden" />
                   <div className="text-center sm:text-left">
                     <p className="text-xs font-bold uppercase tracking-[0.18em] text-white/80">Mi cuenta</p>
                     <h2 className="mt-1 text-2xl font-black">{usuario.nombre}</h2>
                     <span className="mt-2 inline-flex rounded-full bg-white/20 px-3 py-1 text-[11px] font-bold capitalize">{usuario.rol === 'repartidor' ? 'Repartidor' : 'Cliente'}</span>
+                    <p className="mt-1 text-[10px] text-white/80">{guardandoPerfil ? 'Actualizando foto…' : 'Pulsa la foto para cambiarla'}</p>
                   </div>
                 </div>
               </div>
 
-              <div className="grid gap-6 p-5 md:grid-cols-[1fr_1.2fr] md:p-8">
+              {errorPerfil && <p role="alert" className={`mx-5 mt-5 rounded-xl border p-3 text-xs font-semibold md:mx-8 ${darkMode ? 'border-red-900 bg-red-950/30 text-red-300' : 'border-red-200 bg-red-50 text-red-700'}`}>{errorPerfil}</p>}
+
+              <div className={`grid gap-6 p-5 md:p-8 ${usuario.rol === 'repartidor' ? 'md:grid-cols-2' : ''}`}>
                 <div className="space-y-4">
                   <div>
                     <h3 className={`text-base font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Datos de la cuenta</h3>
@@ -2167,6 +2483,11 @@ export default function App() {
                     <div>
                       <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Teléfono</p>
                       <p className="mt-1 text-sm font-semibold">{usuario.telefono || 'No registrado'}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Cédula de identidad</p>
+                      <p className="mt-1 text-sm font-semibold">{usuario.cedula || 'No registrada en esta cuenta'}</p>
+                      <p className="mt-1 text-[10px] text-slate-500">La cédula no se puede modificar después del registro.</p>
                     </div>
                     {usuario.rol === 'repartidor' && (
                       <div>
@@ -2199,25 +2520,10 @@ export default function App() {
                   </div>
                 </div>
 
-                <form onSubmit={guardarPerfil} className="space-y-4">
-                  <div>
-                    <h3 className={`text-base font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Editar perfil</h3>
-                    <p className="mt-1 text-xs text-slate-500">Los cambios se guardarán en tu cuenta.</p>
-                  </div>
-
-                  {errorPerfil && <p role="alert" className={`rounded-xl border p-3 text-xs font-semibold ${darkMode ? 'border-red-900 bg-red-950/30 text-red-300' : 'border-red-200 bg-red-50 text-red-700'}`}>{errorPerfil}</p>}
-
-                  <div>
-                    <label className="text-xs font-bold">Cédula de identidad</label>
-                    <div className="mt-1 flex">
-                      <span className={`inline-flex items-center rounded-l-xl border border-r-0 px-3 text-xs font-bold ${darkMode ? 'border-slate-700 bg-slate-800 text-slate-300' : 'border-orange-200 bg-orange-100 text-[#FF5722]'}`}>V-</span>
-                      <input type="text" inputMode="numeric" value={cedulaNumero} onChange={e => setCedulaNumero(e.target.value.replace(/\D/g, ''))} maxLength={8} className={`w-full rounded-r-xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-800 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50'}`} />
-                    </div>
-                  </div>
-
-                  {usuario.rol === 'repartidor' && (
+                {usuario.rol === 'repartidor' && (
+                  <form onSubmit={guardarPerfil} className="space-y-4">
+                    <h3 className={`text-base font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Datos del vehículo</h3>
                     <div className={`space-y-3 rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-950/60' : 'border-slate-100 bg-slate-50'}`}>
-                      <p className="text-xs font-black uppercase tracking-wide text-slate-500">Datos del vehículo</p>
                       <div>
                         <label className="text-xs font-bold">Vehículo</label>
                         <input type="text" required maxLength={100} value={tipoVehiculo} onChange={e => setTipoVehiculo(e.target.value)} className={`mt-1 w-full rounded-xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-800 bg-slate-950 text-white' : 'border-slate-200 bg-white'}`} />
@@ -2228,18 +2534,11 @@ export default function App() {
                         {errorPlaca && <p className="mt-1 text-[10px] font-bold text-red-600">{errorPlaca}</p>}
                       </div>
                     </div>
-                  )}
-
-                  <div>
-                    <label className="text-xs font-bold">Foto de perfil</label>
-                    <input type="file" accept="image/*" onChange={e => convertirImagenSegura(e, setFotoLocal)} className="mt-1 block w-full text-xs file:mr-3 file:rounded-lg file:border-0 file:bg-orange-100 file:px-3 file:py-2 file:font-bold file:text-[#FF5722]" />
-                    {fotoLocal && <img src={fotoLocal} alt="Vista previa del perfil" className="mt-3 h-16 w-16 rounded-full border-2 border-[#FF5722] object-cover" />}
-                  </div>
-
-                  <button type="submit" disabled={guardandoPerfil || Boolean(errorPlaca)} className="w-full rounded-xl bg-[#FF5722] py-3 text-sm font-bold text-white shadow-md transition hover:bg-[#F4511E] disabled:cursor-not-allowed disabled:opacity-50">
-                    {guardandoPerfil ? 'Guardando…' : 'Guardar cambios'}
-                  </button>
-                </form>
+                    <button type="submit" disabled={guardandoPerfil || Boolean(errorPlaca)} className="w-full rounded-xl bg-[#FF5722] py-3 text-sm font-bold text-white shadow-md transition hover:bg-[#F4511E] disabled:cursor-not-allowed disabled:opacity-50">
+                      {guardandoPerfil ? 'Guardando…' : 'Guardar datos del vehículo'}
+                    </button>
+                  </form>
+                )}
               </div>
               <div className={`border-t p-5 md:px-8 ${darkMode ? 'border-slate-800' : 'border-slate-100'}`}>
                 <button
@@ -2259,8 +2558,8 @@ export default function App() {
             <div className={`flex flex-col gap-4 rounded-3xl border p-6 shadow-sm sm:flex-row sm:items-center sm:justify-between ${darkMode ? 'border-slate-800 bg-slate-900 text-white' : 'border-orange-100 bg-white'}`}>
               <div>
                 <p className="text-[11px] font-black uppercase tracking-[0.18em] text-[#FF5722]">Panel seguro</p>
-                <h2 className={`mt-1 text-2xl font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Administración de pagos</h2>
-                <p className="mt-1 text-xs text-slate-500">Verifica los comprobantes directamente en la cuenta receptora antes de aprobarlos.</p>
+                <h2 className={`mt-1 text-2xl font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Panel de administración</h2>
+                <p className="mt-1 text-xs text-slate-500">Gestiona pedidos, tarifas, actividad y pagos de Llévalo.</p>
               </div>
               <div className="flex flex-wrap gap-2">
                 <button type="button" aria-pressed={usuario.rol === 'cliente'} onClick={() => void cambiarPerspectivaAdmin('cliente')} className={`rounded-xl border px-3 py-2.5 text-xs font-bold ${usuario.rol === 'cliente' ? 'border-[#FF5722] bg-orange-50 text-[#FF5722]' : 'border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-300'}`}>Usar como cliente</button>
@@ -2273,6 +2572,102 @@ export default function App() {
 
             {errorAdmin && <p role="alert" className={`rounded-xl border p-3 text-xs font-semibold ${darkMode ? 'border-red-900 bg-red-950/30 text-red-300' : 'border-red-200 bg-red-50 text-red-700'}`}>{errorAdmin}</p>}
             {mensajeAdmin && <p role="status" className={`rounded-xl border p-3 text-xs font-semibold ${darkMode ? 'border-emerald-900 bg-emerald-950/30 text-emerald-300' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>{mensajeAdmin}</p>}
+
+            <section className={`space-y-4 rounded-3xl border p-5 shadow-sm ${darkMode ? 'border-slate-800 bg-slate-900 text-white' : 'border-orange-100 bg-white'}`}>
+              <div>
+                <h3 className="text-base font-black">Buscar pedido</h3>
+                <p className="mt-1 text-xs text-slate-500">Busca por código LLV, cliente, correo, repartidor, servicio, referencia o dirección.</p>
+              </div>
+              <form onSubmit={buscarPedidosAdmin} className="flex flex-col gap-2 sm:flex-row">
+                <input
+                  type="search"
+                  value={busquedaAdmin}
+                  onChange={event => setBusquedaAdmin(event.target.value)}
+                  placeholder="LLV-000039, correo o sector"
+                  className={`min-w-0 flex-1 rounded-xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-700 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50'}`}
+                />
+                <button type="submit" disabled={cargandoBusquedaAdmin} className="rounded-xl bg-[#FF5722] px-5 py-2.5 text-xs font-bold text-white disabled:opacity-50">
+                  {cargandoBusquedaAdmin ? 'Buscando…' : 'Buscar'}
+                </button>
+              </form>
+              {resultadosBusquedaAdmin.length > 0 && (
+                <ol className="max-h-80 space-y-2 overflow-y-auto">
+                  {resultadosBusquedaAdmin.map(pedido => (
+                    <li key={pedido.id} className={`rounded-2xl border p-3 ${darkMode ? 'border-slate-800 bg-slate-950/60' : 'border-slate-100 bg-slate-50'}`}>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-xs font-black text-[#FF5722]">{pedido.codigo} · {etiquetaTipoServicio(pedido.tipo_servicio)}</p>
+                        <span className="text-[10px] capitalize text-slate-500">{pedido.estado}</span>
+                      </div>
+                      <p className="mt-1 text-xs font-semibold">{pedido.cliente_nombre} · {pedido.cliente_email}</p>
+                      <p className="mt-1 text-[11px] text-slate-500">{pedido.origen_texto} → {pedido.destino_texto}</p>
+                      <p className="mt-1 text-[11px] text-slate-500">
+                        {mostrarMontoPedido(pedido.tarifa)} · {etiquetaMetodoPago(pedido.metodo_pago)} · {new Date(pedido.creado_en || '').toLocaleString('es-VE')}
+                      </p>
+                    </li>
+                  ))}
+                </ol>
+              )}
+              {busquedaAdmin.trim().length >= 2 && resultadosBusquedaAdmin.length === 0 && !cargandoBusquedaAdmin && (
+                <p className="rounded-xl bg-slate-50 p-3 text-xs text-slate-500 dark:bg-slate-950">No se encontraron pedidos con esa búsqueda.</p>
+              )}
+            </section>
+
+            <section className={`space-y-4 rounded-3xl border p-5 shadow-sm ${darkMode ? 'border-slate-800 bg-slate-900 text-white' : 'border-orange-100 bg-white'}`}>
+              <div>
+                <h3 className="text-base font-black">Tarifas y moneda de visualización</h3>
+                <p className="mt-1 text-xs text-slate-500">Configura los valores base en USD. Todos verán su equivalente en la moneda seleccionada; Pago Móvil se mantiene en bolívares.</p>
+              </div>
+              <form onSubmit={guardarTarifasAdmin} className="grid gap-3 sm:grid-cols-2">
+                {([
+                  ['enviosPorKm', 'Envíos por kilómetro (USD)'],
+                  ['viajesCortoPorKm', 'Viajes menores de 1 km (USD/km)'],
+                  ['viajesLargoPorKm', 'Viajes desde 1 km (USD/km)'],
+                  ['tarifaMinima', 'Tarifa mínima (USD)']
+                ] as const).map(([field, label]) => (
+                  <label key={field} className="text-xs font-semibold">
+                    {label}
+                    <input
+                      type="number"
+                      min="0.01"
+                      max="1000"
+                      step="0.01"
+                      required
+                      value={configuracionTarifasAdmin[field]}
+                      onChange={event => setConfiguracionTarifasAdmin(current => ({ ...current, [field]: Number(event.target.value) }))}
+                      className={`mt-1 w-full rounded-xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-700 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50'}`}
+                    />
+                  </label>
+                ))}
+                <label className="text-xs font-semibold">
+                  Moneda que verán las cuentas
+                  <select
+                    value={configuracionTarifasAdmin.monedaVisualizacion}
+                    onChange={event => {
+                      const value = event.target.value;
+                      if (value === 'VES' || value === 'EUR' || value === 'USDT') {
+                        setConfiguracionTarifasAdmin(current => ({ ...current, monedaVisualizacion: value }));
+                      }
+                    }}
+                    className={`mt-1 w-full rounded-xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-700 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50'}`}
+                  >
+                    <option value="VES">Bolívares (VES)</option>
+                    <option value="EUR">Euros (EUR)</option>
+                    <option value="USDT">USDT</option>
+                  </select>
+                </label>
+                <div className={`rounded-xl border p-3 text-[11px] sm:col-span-2 ${darkMode ? 'border-slate-800 bg-slate-950/60 text-slate-300' : 'border-slate-100 bg-slate-50 text-slate-600'}`}>
+                  {tasasCambio && configuracionTarifas && (
+                    <p>1 USD = {formatoMoneda(convertirDolares(1, configuracionTarifasAdmin.monedaVisualizacion, tasasCambio), configuracionTarifasAdmin.monedaVisualizacion)} · Tasas consultadas {new Date(tasasCambio.actualizadoEn).toLocaleString('es-VE')}.</p>
+                  )}
+                  {tasasCambio?.desactualizada && <p className="mt-1 text-amber-600 dark:text-amber-300">Mostrando la última tasa disponible; la actualización externa falló.</p>}
+                  <p className="mt-1">Las tarifas y pagos históricos siguen contabilizados en USD. Los cambios se reflejan automáticamente en las cuentas activas.</p>
+                </div>
+                {errorTarifas && <p role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200 sm:col-span-2">{errorTarifas}</p>}
+                <button type="submit" disabled={!configuracionTarifas || cargandoTarifas} className="rounded-xl bg-[#FF5722] px-5 py-3 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-50 sm:col-span-2">
+                  {cargandoTarifas ? 'Cargando tarifas…' : 'Guardar tarifas globales'}
+                </button>
+              </form>
+            </section>
 
             <section className={`space-y-5 rounded-3xl border p-5 shadow-sm ${darkMode ? 'border-slate-800 bg-slate-900 text-white' : 'border-orange-100 bg-white'}`}>
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -2343,7 +2738,7 @@ export default function App() {
                             <time className="text-[10px] text-slate-500">{new Date(evento.creado_en).toLocaleString('es-VE')}</time>
                           </div>
                           <p className="mt-1 text-xs leading-relaxed text-slate-600 dark:text-slate-300">{evento.resumen}</p>
-                          {evento.pedido_id && <p className="mt-1 text-[10px] font-semibold text-[#FF5722]">Pedido #{evento.pedido_id}</p>}
+                          {evento.pedido_id && <p className="mt-1 text-[10px] font-semibold text-[#FF5722]">{codigoPedido(evento.pedido_id)}</p>}
                         </div>
                       </li>
                     ))}
@@ -2368,12 +2763,12 @@ export default function App() {
                         <p className="text-[11px] text-slate-500">{pago.cliente_email}</p>
                       </div>
                       <span className={`rounded-full px-2.5 py-1 text-[10px] font-black ${pago.estado_pago === 'reembolso_pendiente' ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'}`}>
-                        {pago.estado_pago === 'reembolso_pendiente' ? `Reembolso · Pedido #${pago.id}` : `Pago · Pedido #${pago.id}`}
+                        {pago.estado_pago === 'reembolso_pendiente' ? `Reembolso · ${codigoPedido(pago.id)}` : `Pago · ${codigoPedido(pago.id)}`}
                       </span>
                     </div>
                     <p className="text-xs"><strong>Servicio:</strong> {etiquetaTipoServicio(pago.tipo_servicio || '')}</p>
                     <p className="text-xs"><strong>Referencia:</strong> {pago.referencia_pago || 'Sin referencia'}</p>
-                    <p className="text-xs"><strong>Monto:</strong> ${Number(pago.tarifa).toFixed(2)}</p>
+                    <p className="text-xs"><strong>Monto:</strong> {mostrarMontoPedido(pago.tarifa)}</p>
                     <p className="text-[11px] text-slate-500"><strong>Detalle:</strong> {pago.descripcion}</p>
                     <p className="text-[11px] text-slate-500">{pago.origen_texto} → {pago.destino_texto}</p>
                     {pago.estado_pago === 'reembolso_pendiente' ? (
@@ -2418,13 +2813,14 @@ export default function App() {
 
                 <form onSubmit={recargarSaldoCorporativo} className={`space-y-4 rounded-3xl border p-5 shadow-sm ${darkMode ? 'border-slate-800 bg-slate-900 text-white' : 'border-orange-100 bg-white'}`}>
                   <div>
-                    <h3 className="text-base font-black">Recargar saldo corporativo</h3>
-                    <p className="mt-1 text-xs text-slate-500">Busca la cuenta del cliente por correo. El monto se registra en dólares.</p>
+                    <h3 className="text-base font-black">Acreditar saldo al cliente</h3>
+                    <p className="mt-1 text-xs text-slate-500">Registra en la cuenta el abono que ya verificaste fuera de la app. El saldo sirve para pagar pedidos y queda en el historial.</p>
                   </div>
                   <input type="email" required value={emailRecargaSaldo} onChange={event => setEmailRecargaSaldo(event.target.value)} placeholder="cliente@empresa.com" className={`w-full rounded-xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-800 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50'}`} />
-                  <input type="number" required min="0.01" max="10000" step="0.01" value={montoRecargaSaldo} onChange={event => setMontoRecargaSaldo(event.target.value)} placeholder="Monto en USD" className={`w-full rounded-xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-800 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50'}`} />
-                  <input type="text" maxLength={250} value={notaRecargaSaldo} onChange={event => setNotaRecargaSaldo(event.target.value)} placeholder="Nota o referencia (opcional)" className={`w-full rounded-xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-800 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50'}`} />
-                  <button type="submit" className="w-full rounded-xl bg-[#FF5722] py-3 text-xs font-bold text-white">Aplicar recarga</button>
+                  <input type="number" required min="0.01" max="10000" step="0.01" value={montoRecargaSaldo} onChange={event => setMontoRecargaSaldo(event.target.value)} placeholder="Monto base en USD" className={`w-full rounded-xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-800 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50'}`} />
+                  <input type="text" required maxLength={250} value={notaRecargaSaldo} onChange={event => setNotaRecargaSaldo(event.target.value)} placeholder="Referencia del abono verificado" className={`w-full rounded-xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-800 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50'}`} />
+                  <p className="text-[10px] text-slate-500">Este proceso no cobra dinero: acredita manualmente el saldo luego de confirmar la recepción del pago.</p>
+                  <button type="submit" className="w-full rounded-xl bg-[#FF5722] py-3 text-xs font-bold text-white">Acreditar saldo</button>
                 </form>
               </div>
             </div>
@@ -2441,12 +2837,12 @@ export default function App() {
                   {historialPagosAdmin.map(evento => (
                     <article key={evento.id} className={`space-y-2 rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-950' : 'border-slate-100 bg-slate-50'}`}>
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <p className="text-xs font-black">Pedido #{evento.pedido_id} · {etiquetaTipoServicio(evento.tipo_servicio)}</p>
+                        <p className="text-xs font-black">{codigoPedido(evento.pedido_id)} · {etiquetaTipoServicio(evento.tipo_servicio)}</p>
                         <p className="text-[10px] text-slate-500">{new Date(evento.creado_en).toLocaleString('es-VE')}</p>
                       </div>
                       <p className="text-xs"><strong>Cliente:</strong> {evento.cliente_nombre} · <strong>Acción:</strong> {evento.accion.replaceAll('_', ' ')}</p>
                       <p className="text-xs"><strong>Actor:</strong> {evento.actor_nombre || 'Cuenta eliminada'} ({evento.actor_rol}) · <strong>Pago:</strong> {etiquetaMetodoPago(evento.metodo_pago)} / {evento.estado_pago}</p>
-                      <p className="text-xs"><strong>Monto:</strong> ${Number(evento.monto).toFixed(2)}{evento.referencia_pago ? ` · Referencia: ${evento.referencia_pago}` : ''}</p>
+                      <p className="text-xs"><strong>Monto:</strong> {mostrarMontoPedido(evento.monto)}{evento.referencia_pago ? ` · Referencia: ${evento.referencia_pago}` : ''}</p>
                       <p className="text-[11px] text-slate-500">{evento.descripcion} · {evento.origen_texto} → {evento.destino_texto}</p>
                       <p className="text-[11px] text-slate-500">{evento.detalle}</p>
                     </article>
