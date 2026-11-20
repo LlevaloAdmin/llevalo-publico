@@ -1152,14 +1152,10 @@ export default function App() {
                 Envíos y viajes en San Diego. Conoce quién realizará el servicio y sigue cada solicitud desde la app.
               </p>
 
-              <div className="flex flex-col sm:flex-row gap-4 pt-2">
-                <button onClick={() => { setAuthRoleSelection('cliente'); setActiveTab('auth'); }} className="bg-[#FF5722] hover:bg-[#F4511E] text-white font-bold px-8 py-4 rounded-2xl transition shadow-lg flex items-center justify-center space-x-2 cursor-pointer">
-                  <span>Hacer un pedido</span>
+              <div className="pt-2">
+                <button onClick={() => { setAuthMode('register'); setAuthRoleSelection('cliente'); setActiveTab('auth'); }} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-[#FF5722] px-8 py-4 font-bold text-white shadow-lg transition hover:bg-[#F4511E] cursor-pointer sm:w-fit">
+                  <span>Empezar aquí</span>
                   <ArrowRight size={18} />
-                </button>
-                <button onClick={() => { setAuthRoleSelection('repartidor'); setActiveTab('auth'); }} className={`border font-bold px-8 py-4 rounded-2xl transition flex items-center justify-center space-x-2 shadow-sm cursor-pointer ${darkMode ? 'bg-slate-900 border-slate-800 text-white hover:bg-slate-800' : 'bg-white hover:bg-orange-50 border-orange-200 text-slate-800'}`}>
-                  <Bike size={18} className="text-[#FF5722]" />
-                  <span>Quiero ser repartidor</span>
                 </button>
               </div>
             </div>
@@ -1178,9 +1174,6 @@ export default function App() {
             <div className={`rounded-3xl p-6 md:p-10 border shadow-sm ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-orange-100'}`}>
               <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-6">
                 <div className="space-y-3">
-                  <span className="inline-flex items-center gap-2 rounded-full bg-orange-100 px-3 py-1 text-[11px] font-black uppercase tracking-wide text-[#FF5722]">
-                    <MapPin size={14} /> Llévalo · San Diego
-                  </span>
                   <h1 className={`text-3xl md:text-5xl font-black tracking-tight ${darkMode ? 'text-white' : 'text-slate-900'}`}>
                     ¡Hola, {usuario.nombre.split(' ')[0]}!
                   </h1>
@@ -1333,10 +1326,19 @@ export default function App() {
                 </button>
               </form>
 
-              <div className="text-center pt-2">
-                <button type="button" onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')} className="text-xs font-bold text-[#FF5722] hover:underline cursor-pointer">
-                  {authMode === 'login' ? '¿No tienes cuenta? Regístrate aquí' : '¿Ya tienes cuenta? Inicia sesión'}
-                </button>
+              <div className="pt-2">
+                {authMode === 'login' ? (
+                  <div className={`rounded-2xl border p-4 text-center ${darkMode ? 'border-slate-700 bg-slate-950/60' : 'border-orange-200 bg-orange-50/70'}`}>
+                    <p className={`text-sm font-bold ${darkMode ? 'text-slate-200' : 'text-slate-700'}`}>¿Nuevo en Llévalo?</p>
+                    <button type="button" onClick={() => setAuthMode('register')} className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-[#FF5722] px-4 py-3 text-sm font-black text-white shadow-sm transition hover:bg-[#F4511E] cursor-pointer">
+                      Crear cuenta nueva <ArrowRight size={16} />
+                    </button>
+                  </div>
+                ) : (
+                  <button type="button" onClick={() => setAuthMode('login')} className={`w-full rounded-xl border px-4 py-3 text-sm font-bold transition cursor-pointer ${darkMode ? 'border-slate-700 text-slate-200 hover:bg-slate-800' : 'border-orange-200 text-[#D84315] hover:bg-orange-50'}`}>
+                    ¿Ya tienes cuenta? Inicia sesión
+                  </button>
+                )}
               </div>
             </div>
           </div>
