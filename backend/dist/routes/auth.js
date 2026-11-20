@@ -6,10 +6,12 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
+const crypto_1 = require("crypto");
 const promises_1 = __importDefault(require("dns/promises"));
 const db_1 = require("../db");
 const config_1 = require("../config");
 const auth_1 = require("../middleware/auth");
+const activity_1 = require("../utils/activity");
 const router = (0, express_1.Router)();
 let profileColumnsReady = null;
 const ensureProfileColumns = () => {
@@ -99,7 +101,13 @@ router.post('/register', async (req, res) => {
             cedula?.trim() || null, foto || null, vehiculo?.trim() || null, placa?.trim() || null, vehiculo_foto || null
         ]);
         const user = usuarioPublico(newUser.rows[0]);
-        const token = jsonwebtoken_1.default.sign({ id: user.id, rol: user.rol, rol_base: user.rol, es_admin: user.es_admin }, config_1.JWT_SECRET, { expiresIn: '7d' });
+        const token = jsonwebtoken_1.default.sign({ id: user.id, rol: user.rol, rol_base: user.rol, es_admin: user.es_admin, jti: (0, crypto_1.randomUUID)() }, config_1.JWT_SECRET, { expiresIn: '7d' });
+        try {
+            await (0, activity_1.registrarActividadDirecta)(user.id, user.rol, 'cuenta_creada', `Se creó una cuenta de ${user.rol}.`);
+        }
+        catch (activityError) {
+            console.error('No se pudo registrar la creación de cuenta:', activityError);
+        }
         res.status(201).json({
             mensaje: '¡Cuenta creada con éxito!',
             token,
@@ -128,7 +136,13 @@ router.post('/login', async (req, res) => {
         if (!validPassword) {
             return res.status(400).json({ error: 'Correo o contraseña incorrectos.' });
         }
-        const token = jsonwebtoken_1.default.sign({ id: user.id, rol: user.rol, rol_base: user.rol, es_admin: user.es_admin === true }, config_1.JWT_SECRET, { expiresIn: '7d' });
+        const token = jsonwebtoken_1.default.sign({ id: user.id, rol: user.rol, rol_base: user.rol, es_admin: user.es_admin === true, jti: (0, crypto_1.randomUUID)() }, config_1.JWT_SECRET, { expiresIn: '7d' });
+        try {
+            await (0, activity_1.registrarActividadDirecta)(user.id, user.rol, 'inicio_sesion', 'Inició sesión.');
+        }
+        catch (activityError) {
+            console.error('No se pudo registrar el inicio de sesión:', activityError);
+        }
         res.json({
             mensaje: 'Login exitoso',
             token,
@@ -155,12 +169,83 @@ router.put('/active-role', auth_1.requireAuth, auth_1.requireAdmin, async (req, 
             return res.status(403).json({ error: 'Esta acción requiere permisos de administrador.' });
         const user = result.rows[0];
         const usuarioActivo = { ...usuarioPublico(user), rol };
-        const token = jsonwebtoken_1.default.sign({ id: user.id, rol, rol_base: user.rol, es_admin: true }, config_1.JWT_SECRET, { expiresIn: '7d' });
+        const token = jsonwebtoken_1.default.sign({ id: user.id, rol, rol_base: user.rol, es_admin: true, jti: authUser.session_id }, config_1.JWT_SECRET, { expiresIn: '7d' });
         res.json({ token, usuario: usuarioActivo });
     }
     catch (error) {
         console.error('Error al cambiar la perspectiva del administrador:', error);
         res.status(500).json({ error: 'No se pudo cambiar la perspectiva de la cuenta.' });
+    }
+});
+router.post('/activity/presence', auth_1.requireAuth, async (req, res) => {
+    const authUser = req.authUser;
+    if (!authUser)
+        return res.status(401).json({ error: 'Sesión inválida.' });
+    try {
+        await (0, activity_1.asegurarTablasActividad)();
+        await db_1.pool.query(`INSERT INTO sesiones_activas (session_id, usuario_id, ultimo_pulso)
+       VALUES ($1, $2, CURRENT_TIMESTAMP)
+       ON CONFLICT (session_id) DO UPDATE
+         SET usuario_id = EXCLUDED.usuario_id, ultimo_pulso = CURRENT_TIMESTAMP`, [authUser.session_id, authUser.id]);
+        res.status(204).end();
+    }
+    catch (error) {
+        console.error('Error actualizando presencia:', error);
+        res.status(500).json({ error: 'No se pudo actualizar la presencia.' });
+    }
+});
+router.post('/logout', auth_1.requireAuth, async (req, res) => {
+    const authUser = req.authUser;
+    if (!authUser)
+        return res.status(401).json({ error: 'Sesión inválida.' });
+    const client = await db_1.pool.connect();
+    try {
+        await client.query('BEGIN');
+        await (0, activity_1.registrarActividad)(client, authUser.id, authUser.rol, 'cierre_sesion', 'Cerró sesión.');
+        await client.query('DELETE FROM sesiones_activas WHERE session_id = $1', [authUser.session_id]);
+        await client.query('COMMIT');
+        res.json({ mensaje: 'Sesión cerrada.' });
+    }
+    catch (error) {
+        console.error('Error registrando el cierre de sesión:', error);
+        try {
+            await client.query('ROLLBACK');
+        }
+        catch (rollbackError) {
+            console.error('Error al revertir el cierre de sesión:', rollbackError);
+        }
+        res.status(500).json({ error: 'No se pudo registrar el cierre de sesión.' });
+    }
+    finally {
+        client.release();
+    }
+});
+router.get('/admin/monitor', auth_1.requireAuth, auth_1.requireAdmin, async (_req, res) => {
+    try {
+        await (0, activity_1.asegurarTablasActividad)();
+        const counts = await db_1.pool.query(`WITH activos AS (
+         SELECT DISTINCT s.usuario_id, u.rol
+         FROM sesiones_activas s
+         JOIN usuarios u ON u.id = s.usuario_id
+         WHERE s.ultimo_pulso >= CURRENT_TIMESTAMP - INTERVAL '60 seconds'
+       )
+       SELECT
+         (SELECT COUNT(*)::integer FROM usuarios) AS cuentas_totales,
+         (SELECT COUNT(*)::integer FROM usuarios WHERE rol = 'cliente') AS clientes_totales,
+         (SELECT COUNT(*)::integer FROM usuarios WHERE rol = 'repartidor') AS repartidores_totales,
+         COUNT(*)::integer AS usuarios_activos,
+         COUNT(*) FILTER (WHERE rol = 'cliente')::integer AS clientes_activos,
+         COUNT(*) FILTER (WHERE rol = 'repartidor')::integer AS repartidores_activos
+       FROM activos`);
+        const activity = await db_1.pool.query(`SELECT id, actor_nombre, actor_rol, evento, resumen, pedido_id, creado_en
+       FROM actividad_admin
+       ORDER BY creado_en DESC, id DESC
+       LIMIT 100`);
+        res.json({ metricas: counts.rows[0], actividad: activity.rows });
+    }
+    catch (error) {
+        console.error('Error consultando el monitor administrativo:', error);
+        res.status(500).json({ error: 'No se pudo consultar el monitor administrativo.' });
     }
 });
 router.put('/profile', auth_1.requireAuth, async (req, res) => {

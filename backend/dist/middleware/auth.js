@@ -19,7 +19,8 @@ const verifyAccessToken = (token) => {
             || (rol !== 'cliente' && rol !== 'repartidor')
             || (rolBase !== 'cliente' && rolBase !== 'repartidor'))
             return null;
-        return { id, rol, rol_base: rolBase, es_admin: payload.es_admin === true };
+        const sessionId = typeof payload.jti === 'string' ? payload.jti : `legacy:${id}`;
+        return { id, rol, rol_base: rolBase, es_admin: payload.es_admin === true, session_id: sessionId };
     }
     catch {
         return null;

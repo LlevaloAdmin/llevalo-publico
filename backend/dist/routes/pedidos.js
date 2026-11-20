@@ -6,6 +6,7 @@ const db_1 = require("../db");
 const auth_1 = require("../middleware/auth");
 const pricing_1 = require("../utils/pricing");
 const payments_1 = require("../utils/payments");
+const activity_1 = require("../utils/activity");
 const router = (0, express_1.Router)();
 const initTables = async () => {
     try {
@@ -198,6 +199,7 @@ const expirarPedidoSiCorresponde = async (client, id) => {
     await client.query(`INSERT INTO historial_pagos
      (pedido_id, actor_rol, accion, metodo_pago, estado_pago, monto, referencia_pago, detalle)
      VALUES ($1, 'sistema', 'pedido_expirado', $2, $3, $4, $5, $6)`, [id, pedido.metodo_pago, nuevoEstadoPago, pedido.tarifa, pedido.referencia_pago, detalle]);
+    await (0, activity_1.registrarActividad)(client, null, 'sistema', 'pedido_expirado', detalle, id);
     return true;
 };
 let procesandoExpiraciones = false;
@@ -343,6 +345,7 @@ router.post('/', (0, auth_1.requireRole)('cliente'), async (req, res) => {
                     : 'El monto se debitó del saldo corporativo.'
             ]);
         }
+        await (0, activity_1.registrarActividad)(client, authUser.id, authUser.rol, 'pedido_creado', `Creó ${tipo_servicio === 'viajes' ? 'un viaje' : 'un envío'} por $${montoCalculado.toFixed(2)} con ${metodoPago}. ${origen_texto.trim()} → ${destino_texto.trim()}.`, Number(result.rows[0].id));
         await client.query('COMMIT');
         res.status(201).json({ mensaje: 'Pedido publicado', pedido: result.rows[0] });
     }
@@ -370,7 +373,7 @@ router.get('/', async (req, res) => {
             ? await db_1.pool.query(`SELECT * FROM pedidos
          WHERE cliente_id = $1
            AND (estado != 'cancelado'
-                OR (motivo_cancelacion = 'sin_repartidor'
+                OR (motivo_cancelacion IN ('sin_repartidor', 'repartidor_cancelado')
                     AND creado_en >= CURRENT_TIMESTAMP - INTERVAL '10 minutes'))
          ORDER BY creado_en DESC`, [authUser.id])
             : await db_1.pool.query(`SELECT id, cliente_id, cliente_nombre, tipo_servicio, descripcion,
@@ -456,6 +459,7 @@ router.post('/:id/postular', (0, auth_1.requireRole)('repartidor'), async (req, 
         const nueva = await client.query(`INSERT INTO postulaciones (pedido_id, repartidor_id, repartidor_nombre, vehiculo, placa, vehiculo_foto, calificacion, estado)
        VALUES ($1, $2, $3, $4, $5, $6, $7, 'pendiente') RETURNING *`, [id, authUser.id, repartidor.rows[0].nombre, vehiculo || 'Moto', placa || 'ABC-123', vehiculo_foto || '', 5.0]);
         await client.query("UPDATE pedidos SET estado = 'postulado' WHERE id = $1 AND estado = 'pendiente'", [id]);
+        await (0, activity_1.registrarActividad)(client, authUser.id, authUser.rol, 'repartidor_postulado', `Se postuló al pedido #${id}.`, id);
         await client.query('COMMIT');
         res.json({ mensaje: 'Postulación enviada', postulacion: nueva.rows[0] });
     }
@@ -485,7 +489,7 @@ router.delete('/:id/postular/:repartidor_id', (0, auth_1.requireRole)('repartido
     const client = await db_1.pool.connect();
     try {
         await client.query('BEGIN');
-        const pedido = await client.query('SELECT estado FROM pedidos WHERE id = $1 FOR UPDATE', [id]);
+        const pedido = await client.query('SELECT estado, tipo_servicio, tarifa, origen_texto, destino_texto FROM pedidos WHERE id = $1 FOR UPDATE', [id]);
         if (pedido.rows.length === 0) {
             await client.query('ROLLBACK');
             return res.status(404).json({ error: 'Pedido no encontrado.' });
@@ -495,6 +499,7 @@ router.delete('/:id/postular/:repartidor_id', (0, auth_1.requireRole)('repartido
             await client.query('ROLLBACK');
             return res.status(409).json({ error: 'La postulación ya no está activa.' });
         }
+        await (0, activity_1.registrarActividad)(client, authUser.id, authUser.rol, 'postulacion_cancelada', `Canceló su postulación al pedido #${id} (${pedido.rows[0].tipo_servicio}, $${pedido.rows[0].tarifa}). ${pedido.rows[0].origen_texto} → ${pedido.rows[0].destino_texto}.`, id);
         const restantes = await client.query("SELECT id FROM postulaciones WHERE pedido_id = $1 AND estado = 'pendiente'", [id]);
         if (restantes.rows.length === 0) {
             await client.query("UPDATE pedidos SET estado = 'pendiente', publicado_en = CURRENT_TIMESTAMP WHERE id = $1 AND estado = 'postulado'", [id]);
@@ -549,6 +554,7 @@ router.put('/:id/aceptar-postulacion', (0, auth_1.requireRole)('cliente'), async
         const pedidoActualizado = await client.query(`UPDATE pedidos
        SET estado = 'aceptado', repartidor_id = $1, repartidor_nombre = $2, repartidor_vehiculo = $3, repartidor_placa = $4, repartidor_vehiculo_foto = $5, repartidor_calificacion = $6
        WHERE id = $7 AND cliente_id = $8 RETURNING *`, [elegido.repartidor_id, elegido.repartidor_nombre, elegido.vehiculo, elegido.placa, elegido.vehiculo_foto, elegido.calificacion, id, authUser.id]);
+        await (0, activity_1.registrarActividad)(client, authUser.id, authUser.rol, 'repartidor_asignado', `Seleccionó a ${elegido.repartidor_nombre} para el pedido #${id}. ${pedidoActualizado.rows[0].tipo_servicio} por $${pedidoActualizado.rows[0].tarifa}. ${pedidoActualizado.rows[0].origen_texto} → ${pedidoActualizado.rows[0].destino_texto}.`, id);
         await client.query('COMMIT');
         res.json({ mensaje: 'Repartidor seleccionado', pedido: pedidoActualizado.rows[0] });
     }
@@ -632,7 +638,7 @@ router.put('/:id/estado', async (req, res) => {
         try {
             client = await db_1.pool.connect();
             await client.query('BEGIN');
-            const cancelable = await client.query(`SELECT id, metodo_pago, estado_pago FROM pedidos
+            const cancelable = await client.query(`SELECT id, metodo_pago, estado_pago, tipo_servicio, tarifa, origen_texto, destino_texto FROM pedidos
          WHERE id = $1 AND cliente_id = $2
            AND (estado IN ('pendiente', 'postulado')
                 OR (tipo_servicio = 'viajes' AND estado = 'aceptado'))
@@ -642,7 +648,7 @@ router.put('/:id/estado', async (req, res) => {
                 return res.status(409).json({ error: 'El pedido no existe o ya no se puede cancelar.' });
             }
             const nuevoEstadoPago = (0, payments_1.estadoPagoAlCancelar)(cancelable.rows[0].metodo_pago, cancelable.rows[0].estado_pago);
-            const cancelado = await client.query(`UPDATE pedidos SET estado = 'cancelado', estado_pago = $3
+            const cancelado = await client.query(`UPDATE pedidos SET estado = 'cancelado', estado_pago = $3, motivo_cancelacion = 'cliente_cancelado'
          WHERE id = $1 AND cliente_id = $2
          RETURNING *`, [id, authUser.id, nuevoEstadoPago]);
             await client.query("UPDATE postulaciones SET estado = 'rechazado' WHERE pedido_id = $1 AND estado IN ('pendiente', 'aceptado')", [id]);
@@ -669,6 +675,7 @@ router.put('/:id/estado', async (req, res) => {
                         : 'El cliente canceló el pedido y solicitó verificar el pago para procesar el reembolso.'
                 ]);
             }
+            await (0, activity_1.registrarActividad)(client, authUser.id, authUser.rol, 'pedido_cancelado_cliente', `Canceló el pedido #${id} (${cancelado.rows[0].tipo_servicio}) por $${cancelado.rows[0].tarifa}, pagado con ${cancelado.rows[0].metodo_pago}. ${cancelado.rows[0].origen_texto} → ${cancelado.rows[0].destino_texto}.`, id);
             await client.query('COMMIT');
             const estadoPagoFinal = cancelado.rows[0].estado_pago;
             const mensaje = estadoPagoFinal === 'reembolso_pendiente'
@@ -688,6 +695,66 @@ router.put('/:id/estado', async (req, res) => {
                 console.error('Error al revertir la cancelación del pedido:', rollbackError);
             }
             return res.status(500).json({ error: 'Error al cancelar el pedido.' });
+        }
+        finally {
+            client?.release();
+        }
+    }
+    if (nuevoEstado === 'cancelado' && authUser.rol === 'repartidor') {
+        let client = null;
+        try {
+            client = await db_1.pool.connect();
+            await client.query('BEGIN');
+            const actual = await client.query(`SELECT * FROM pedidos
+         WHERE id = $1 AND repartidor_id = $2 AND estado = 'aceptado'
+         FOR UPDATE`, [id, authUser.id]);
+            if (actual.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return res.status(409).json({ error: 'El pedido no existe o ya no se puede cancelar como repartidor.' });
+            }
+            const pedido = actual.rows[0];
+            const nuevoEstadoPago = (0, payments_1.estadoPagoAlCancelar)(pedido.metodo_pago, pedido.estado_pago);
+            const cancelado = await client.query(`UPDATE pedidos
+         SET estado = 'cancelado', estado_pago = $2, motivo_cancelacion = 'repartidor_cancelado'
+         WHERE id = $1
+         RETURNING *`, [id, nuevoEstadoPago]);
+            await client.query("UPDATE postulaciones SET estado = 'rechazado' WHERE pedido_id = $1 AND estado IN ('pendiente', 'aceptado')", [id]);
+            if (pedido.metodo_pago === 'saldo_corporativo' && nuevoEstadoPago === 'reembolsado') {
+                const saldo = await client.query(`INSERT INTO saldos_corporativos (cliente_id, saldo)
+           VALUES ($1, $2)
+           ON CONFLICT (cliente_id) DO UPDATE
+             SET saldo = saldos_corporativos.saldo + EXCLUDED.saldo
+           RETURNING saldo`, [pedido.cliente_id, Number(pedido.tarifa)]);
+                await client.query(`INSERT INTO movimientos_saldo
+           (cliente_id, monto, saldo_resultante, tipo, pedido_id, nota)
+           VALUES ($1, $2, $3, 'reembolso', $4, $5)`, [pedido.cliente_id, Number(pedido.tarifa), saldo.rows[0].saldo, id, `Reembolso por cancelación del repartidor del pedido ${id}`]);
+            }
+            if (['reembolso_pendiente', 'reembolsado'].includes(nuevoEstadoPago)) {
+                await client.query(`INSERT INTO historial_pagos
+           (pedido_id, actor_id, actor_rol, accion, metodo_pago, estado_pago, monto, referencia_pago, detalle)
+           VALUES ($1, $2, 'repartidor', $3, $4, $5, $6, $7, $8)`, [
+                    id, authUser.id,
+                    nuevoEstadoPago === 'reembolsado' ? 'saldo_reembolsado' : 'reembolso_solicitado',
+                    pedido.metodo_pago, nuevoEstadoPago, pedido.tarifa, pedido.referencia_pago,
+                    nuevoEstadoPago === 'reembolsado'
+                        ? 'El saldo se devolvió porque el repartidor canceló antes de iniciar el servicio.'
+                        : 'El repartidor canceló antes de iniciar; el pago móvil quedó pendiente de reembolso.'
+                ]);
+            }
+            await (0, activity_1.registrarActividad)(client, authUser.id, authUser.rol, 'pedido_cancelado_repartidor', `Canceló el pedido #${id} antes de iniciar (${pedido.tipo_servicio}) por $${pedido.tarifa}, pagado con ${pedido.metodo_pago}. ${pedido.origen_texto} → ${pedido.destino_texto}.`, id);
+            await client.query('COMMIT');
+            return res.json({ mensaje: 'Trabajo cancelado. El cliente puede crear una nueva solicitud.', pedido: cancelado.rows[0] });
+        }
+        catch (error) {
+            console.error('Error al cancelar el trabajo como repartidor:', error);
+            try {
+                if (client)
+                    await client.query('ROLLBACK');
+            }
+            catch (rollbackError) {
+                console.error('Error al revertir la cancelación del trabajo:', rollbackError);
+            }
+            return res.status(500).json({ error: 'No se pudo cancelar el trabajo.' });
         }
         finally {
             client?.release();
@@ -736,6 +803,7 @@ router.put('/:id/estado', async (req, res) => {
                     update.rows[0].tarifa, 'El repartidor confirmó la recepción del efectivo en el punto de retiro.'
                 ]);
             }
+            await (0, activity_1.registrarActividad)(client, authUser.id, authUser.rol, 'pedido_iniciado', `Inició el pedido #${id} (${update.rows[0].tipo_servicio}) por $${update.rows[0].tarifa}.`, id);
             await client.query('COMMIT');
             return res.json({ mensaje: 'Estado actualizado', pedido: update.rows[0] });
         }
@@ -754,27 +822,37 @@ router.put('/:id/estado', async (req, res) => {
             client?.release();
         }
     }
-    let query;
-    let params;
     if (nuevoEstado === 'completado') {
-        query = `UPDATE pedidos SET estado = $1 WHERE id = $2
-             AND estado = 'entregado_repartidor'
-             AND (cliente_id = $3 OR repartidor_id = $3)`;
-        params = [nuevoEstado, id, authUser.id];
+        const client = await db_1.pool.connect();
+        try {
+            await client.query('BEGIN');
+            const resultado = await client.query(`UPDATE pedidos SET estado = 'completado'
+         WHERE id = $1 AND estado = 'entregado_repartidor'
+           AND (cliente_id = $2 OR repartidor_id = $2)
+         RETURNING *`, [id, authUser.id]);
+            if (resultado.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return res.status(409).json({ error: 'El pedido no existe o no admite ese cambio de estado.' });
+            }
+            const pedido = resultado.rows[0];
+            await (0, activity_1.registrarActividad)(client, authUser.id, authUser.rol, 'pedido_completado', `Completó el pedido #${id} (${pedido.tipo_servicio}) por $${pedido.tarifa}.`, id);
+            await client.query('COMMIT');
+            return res.json({ mensaje: 'Estado actualizado', pedido });
+        }
+        catch (error) {
+            console.error('Error al actualizar estado:', error);
+            try {
+                await client.query('ROLLBACK');
+            }
+            catch (rollbackError) {
+                console.error('Error al revertir la finalización del pedido:', rollbackError);
+            }
+            return res.status(500).json({ error: 'Error al actualizar estado' });
+        }
+        finally {
+            client.release();
+        }
     }
-    else {
-        return res.status(403).json({ error: 'No tienes permiso para realizar este cambio de estado.' });
-    }
-    try {
-        const update = await db_1.pool.query(query, params);
-        if (update.rowCount === 0)
-            return res.status(409).json({ error: 'El pedido no existe o no admite ese cambio de estado.' });
-        const resultadoFinal = await db_1.pool.query('SELECT * FROM pedidos WHERE id = $1', [id]);
-        res.json({ mensaje: `Estado actualizado`, pedido: resultadoFinal.rows[0] });
-    }
-    catch (error) {
-        console.error('Error al actualizar estado:', error);
-        res.status(500).json({ error: 'Error al actualizar estado' });
-    }
+    return res.status(403).json({ error: 'No tienes permiso para realizar este cambio de estado.' });
 });
 exports.default = router;

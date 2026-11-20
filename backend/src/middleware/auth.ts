@@ -8,6 +8,7 @@ export interface AuthenticatedUser {
   rol: 'cliente' | 'repartidor';
   rol_base: 'cliente' | 'repartidor';
   es_admin: boolean;
+  session_id: string;
 }
 
 declare global {
@@ -29,7 +30,8 @@ export const verifyAccessToken = (token: string): AuthenticatedUser | null => {
     if (!Number.isSafeInteger(id) || id <= 0
       || (rol !== 'cliente' && rol !== 'repartidor')
       || (rolBase !== 'cliente' && rolBase !== 'repartidor')) return null;
-    return { id, rol, rol_base: rolBase, es_admin: payload.es_admin === true };
+    const sessionId = typeof payload.jti === 'string' ? payload.jti : `legacy:${id}`;
+    return { id, rol, rol_base: rolBase, es_admin: payload.es_admin === true, session_id: sessionId };
   } catch {
     return null;
   }

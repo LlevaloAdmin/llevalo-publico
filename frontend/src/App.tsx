@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Bike, MapPin, ArrowRight, User, Eye, EyeOff, Clock, Send, Power, Star, Moon, Sun, DollarSign, XCircle, Navigation, CheckCircle2, Circle, Package, CarFront } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Activity, Bike, MapPin, ArrowRight, User, Eye, EyeOff, Clock, Send, Power, Star, Moon, Sun, DollarSign, XCircle, Navigation, CheckCircle2, Circle, Package, CarFront, LogOut, Users, UserRound } from 'lucide-react';
 import { App as CapacitorApp } from '@capacitor/app';
 import { StatusBar, Style } from '@capacitor/status-bar';
 import { Capacitor } from '@capacitor/core';
@@ -202,6 +202,25 @@ interface HistorialPagoAdmin {
   estado_pedido: string;
 }
 
+interface ActividadAdmin {
+  id: number;
+  actor_nombre: string;
+  actor_rol: string;
+  evento: string;
+  resumen: string;
+  pedido_id: number | null;
+  creado_en: string;
+}
+
+interface MetricasAdmin {
+  cuentas_totales: number;
+  clientes_totales: number;
+  repartidores_totales: number;
+  usuarios_activos: number;
+  clientes_activos: number;
+  repartidores_activos: number;
+}
+
 const API_URL = import.meta.env.VITE_API_URL?.trim().replace(/\/+$/, '')
   || (import.meta.env.DEV ? `http://${window.location.hostname}:5000` : '');
 
@@ -226,6 +245,8 @@ const mensajeErrorApi = async (response: Response, mensajePredeterminado: string
   }
   return `${mensajePredeterminado} (HTTP ${response.status})`;
 };
+
+const horaInicial = Date.now();
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'home' | 'cliente' | 'repartidor' | 'perfil' | 'auth' | 'admin'>('home');
@@ -252,7 +273,7 @@ export default function App() {
       return null;
     }
   });
-  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [authMode, setAuthMode] = useState<'choice' | 'login' | 'register'>('choice');
   const [authRoleSelection, setAuthRoleSelection] = useState<'cliente' | 'repartidor'>('cliente');
   const [errorAuth, setErrorAuth] = useState('');
   const [guardandoPerfil, setGuardandoPerfil] = useState(false);
@@ -335,6 +356,8 @@ export default function App() {
   const [errorPago, setErrorPago] = useState('');
   const [pagosPendientesAdmin, setPagosPendientesAdmin] = useState<PedidoReal[]>([]);
   const [historialPagosAdmin, setHistorialPagosAdmin] = useState<HistorialPagoAdmin[]>([]);
+  const [metricasAdmin, setMetricasAdmin] = useState<MetricasAdmin | null>(null);
+  const [actividadAdmin, setActividadAdmin] = useState<ActividadAdmin[]>([]);
   const [cargandoAdmin, setCargandoAdmin] = useState(false);
   const [errorAdmin, setErrorAdmin] = useState('');
   const [mensajeAdmin, setMensajeAdmin] = useState('');
@@ -343,7 +366,8 @@ export default function App() {
   const [montoRecargaSaldo, setMontoRecargaSaldo] = useState('');
   const [notaRecargaSaldo, setNotaRecargaSaldo] = useState('');
 
-  const [horaActual, setHoraActual] = useState(Date.now());
+  const [horaActual, setHoraActual] = useState(horaInicial);
+  const usuarioId = usuario?.id;
 
   useEffect(() => {
     const alDesconectar = () => setSinConexion(true);
@@ -442,6 +466,30 @@ export default function App() {
     const intervalo = setInterval(sincronizarDatos, 3000);
     return () => clearInterval(intervalo);
   }, [usuario]);
+
+  useEffect(() => {
+    if (!usuarioId) return;
+    const actualizarPresencia = () => {
+      void (async () => {
+        try {
+          const response = await authenticatedFetch(`${API_URL}/api/auth/activity/presence`, { method: 'POST' });
+          if (!response.ok) console.error('No se pudo actualizar la presencia de la cuenta.');
+        } catch (error) {
+          console.error('Error actualizando la presencia:', error);
+        }
+      })();
+    };
+    actualizarPresencia();
+    const intervalo = window.setInterval(actualizarPresencia, 20_000);
+    const alVolver = () => {
+      if (document.visibilityState === 'visible') actualizarPresencia();
+    };
+    document.addEventListener('visibilitychange', alVolver);
+    return () => {
+      clearInterval(intervalo);
+      document.removeEventListener('visibilitychange', alVolver);
+    };
+  }, [usuarioId]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -691,8 +739,8 @@ export default function App() {
     }
   };
 
-  const cargarConfiguracionPago = async () => {
-    if (!usuario) return;
+  const cargarConfiguracionPago = useCallback(async () => {
+    if (!usuario?.id) return;
     setCargandoConfiguracionPago(true);
     setErrorPago('');
     try {
@@ -705,6 +753,11 @@ export default function App() {
     } finally {
       setCargandoConfiguracionPago(false);
     }
+  }, [usuario?.id]);
+
+  const irAPedidos = () => {
+    setActiveTab('cliente');
+    void cargarConfiguracionPago();
   };
 
   const cargarPanelAdmin = async () => {
@@ -733,6 +786,29 @@ export default function App() {
       setCargandoAdmin(false);
     }
   };
+
+  const cargarMonitorAdmin = useCallback(async () => {
+    if (!usuario?.es_admin) return;
+    try {
+      const response = await authenticatedFetch(`${API_URL}/api/auth/admin/monitor`);
+      if (!response.ok) throw new Error(await mensajeErrorApi(response, 'No se pudo cargar el monitor'));
+      const data: { metricas: MetricasAdmin; actividad: ActividadAdmin[] } = await response.json();
+      setMetricasAdmin(data.metricas);
+      setActividadAdmin(Array.isArray(data.actividad) ? data.actividad : []);
+    } catch (error) {
+      console.error('Error al actualizar el monitor administrativo:', error);
+      setErrorAdmin(error instanceof Error ? error.message : 'No se pudo cargar el monitor administrativo.');
+    }
+  }, [usuario?.es_admin]);
+
+  useEffect(() => {
+    if (!usuario?.es_admin || activeTab !== 'admin') return;
+    // The dashboard refreshes separately from payment data to keep presence counters current.
+    // oxlint-disable-next-line react/set-state-in-effect
+    void cargarMonitorAdmin();
+    const intervalo = window.setInterval(() => void cargarMonitorAdmin(), 15_000);
+    return () => clearInterval(intervalo);
+  }, [usuario?.id, usuario?.es_admin, activeTab, cargarMonitorAdmin]);
 
   const cambiarPerspectivaAdmin = async (rol: 'cliente' | 'repartidor') => {
     if (!usuario?.es_admin || usuario.rol === rol) return;
@@ -1061,6 +1137,16 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    const token = localStorage.getItem('llevalo_token');
+    if (token) {
+      void fetch(`${API_URL}/api/auth/logout`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        keepalive: true
+      }).then(response => {
+        if (!response.ok) console.error('No se pudo registrar el cierre de sesión.');
+      }).catch(error => console.error('Error registrando el cierre de sesión:', error));
+    }
     localStorage.removeItem('llevalo_token');
     localStorage.removeItem('llevalo_usuario');
     setUsuario(null);
@@ -1072,7 +1158,8 @@ export default function App() {
     : null;
 
   const pedidoExpiradoReciente = usuario?.rol === 'cliente' && Array.isArray(pedidosReales)
-    ? pedidosReales.find(p => p.cliente_id === usuario.id && p.motivo_cancelacion === 'sin_repartidor')
+    ? pedidosReales.find(p => p.cliente_id === usuario.id
+      && (p.motivo_cancelacion === 'sin_repartidor' || p.motivo_cancelacion === 'repartidor_cancelado'))
     : null;
 
   const segundosRestantes = (() => {
@@ -1215,49 +1302,36 @@ export default function App() {
   return (
     <div className={`app-shell flex flex-col font-sans transition-colors duration-300 ${darkMode ? 'dark bg-slate-950 text-slate-100' : 'bg-[#FDFBF7] text-slate-800'}`}>
       <header className={`border-b backdrop-blur sticky top-0 z-50 px-4 md:px-10 py-3 flex flex-wrap justify-between items-center gap-y-2 shadow-sm transition-colors ${darkMode ? 'bg-slate-950/90 border-slate-800' : 'bg-[#FDFBF7]/90 border-orange-100'}`}>
-        <div className="flex items-center space-x-3 cursor-pointer" onClick={() => setActiveTab('home')}>
+        <div className="flex items-center space-x-3" aria-label="Llévalo">
           <div className="bg-[#FF5722] text-white w-9 h-9 rounded-2xl font-black text-lg flex items-center justify-center shadow-md">L</div>
           <span className={`text-xl md:text-2xl font-black tracking-tight ${darkMode ? 'text-white' : 'text-slate-900'}`}>Llévalo</span>
         </div>
         
         <nav className={`hidden md:flex space-x-2 p-1.5 rounded-2xl border ${darkMode ? 'bg-slate-900/80 border-slate-800' : 'bg-orange-50/80 border-orange-100'}`}>
           <button onClick={() => setActiveTab('home')} className={`px-5 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${activeTab === 'home' ? 'bg-[#FF5722] text-white shadow-sm' : (darkMode ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900')}`}>{usuario ? 'Mi Panel' : 'Inicio'}</button>
-          {usuario && usuario.rol === 'cliente' && <button onClick={() => setActiveTab('cliente')} className={`px-5 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${activeTab === 'cliente' ? 'bg-[#FF5722] text-white shadow-sm' : (darkMode ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900')}`}>Pedir</button>}
+          {usuario && usuario.rol === 'cliente' && <button onClick={irAPedidos} className={`px-5 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${activeTab === 'cliente' ? 'bg-[#FF5722] text-white shadow-sm' : (darkMode ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900')}`}>Pedir</button>}
           {usuario && usuario.rol === 'repartidor' && <button onClick={() => setActiveTab('repartidor')} className={`px-5 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${activeTab === 'repartidor' ? 'bg-[#FF5722] text-white shadow-sm' : (darkMode ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900')}`}>Radar de Trabajos</button>}
           {usuario?.es_admin && <button onClick={() => { setActiveTab('admin'); void cargarPanelAdmin(); }} className={`px-5 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${activeTab === 'admin' ? 'bg-[#FF5722] text-white shadow-sm' : (darkMode ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900')}`}>Administración</button>}
         </nav>
 
         <div className="flex items-center space-x-2 md:space-x-3">
-          <div className={`hidden sm:flex items-center space-x-1.5 px-3 py-1.5 rounded-2xl border text-[11px] md:text-xs font-bold shadow-sm ${darkMode ? 'bg-slate-900 border-slate-800 text-slate-200' : 'bg-orange-50 border-orange-200 text-slate-700'}`}>
-            <DollarSign size={13} className="text-[#FF5722]" />
-            <span>BCV: <strong>Bs. {tasaBCV}</strong></span>
-          </div>
-
           {usuario ? (
-            <div className={`flex items-center space-x-2 border px-2.5 py-1 rounded-2xl shadow-sm ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-orange-100'}`}>
-              <button
-                type="button"
-                aria-label="Abrir perfil"
-                onClick={() => setActiveTab('perfil')}
-                className={`flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl border ${darkMode ? 'border-slate-700 bg-slate-800' : 'border-orange-200 bg-orange-50'}`}
-              >
-                {fotoLocal ? (
-                  <img src={fotoLocal} alt="" className="h-full w-full object-cover" />
-                ) : (
-                  <span className="text-xs font-bold text-[#FF5722]">
-                    {usuario.nombre ? usuario.nombre.substring(0, 2).toUpperCase() : 'U'}
-                  </span>
-                )}
-              </button>
-              <button type="button" className="hidden text-right sm:block" onClick={() => setActiveTab('perfil')}>
-                <p className={`text-xs font-black hover:underline ${darkMode ? 'text-white' : 'text-slate-900'}`}>{usuario.nombre}</p>
-                <p className="text-[10px] font-bold text-[#FF5722] uppercase">{usuario.rol} · Mi Perfil</p>
-              </button>
-              {usuario.es_admin && <button onClick={() => { setActiveTab('admin'); void cargarPanelAdmin(); }} className="h-9 rounded-xl border border-orange-200 bg-orange-50 px-2.5 text-[10px] font-bold text-[#FF5722] md:hidden">Admin</button>}
-              <button onClick={handleLogout} className="h-9 rounded-xl border border-red-200 px-3 text-xs font-bold text-red-600 hover:bg-red-50 dark:hover:bg-red-950/35">Salir</button>
-            </div>
+            <button
+              type="button"
+              aria-label="Abrir perfil"
+              onClick={() => setActiveTab('perfil')}
+              className={`flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full border-2 shadow-sm transition hover:scale-105 ${darkMode ? 'border-slate-700 bg-slate-800' : 'border-orange-200 bg-orange-50'}`}
+            >
+              {fotoLocal ? (
+                <img src={fotoLocal} alt="" className="h-full w-full object-cover" />
+              ) : (
+                <span className="text-xs font-bold text-[#FF5722]">
+                  {usuario.nombre ? usuario.nombre.substring(0, 2).toUpperCase() : 'U'}
+                </span>
+              )}
+            </button>
           ) : (
-            <button onClick={() => { setErrorAuth(''); setActiveTab('auth'); }} className={`flex items-center space-x-1.5 border px-4 py-2 rounded-2xl transition text-xs md:text-sm font-bold shadow-sm cursor-pointer ${darkMode ? 'bg-slate-900 border-slate-800 text-white hover:bg-slate-800' : 'bg-white hover:bg-orange-50 border-orange-200 text-slate-800'}`}>
+            <button onClick={() => { setErrorAuth(''); setAuthMode('choice'); setActiveTab('auth'); }} className={`flex items-center space-x-1.5 border px-4 py-2 rounded-2xl transition text-xs md:text-sm font-bold shadow-sm cursor-pointer ${darkMode ? 'bg-slate-900 border-slate-800 text-white hover:bg-slate-800' : 'bg-white hover:bg-orange-50 border-orange-200 text-slate-800'}`}>
               <User size={16} className="text-[#FF5722]" />
               <span>Ingresar</span>
             </button>
@@ -1270,7 +1344,7 @@ export default function App() {
               <MapPin size={17} /> Inicio
             </button>
             {usuario.rol === 'cliente' ? (
-              <button type="button" aria-pressed={activeTab === 'cliente'} onClick={() => setActiveTab('cliente')} className={`flex min-w-[5rem] flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold ${activeTab === 'cliente' ? 'border-orange-200 bg-orange-50 text-[#FF5722]' : 'border-transparent'}`}>
+              <button type="button" aria-pressed={activeTab === 'cliente'} onClick={irAPedidos} className={`flex min-w-[5rem] flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold ${activeTab === 'cliente' ? 'border-orange-200 bg-orange-50 text-[#FF5722]' : 'border-transparent'}`}>
                 <Package size={17} /> Pedir
               </button>
             ) : (
@@ -1306,7 +1380,7 @@ export default function App() {
               </p>
 
               <div className="pt-2">
-                <button onClick={() => { setAuthMode('register'); setAuthRoleSelection('cliente'); setActiveTab('auth'); }} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-[#FF5722] px-8 py-4 font-bold text-white shadow-lg transition hover:bg-[#F4511E] cursor-pointer sm:w-fit">
+                <button onClick={() => { setAuthMode('choice'); setAuthRoleSelection('cliente'); setActiveTab('auth'); }} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-[#FF5722] px-8 py-4 font-bold text-white shadow-lg transition hover:bg-[#F4511E] cursor-pointer sm:w-fit">
                   <span>Empezar aquí</span>
                   <ArrowRight size={18} />
                 </button>
@@ -1338,7 +1412,7 @@ export default function App() {
                 </div>
                 <div className="flex flex-col sm:flex-row gap-3">
                   {usuario.rol === 'cliente' ? (
-                    <button onClick={() => setActiveTab('cliente')} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-[#FF5722] px-6 py-3.5 text-sm font-bold text-white shadow-md transition hover:bg-[#F4511E]">
+                    <button onClick={irAPedidos} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-[#FF5722] px-6 py-3.5 text-sm font-bold text-white shadow-md transition hover:bg-[#F4511E]">
                       Hacer un pedido <ArrowRight size={17} />
                     </button>
                   ) : (
@@ -1346,16 +1420,13 @@ export default function App() {
                       <Bike size={17} /> Abrir radar
                     </button>
                   )}
-                  <button onClick={() => setActiveTab('perfil')} className={`rounded-2xl border px-6 py-3.5 text-sm font-bold transition ${darkMode ? 'border-slate-700 bg-slate-800 text-white hover:bg-slate-700' : 'border-orange-200 bg-orange-50 text-slate-800 hover:bg-orange-100'}`}>
-                    Mi perfil
-                  </button>
                 </div>
               </div>
             </div>
 
             {usuario.rol === 'cliente' ? (
               <div className="grid gap-4 md:grid-cols-2">
-                <button onClick={() => setActiveTab('cliente')} className={`rounded-3xl border p-6 text-left transition hover:-translate-y-0.5 ${darkMode ? 'bg-slate-900 border-slate-800 hover:border-orange-700' : 'bg-white border-orange-100 hover:border-orange-300'}`}>
+                <button onClick={irAPedidos} className={`rounded-3xl border p-6 text-left transition hover:-translate-y-0.5 ${darkMode ? 'bg-slate-900 border-slate-800 hover:border-orange-700' : 'bg-white border-orange-100 hover:border-orange-300'}`}>
                   <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-orange-100 text-[#FF5722]"><Package size={20} /></div>
                   <h2 className="font-black">Solicitar un envío</h2>
                   <p className="mt-2 text-xs text-slate-500">Indica origen y destino, y sigue tu solicitud desde aquí.</p>
@@ -1367,10 +1438,12 @@ export default function App() {
                     {pedidoActivoCliente
                       ? `Pedido ${pedidoActivoCliente.estado}: ${pedidoActivoCliente.descripcion}`
                       : pedidoExpiradoReciente
-                        ? 'Tu solicitud se canceló automáticamente porque ningún repartidor se postuló en 60 segundos. Puedes crear una nueva.'
+                        ? pedidoExpiradoReciente.motivo_cancelacion === 'sin_repartidor'
+                          ? 'Tu solicitud se canceló automáticamente porque ningún repartidor se postuló en 60 segundos. Puedes crear una nueva.'
+                          : 'El repartidor canceló esta solicitud antes de iniciar el servicio. Puedes crear una nueva.'
                         : 'Todavía no tienes pedidos activos. Cuando hagas uno, su estado aparecerá aquí.'}
                   </p>
-                  {pedidoActivoCliente && <button onClick={() => setActiveTab('cliente')} className="mt-4 text-xs font-bold text-[#FF5722] hover:underline">Ver pedido y seguimiento</button>}
+                  {pedidoActivoCliente && <button onClick={irAPedidos} className="mt-4 text-xs font-bold text-[#FF5722] hover:underline">Ver pedido y seguimiento</button>}
                 </div>
               </div>
             ) : (
@@ -1392,6 +1465,46 @@ export default function App() {
                 </div>
               </div>
             )}
+
+            <div className="grid gap-3 sm:grid-cols-3">
+              {usuario.rol === 'cliente' ? (
+                <>
+                  <article className={`rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-900/70' : 'border-orange-100 bg-white'}`}>
+                    <Package size={18} className="text-[#FF5722]" />
+                    <h3 className="mt-3 text-sm font-bold">Envíos y viajes</h3>
+                    <p className="mt-1 text-xs text-slate-500">Comida, mercado, mandados o traslados en un solo lugar.</p>
+                  </article>
+                  <article className={`rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-900/70' : 'border-orange-100 bg-white'}`}>
+                    <MapPin size={18} className="text-emerald-500" />
+                    <h3 className="mt-3 text-sm font-bold">Seguimiento claro</h3>
+                    <p className="mt-1 text-xs text-slate-500">Revisa el estado de tu solicitud y el recorrido del repartidor.</p>
+                  </article>
+                  <article className={`rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-900/70' : 'border-orange-100 bg-white'}`}>
+                    <DollarSign size={18} className="text-amber-500" />
+                    <h3 className="mt-3 text-sm font-bold">Pagos transparentes</h3>
+                    <p className="mt-1 text-xs text-slate-500">Consulta el método elegido y el estado del pago en cada pedido.</p>
+                  </article>
+                </>
+              ) : (
+                <>
+                  <article className={`rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-900/70' : 'border-orange-100 bg-white'}`}>
+                    <Package size={18} className="text-[#FF5722]" />
+                    <h3 className="mt-3 text-sm font-bold">Trabajos cerca</h3>
+                    <p className="mt-1 text-xs text-slate-500">Explora solicitudes disponibles y elige las que te convengan.</p>
+                  </article>
+                  <article className={`rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-900/70' : 'border-orange-100 bg-white'}`}>
+                    <MapPin size={18} className="text-emerald-500" />
+                    <h3 className="mt-3 text-sm font-bold">Ruta guiada</h3>
+                    <p className="mt-1 text-xs text-slate-500">Usa el mapa para llegar al origen y al destino del servicio.</p>
+                  </article>
+                  <article className={`rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-900/70' : 'border-orange-100 bg-white'}`}>
+                    <Clock size={18} className="text-amber-500" />
+                    <h3 className="mt-3 text-sm font-bold">Tu ritmo</h3>
+                    <p className="mt-1 text-xs text-slate-500">Controla tu disponibilidad y las postulaciones desde el radar.</p>
+                  </article>
+                </>
+              )}
+            </div>
           </section>
         )}
 
@@ -1399,10 +1512,35 @@ export default function App() {
           <div className="max-w-md mx-auto w-full py-8">
             <div className={`border p-6 md:p-8 rounded-3xl shadow-sm space-y-6 ${darkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-orange-100'}`}>
               <div className="text-center space-y-1">
-                <h2 className={`text-2xl font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>{authMode === 'login' ? '¡Bienvenido de nuevo!' : 'Crea tu cuenta'}</h2>
-                <p className={`text-xs ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>Accede a Llévalo en Carabobo</p>
+                <h2 className={`text-2xl font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>
+                  {authMode === 'choice' ? 'Bienvenido a Llévalo' : authMode === 'login' ? '¡Bienvenido de nuevo!' : 'Crea tu cuenta'}
+                </h2>
+                <p className={`text-xs ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                  {authMode === 'choice' ? 'Elige cómo quieres continuar' : 'Accede a Llévalo en Carabobo'}
+                </p>
               </div>
 
+              {authMode === 'choice' ? (
+                <div className="space-y-3">
+                  <button
+                    type="button"
+                    onClick={() => { setErrorAuth(''); setAuthMode('login'); }}
+                    className="w-full rounded-2xl bg-[#FF5722] px-5 py-4 text-left text-white shadow-sm transition hover:bg-[#F4511E]"
+                  >
+                    <span className="block text-sm font-black">Iniciar sesión</span>
+                    <span className="mt-1 block text-xs text-white/85">Ya tengo una cuenta</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setErrorAuth(''); setAuthMode('register'); }}
+                    className={`w-full rounded-2xl border px-5 py-4 text-left transition ${darkMode ? 'border-slate-700 bg-slate-950 hover:border-orange-600' : 'border-orange-200 bg-orange-50 hover:border-orange-400'}`}
+                  >
+                    <span className={`block text-sm font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Crear una cuenta</span>
+                    <span className="mt-1 block text-xs text-slate-500">Regístrate como cliente o repartidor</span>
+                  </button>
+                </div>
+              ) : (
+                <>
               {authMode === 'register' && (
                 <div className={`flex p-1 rounded-2xl border ${darkMode ? 'bg-slate-950 border-slate-800' : 'bg-orange-50 border-orange-100'}`}>
                   <button type="button" onClick={() => setAuthRoleSelection('cliente')} className={`flex-1 py-2 text-xs font-bold rounded-xl cursor-pointer ${authRoleSelection === 'cliente' ? 'bg-[#FF5722] text-white' : (darkMode ? 'text-slate-400' : 'text-slate-600')}`}>Cliente</button>
@@ -1410,7 +1548,7 @@ export default function App() {
                 </div>
               )}
 
-              {errorAuth && <div className="bg-red-50 border border-red-200 text-red-700 text-xs p-3 rounded-xl font-bold">{errorAuth}</div>}
+              {errorAuth && <div role="alert" className={`rounded-xl border p-3 text-xs font-bold ${darkMode ? 'border-red-900 bg-red-950/30 text-red-300' : 'border-red-200 bg-red-50 text-red-700'}`}>{errorAuth}</div>}
 
               <form onSubmit={handleAuthSubmit} className="space-y-3.5">
                 {authMode === 'register' && (
@@ -1495,6 +1633,8 @@ export default function App() {
                   </button>
                 )}
               </div>
+                </>
+              )}
             </div>
           </div>
         )}
@@ -1509,7 +1649,7 @@ export default function App() {
                 </div>
 
                 <div className="grid grid-cols-1 min-[400px]:grid-cols-2 gap-3">
-                  <button type="button" onClick={() => setServiceType('envios')} className={`rounded-2xl border p-4 text-left transition cursor-pointer ${serviceType === 'envios' ? 'border-[#FF5722] bg-orange-50 shadow-sm dark:bg-orange-950/30' : 'border-slate-200 bg-white hover:border-orange-200 dark:border-slate-800 dark:bg-slate-950'}`}>
+                  <button type="button" onClick={() => { setServiceType('envios'); void cargarConfiguracionPago(); }} className={`rounded-2xl border p-4 text-left transition cursor-pointer ${serviceType === 'envios' ? 'border-[#FF5722] bg-orange-50 shadow-sm dark:bg-orange-950/30' : 'border-slate-200 bg-white hover:border-orange-200 dark:border-slate-800 dark:bg-slate-950'}`}>
                     <span className={`mb-3 flex h-10 w-10 items-center justify-center rounded-xl ${serviceType === 'envios' ? 'bg-[#FF5722] text-white' : 'bg-orange-100 text-[#FF5722]'}`}><Package size={19} /></span>
                     <span className={`block text-sm font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Envíos</span>
                     <span className="mt-1 block text-[10px] leading-relaxed text-slate-500">Comida, mercado, paquetes y mandados</span>
@@ -1523,7 +1663,9 @@ export default function App() {
 
                 {!pedidoActivoCliente && pedidoExpiradoReciente && (
                   <div role="status" className="rounded-2xl border border-amber-300 bg-amber-50 p-4 text-xs font-medium text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
-                    La solicitud anterior se canceló automáticamente porque ningún repartidor se postuló en 60 segundos. Envía una nueva solicitud cuando quieras.
+                    {pedidoExpiradoReciente.motivo_cancelacion === 'sin_repartidor'
+                      ? 'La solicitud anterior se canceló automáticamente porque ningún repartidor se postuló en 60 segundos.'
+                      : 'El repartidor canceló la solicitud antes de iniciar el servicio.'} Envía una nueva cuando quieras.
                   </div>
                 )}
 
@@ -1890,11 +2032,24 @@ export default function App() {
                     {mensajeNavegacion && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-[11px] font-semibold text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300">{mensajeNavegacion}</p>}
 
                     {pedidoAsignadoRepartidor.estado === 'aceptado' && (
-                      <button onClick={() => cambiarEstadoPedido(pedidoAsignadoRepartidor.id, 'entregado_repartidor')} className="w-full bg-[#FF5722] hover:bg-[#F4511E] text-white text-xs font-bold py-3 rounded-xl transition cursor-pointer shadow-sm">
-                        {pedidoAsignadoRepartidor.metodo_pago === 'efectivo' && pedidoAsignadoRepartidor.estado_pago !== 'pagado'
-                          ? 'Confirmar efectivo recibido e iniciar'
-                          : pedidoAsignadoRepartidor.tipo_servicio === 'viajes' ? 'Iniciar viaje' : 'Llegué al Punto A / Retirado'}
-                      </button>
+                      <div className="space-y-2">
+                        <button onClick={() => cambiarEstadoPedido(pedidoAsignadoRepartidor.id, 'entregado_repartidor')} className="w-full bg-[#FF5722] hover:bg-[#F4511E] text-white text-xs font-bold py-3 rounded-xl transition cursor-pointer shadow-sm">
+                          {pedidoAsignadoRepartidor.metodo_pago === 'efectivo' && pedidoAsignadoRepartidor.estado_pago !== 'pagado'
+                            ? 'Confirmar efectivo recibido e iniciar'
+                            : pedidoAsignadoRepartidor.tipo_servicio === 'viajes' ? 'Iniciar viaje' : 'Llegué al Punto A / Retirado'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (window.confirm('¿Cancelar este trabajo? El pedido se cerrará y el cliente podrá crear otra solicitud.')) {
+                              void cambiarEstadoPedido(pedidoAsignadoRepartidor.id, 'cancelado');
+                            }
+                          }}
+                          className="w-full rounded-xl border border-red-200 bg-red-50 py-2.5 text-xs font-bold text-red-700 transition hover:bg-red-100 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300 dark:hover:bg-red-950/60"
+                        >
+                          Cancelar trabajo
+                        </button>
+                      </div>
                     )}
 
                     {pedidoAsignadoRepartidor.estado === 'entregado_repartidor' && (
@@ -2050,7 +2205,7 @@ export default function App() {
                     <p className="mt-1 text-xs text-slate-500">Los cambios se guardarán en tu cuenta.</p>
                   </div>
 
-                  {errorPerfil && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-700">{errorPerfil}</p>}
+                  {errorPerfil && <p role="alert" className={`rounded-xl border p-3 text-xs font-semibold ${darkMode ? 'border-red-900 bg-red-950/30 text-red-300' : 'border-red-200 bg-red-50 text-red-700'}`}>{errorPerfil}</p>}
 
                   <div>
                     <label className="text-xs font-bold">Cédula de identidad</label>
@@ -2086,6 +2241,15 @@ export default function App() {
                   </button>
                 </form>
               </div>
+              <div className={`border-t p-5 md:px-8 ${darkMode ? 'border-slate-800' : 'border-slate-100'}`}>
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700 transition hover:bg-red-100 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300 dark:hover:bg-red-950/60 sm:w-auto"
+                >
+                  <LogOut size={17} /> Cerrar sesión
+                </button>
+              </div>
             </div>
           </section>
         )}
@@ -2107,8 +2271,86 @@ export default function App() {
               </div>
             </div>
 
-            {errorAdmin && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-700">{errorAdmin}</p>}
-            {mensajeAdmin && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs font-semibold text-emerald-800">{mensajeAdmin}</p>}
+            {errorAdmin && <p role="alert" className={`rounded-xl border p-3 text-xs font-semibold ${darkMode ? 'border-red-900 bg-red-950/30 text-red-300' : 'border-red-200 bg-red-50 text-red-700'}`}>{errorAdmin}</p>}
+            {mensajeAdmin && <p role="status" className={`rounded-xl border p-3 text-xs font-semibold ${darkMode ? 'border-emerald-900 bg-emerald-950/30 text-emerald-300' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>{mensajeAdmin}</p>}
+
+            <section className={`space-y-5 rounded-3xl border p-5 shadow-sm ${darkMode ? 'border-slate-800 bg-slate-900 text-white' : 'border-orange-100 bg-white'}`}>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Activity size={18} className="text-[#FF5722]" />
+                    <h3 className="text-base font-black">Monitor de actividad</h3>
+                  </div>
+                  <p className="mt-1 text-xs text-slate-500">Las cuentas activas se actualizan automáticamente cada 15 segundos.</p>
+                </div>
+                <span className="inline-flex items-center gap-2 rounded-full bg-emerald-500/10 px-3 py-1.5 text-[10px] font-bold text-emerald-600 dark:text-emerald-400">
+                  <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-500" /> En vivo
+                </span>
+              </div>
+
+              <div className="grid gap-3 grid-cols-2 lg:grid-cols-5">
+                <article className={`rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-950/60' : 'border-slate-100 bg-slate-50'}`}>
+                  <Users size={17} className="text-[#FF5722]" />
+                  <p className="mt-3 text-2xl font-black">{metricasAdmin?.cuentas_totales ?? '—'}</p>
+                  <p className="text-[11px] font-semibold text-slate-500">Cuentas registradas</p>
+                  <p className="mt-1 text-[10px] text-slate-400">{metricasAdmin?.clientes_totales ?? '—'} clientes · {metricasAdmin?.repartidores_totales ?? '—'} repartidores</p>
+                </article>
+                <article className={`rounded-2xl border p-4 ${darkMode ? 'border-emerald-900/60 bg-emerald-950/20' : 'border-emerald-100 bg-emerald-50/60'}`}>
+                  <Activity size={17} className="text-emerald-600 dark:text-emerald-400" />
+                  <p className="mt-3 text-2xl font-black">{metricasAdmin?.usuarios_activos ?? '—'}</p>
+                  <p className="text-[11px] font-semibold text-slate-500">Usuarios activos</p>
+                  <p className="mt-1 text-[10px] text-slate-400">Conectados en el último minuto</p>
+                </article>
+                <article className={`rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-950/60' : 'border-slate-100 bg-slate-50'}`}>
+                  <UserRound size={17} className="text-sky-500" />
+                  <p className="mt-3 text-2xl font-black">{metricasAdmin?.clientes_activos ?? '—'}</p>
+                  <p className="text-[11px] font-semibold text-slate-500">Clientes activos</p>
+                  <p className="mt-1 text-[10px] text-slate-400">De {metricasAdmin?.clientes_totales ?? '—'} registrados</p>
+                </article>
+                <article className={`rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-950/60' : 'border-slate-100 bg-slate-50'}`}>
+                  <Bike size={17} className="text-amber-500" />
+                  <p className="mt-3 text-2xl font-black">{metricasAdmin?.repartidores_activos ?? '—'}</p>
+                  <p className="text-[11px] font-semibold text-slate-500">Repartidores activos</p>
+                  <p className="mt-1 text-[10px] text-slate-400">De {metricasAdmin?.repartidores_totales ?? '—'} registrados</p>
+                </article>
+                <article className={`col-span-2 rounded-2xl border p-4 lg:col-span-1 ${darkMode ? 'border-slate-800 bg-slate-950/60' : 'border-slate-100 bg-slate-50'}`}>
+                  <Clock size={17} className="text-violet-500" />
+                  <p className="mt-3 text-sm font-black">Actualización automática</p>
+                  <p className="mt-1 text-[11px] text-slate-500">La presencia se renueva mientras la app está abierta.</p>
+                </article>
+              </div>
+
+              <div>
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <div>
+                    <h4 className="text-sm font-black">Actividad reciente</h4>
+                    <p className="mt-1 text-[11px] text-slate-500">Cuentas, solicitudes, asignaciones y cambios de estado.</p>
+                  </div>
+                  <span className="text-[10px] font-semibold text-slate-400">Últimos {actividadAdmin.length}</span>
+                </div>
+                {actividadAdmin.length === 0 ? (
+                  <p className={`rounded-2xl border p-4 text-xs text-slate-500 ${darkMode ? 'border-slate-800 bg-slate-950/60' : 'border-slate-100 bg-slate-50'}`}>
+                    Las acciones aparecerán aquí a medida que se registren.
+                  </p>
+                ) : (
+                  <ol className="max-h-[28rem] space-y-2 overflow-y-auto pr-1">
+                    {actividadAdmin.map((evento) => (
+                      <li key={evento.id} className={`flex gap-3 rounded-2xl border p-3 ${darkMode ? 'border-slate-800 bg-slate-950/60' : 'border-slate-100 bg-slate-50'}`}>
+                        <span className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full bg-[#FF5722]" />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <p className="text-xs font-bold">{evento.actor_nombre} <span className="font-normal capitalize text-slate-500">· {evento.actor_rol}</span></p>
+                            <time className="text-[10px] text-slate-500">{new Date(evento.creado_en).toLocaleString('es-VE')}</time>
+                          </div>
+                          <p className="mt-1 text-xs leading-relaxed text-slate-600 dark:text-slate-300">{evento.resumen}</p>
+                          {evento.pedido_id && <p className="mt-1 text-[10px] font-semibold text-[#FF5722]">Pedido #{evento.pedido_id}</p>}
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </div>
+            </section>
 
             <div className="grid gap-6 lg:grid-cols-2">
               <div className={`space-y-4 rounded-3xl border p-5 shadow-sm ${darkMode ? 'border-slate-800 bg-slate-900 text-white' : 'border-orange-100 bg-white'}`}>
