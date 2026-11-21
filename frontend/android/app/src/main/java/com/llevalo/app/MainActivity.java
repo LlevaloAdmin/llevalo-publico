@@ -89,8 +89,10 @@ public class MainActivity extends BridgeActivity {
             return true;
         }
         if ("llevalo".equals(uri.getScheme()) && "location-settings".equals(uri.getHost())) {
-            Intent settings = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
-                .setData(Uri.fromParts("package", getPackageName(), null));
+            Intent settings = "services".equals(uri.getLastPathSegment())
+                ? new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)
+                : new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                    .setData(Uri.fromParts("package", getPackageName(), null));
             startActivity(settings);
             return true;
         }

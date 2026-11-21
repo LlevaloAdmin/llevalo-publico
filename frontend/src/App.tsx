@@ -11,6 +11,7 @@ import {
   clearDriverOrderNotification,
   getDriverNotificationPermission,
   requestDriverNotificationPermission,
+  requestAppNotificationPermission,
   showDriverOrderNotification,
   showDriverUpdateNotification,
   type DriverOrderNotice,
@@ -91,6 +92,33 @@ interface Postulacion {
   vehiculo_foto?: string;
   calificacion: number;
   estado: 'pendiente' | 'aceptado' | 'rechazado';
+}
+
+interface PerfilPublico {
+  id: number;
+  nombre: string;
+  rol: 'cliente' | 'repartidor';
+  foto: string;
+  vehiculo: string;
+  vehiculo_foto: string;
+  promedio: number;
+  cantidad: number;
+  rango: string;
+}
+
+interface ResumenCalificaciones {
+  perfil: { promedio: number; cantidad: number; rango: string };
+  pedidos: Array<{
+    pedido_id: number;
+    tipo_servicio: string;
+    creado_en: string;
+    contraparte_id: number;
+    contraparte_nombre: string;
+    contraparte_foto?: string;
+    contraparte_vehiculo?: string;
+    contraparte_vehiculo_foto?: string;
+    mis_estrellas: number;
+  }>;
 }
 
 interface SugerenciaDireccion {
@@ -474,8 +502,13 @@ export default function App() {
   const [enviandoPedido, setEnviandoPedido] = useState(false);
   
   const [coordsUsuarioGPS, setCoordsUsuarioGPS] = useState<{ lat: number; lng: number } | null>(null);
-  const [ubicacionCargando, setUbicacionCargando] = useState(false);
+  const coordsUsuarioGPSRef = useRef(coordsUsuarioGPS);
+  useEffect(() => {
+    coordsUsuarioGPSRef.current = coordsUsuarioGPS;
+  }, [coordsUsuarioGPS]);
+  const [ubicacionCargando, setUbicacionCargando] = useState(true);
   const [errorUbicacion, setErrorUbicacion] = useState('');
+  const [rumboUsuario, setRumboUsuario] = useState<number | null>(null);
   const disponiblePushRepartidor = repartidorOnline && Boolean(coordsUsuarioGPS);
   const disponiblePushRepartidorRef = useRef(disponiblePushRepartidor);
   useEffect(() => {
@@ -564,6 +597,12 @@ export default function App() {
   const [pedidosReales, setPedidosReales] = useState<PedidoReal[]>([]);
   const [postulacionesReales, setPostulacionesReales] = useState<Postulacion[]>([]);
   const [mensajesChat, setMensajesChat] = useState<MensajeChat[]>([]);
+  const [resumenCalificaciones, setResumenCalificaciones] = useState<ResumenCalificaciones | null>(null);
+  const [estrellasSeleccionadas, setEstrellasSeleccionadas] = useState<Record<number, number>>({});
+  const [calificandoPedidoId, setCalificandoPedidoId] = useState<number | null>(null);
+  const [perfilPublico, setPerfilPublico] = useState<PerfilPublico | null>(null);
+  const [perfilPublicoCargando, setPerfilPublicoCargando] = useState(false);
+  const [errorPerfilPublico, setErrorPerfilPublico] = useState('');
   const [nuevoMensajeTexto, setNuevoMensajeTexto] = useState('');
   const [metodoPagoViaje, setMetodoPagoViaje] = useState<MetodoPagoViaje>('pago_movil');
   const [referenciaPago, setReferenciaPago] = useState('');
@@ -886,6 +925,16 @@ export default function App() {
   };
 
   const obtenerUbicacionActual = (objetivo: 'origen' | 'destino' | null = null) => {
+    if (typeof DeviceOrientationEvent !== 'undefined') {
+      const orientationApi = DeviceOrientationEvent as typeof DeviceOrientationEvent & {
+        requestPermission?: () => Promise<'granted' | 'denied'>;
+      };
+      if (orientationApi.requestPermission) {
+        void orientationApi.requestPermission().catch(error => {
+          console.error('No se pudo activar la brújula del dispositivo:', error);
+        });
+      }
+    }
     geocodificacionGPSRef.current?.abort();
     objetivoUbicacionRef.current = objetivo;
     setErrorUbicacion('');
@@ -897,6 +946,7 @@ export default function App() {
     }
 
     if (!navigator.geolocation) {
+      // oxlint-disable-next-line react/set-state-in-effect
       setErrorUbicacion('Este dispositivo o navegador no permite acceder a la ubicación.');
       return;
     }
@@ -905,6 +955,7 @@ export default function App() {
     navigator.geolocation.getCurrentPosition(
       ({ coords }) => {
         const ubicacion = { lat: coords.latitude, lng: coords.longitude };
+        coordsUsuarioGPSRef.current = ubicacion;
         setCoordsUsuarioGPS(ubicacion);
         setRecentrarMapa(value => value + 1);
 
@@ -955,7 +1006,10 @@ export default function App() {
         }
       },
       (error) => {
-        if (error.code === error.PERMISSION_DENIED) setCoordsUsuarioGPS(null);
+        if (error.code === error.PERMISSION_DENIED) {
+          coordsUsuarioGPSRef.current = null;
+          setCoordsUsuarioGPS(null);
+        }
         const mensaje = error.code === error.PERMISSION_DENIED
           ? 'Permite el acceso a la ubicación en los permisos de la app o del navegador y vuelve a intentarlo.'
           : error.code === error.POSITION_UNAVAILABLE
@@ -1574,6 +1628,83 @@ export default function App() {
   }, [avisosRepartidorActivos, permisoAvisosRepartidor, usuario?.id, usuario?.rol]);
 
   useEffect(() => {
+    let descartado = false;
+    let notificacionesSolicitadas = false;
+    let ubicacionPendiente = false;
+    const pedirNotificaciones = () => {
+      if (notificacionesSolicitadas) return;
+      notificacionesSolicitadas = true;
+      void requestAppNotificationPermission().catch(error => {
+        if (!descartado) console.error('No se pudo solicitar el permiso de notificaciones:', error);
+      });
+    };
+
+    if (!navigator.geolocation) {
+      // oxlint-disable-next-line react/set-state-in-effect
+      setErrorUbicacion('Este dispositivo o navegador no permite acceder a la ubicación.');
+      setUbicacionCargando(false);
+      pedirNotificaciones();
+      return () => { descartado = true; };
+    }
+
+    const solicitarUbicacion = (forzar = false) => {
+      if (descartado || (!forzar && coordsUsuarioGPSRef.current) || ubicacionPendiente) return;
+      ubicacionPendiente = true;
+      if (forzar) setUbicacionCargando(true);
+      navigator.geolocation.getCurrentPosition(
+        ({ coords }) => {
+          ubicacionPendiente = false;
+          if (descartado) return;
+          const location = { lat: coords.latitude, lng: coords.longitude };
+          coordsUsuarioGPSRef.current = location;
+          setCoordsUsuarioGPS(location);
+          setUbicacionCargando(false);
+          setErrorUbicacion('');
+          pedirNotificaciones();
+        },
+        (error) => {
+          ubicacionPendiente = false;
+          if (descartado) return;
+          coordsUsuarioGPSRef.current = null;
+          setCoordsUsuarioGPS(null);
+          setErrorUbicacion(error.code === error.PERMISSION_DENIED
+            ? 'Activa el permiso de ubicación para usar Llévalo.'
+            : error.code === error.POSITION_UNAVAILABLE
+              ? 'Activa la ubicación del dispositivo para continuar.'
+              : 'No se pudo obtener tu ubicación. Comprueba el GPS e inténtalo de nuevo.');
+          setUbicacionCargando(false);
+          pedirNotificaciones();
+        },
+        { enableHighAccuracy: true, maximumAge: 60_000, timeout: 15_000 }
+      );
+    };
+    const retryAfterSettings = () => {
+      if (!document.hidden) solicitarUbicacion(true);
+    };
+    document.addEventListener('visibilitychange', retryAfterSettings);
+    solicitarUbicacion();
+
+    return () => {
+      descartado = true;
+      document.removeEventListener('visibilitychange', retryAfterSettings);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (activeTab !== 'cliente' && activeTab !== 'repartidor') return;
+    const handleOrientation = (event: DeviceOrientationEvent & { webkitCompassHeading?: number }) => {
+      const heading = typeof event.webkitCompassHeading === 'number' && Number.isFinite(event.webkitCompassHeading)
+        ? event.webkitCompassHeading
+        : event.alpha === null ? null : (360 - event.alpha + 360) % 360;
+      if (heading !== null && Number.isFinite(heading)) {
+        setRumboUsuario(Math.round(heading) % 360);
+      }
+    };
+    window.addEventListener('deviceorientation', handleOrientation, true);
+    return () => window.removeEventListener('deviceorientation', handleOrientation, true);
+  }, [activeTab]);
+
+  useEffect(() => {
     if (Capacitor.isNativePlatform()
       || usuario?.rol !== 'repartidor'
       || !avisosRepartidorActivos
@@ -1876,6 +2007,31 @@ export default function App() {
   const postulacionesPendientesRepartidor = usuario?.rol === 'repartidor'
     ? postulacionesReales.filter(p => p.repartidor_id === usuario.id && p.estado === 'pendiente')
     : [];
+  const pedidosCompletadosKey = pedidosReales
+    .filter(pedido => pedido.estado === 'completado')
+    .map(pedido => pedido.id)
+    .join(',');
+
+  useEffect(() => {
+    if (!usuario) {
+      // oxlint-disable-next-line react/set-state-in-effect
+      setResumenCalificaciones(null);
+      return;
+    }
+    let descartado = false;
+    void authenticatedFetch(`${API_URL}/api/reviews/summary`)
+      .then(async response => {
+        if (!response.ok) throw new Error(await mensajeErrorApi(response, 'No se pudieron cargar las calificaciones'));
+        return response.json() as Promise<ResumenCalificaciones>;
+      })
+      .then(resumen => {
+        if (!descartado) setResumenCalificaciones(resumen);
+      })
+      .catch(error => {
+        if (!descartado) console.error('No se pudo cargar el resumen de calificaciones:', error);
+      });
+    return () => { descartado = true; };
+  }, [usuario, pedidosCompletadosKey]);
 
   useEffect(() => {
     if (usuario?.rol !== 'repartidor') return;
@@ -2233,23 +2389,71 @@ export default function App() {
     else setActiveTab('home');
   };
 
+  const abrirPerfilPublico = async (pedidoId: number, profileId: number) => {
+    setPerfilPublico(null);
+    setErrorPerfilPublico('');
+    setPerfilPublicoCargando(true);
+    try {
+      const response = await authenticatedFetch(
+        `${API_URL}/api/reviews/profile/${profileId}?pedidoId=${pedidoId}`
+      );
+      if (!response.ok) throw new Error(await mensajeErrorApi(response, 'No se pudo abrir el perfil'));
+      const result = await response.json() as { perfil: PerfilPublico };
+      setPerfilPublico(result.perfil);
+    } catch (error) {
+      setErrorPerfilPublico(error instanceof Error ? error.message : 'No se pudo abrir el perfil.');
+    } finally {
+      setPerfilPublicoCargando(false);
+    }
+  };
+
+  const calificarPedido = async (pedidoId: number) => {
+    const estrellas = estrellasSeleccionadas[pedidoId];
+    if (!Number.isInteger(estrellas) || estrellas < 1 || estrellas > 5) return;
+    setCalificandoPedidoId(pedidoId);
+    try {
+      const response = await authenticatedFetch(`${API_URL}/api/reviews`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pedidoId, estrellas })
+      });
+      if (!response.ok) throw new Error(await mensajeErrorApi(response, 'No se pudo enviar la calificación'));
+      setResumenCalificaciones(current => current
+        ? {
+          ...current,
+          pedidos: current.pedidos.map(pedido => pedido.pedido_id === pedidoId
+            ? { ...pedido, mis_estrellas: estrellas }
+            : pedido)
+        }
+        : current);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'No se pudo enviar la calificación.');
+    } finally {
+      setCalificandoPedidoId(null);
+    }
+  };
+
   useEffect(() => {
-    if (usuario?.rol !== 'repartidor'
-      || (!pedidoAsignadoRepartidorId && activeTab !== 'repartidor')) return;
+    if (!usuario
+      || (usuario.rol === 'cliente' && activeTab !== 'cliente')
+      || (usuario.rol === 'repartidor' && !pedidoAsignadoRepartidorId && activeTab !== 'repartidor')) return;
     if (!navigator.geolocation) return;
 
     const watchId = navigator.geolocation.watchPosition(
       ({ coords }) => {
-        setCoordsUsuarioGPS({ lat: coords.latitude, lng: coords.longitude });
+        const location = { lat: coords.latitude, lng: coords.longitude };
+        coordsUsuarioGPSRef.current = location;
+        setCoordsUsuarioGPS(location);
         setErrorUbicacion('');
         setUbicacionCargando(false);
       },
       (error) => {
         if (error.code === error.PERMISSION_DENIED || document.visibilityState === 'visible') {
+          coordsUsuarioGPSRef.current = null;
           setCoordsUsuarioGPS(null);
         }
         setErrorUbicacion(error.code === error.PERMISSION_DENIED
-          ? 'Activa el permiso de ubicación para ver el mapa y recibir trabajos cercanos.'
+          ? 'Activa el permiso de ubicación para usar Llévalo.'
           : 'No se pudo actualizar tu ubicación. Comprueba que el GPS esté activo.');
         setUbicacionCargando(false);
       },
@@ -2257,7 +2461,7 @@ export default function App() {
     );
 
     return () => navigator.geolocation.clearWatch(watchId);
-  }, [activeTab, usuario?.id, usuario?.rol, pedidoAsignadoRepartidorId]);
+  }, [activeTab, usuario, pedidoAsignadoRepartidorId]);
 
   useEffect(() => {
     if (usuario?.rol !== 'repartidor' || !pedidoAsignadoRepartidorId || !coordsUsuarioGPS) return;
@@ -2297,8 +2501,9 @@ export default function App() {
           {usuario ? (
             <>
               {tasasCambio && (
-                <span className={`inline-flex rounded-xl border px-3 py-2 text-sm font-bold sm:px-3.5 sm:text-base ${darkMode ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-orange-100 bg-white text-slate-700'}`}>
-                  {formatoMoneda(tasasCambio.bolivaresPorDolar, 'VES')}
+                <span title="Tasa oficial del dólar en bolívares" className={`inline-flex flex-col rounded-xl border px-2.5 py-1.5 text-[10px] font-bold leading-tight sm:px-3.5 sm:text-xs ${darkMode ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-orange-100 bg-white text-slate-700'}`}>
+                  <span className="text-[9px] uppercase tracking-wide text-slate-500 dark:text-slate-400">Dólar oficial</span>
+                  <span>{formatoMoneda(tasasCambio.bolivaresPorDolar, 'VES')}</span>
                 </span>
               )}
               <button
@@ -2756,9 +2961,14 @@ export default function App() {
                                 </div>
                               </div>
                             </div>
-                            <button onClick={() => aceptarPostulacion(pedidoActivoCliente.id, post)} className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-3.5 py-2 rounded-xl transition cursor-pointer shadow-sm">
-                              Aceptar
-                            </button>
+                            <div className="flex shrink-0 flex-col gap-1.5">
+                              <button type="button" onClick={() => void abrirPerfilPublico(pedidoActivoCliente.id, post.repartidor_id)} className="rounded-xl border border-slate-200 px-3 py-2 text-[10px] font-bold text-slate-600 transition hover:border-orange-300 hover:text-[#FF5722] dark:border-slate-700 dark:text-slate-300">
+                                Ver perfil
+                              </button>
+                              <button onClick={() => aceptarPostulacion(pedidoActivoCliente.id, post)} className="rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-emerald-700">
+                                Aceptar
+                              </button>
+                            </div>
                           </div>
                         ))}
                       </div>
@@ -2784,6 +2994,11 @@ export default function App() {
                               </p>
                             </div>
                           </div>
+                          {pedidoActivoCliente.repartidor_id && (
+                            <button type="button" onClick={() => void abrirPerfilPublico(pedidoActivoCliente.id, pedidoActivoCliente.repartidor_id!)} className="rounded-xl border border-emerald-200 px-3 py-2 text-[11px] font-bold text-emerald-700 transition hover:bg-emerald-50 dark:border-emerald-900 dark:text-emerald-300 dark:hover:bg-emerald-950/30">
+                              Ver perfil y reputación del repartidor
+                            </button>
+                          )}
                         </div>
 
                         {pedidoActivoCliente.tipo_servicio === 'viajes' && pedidoActivoCliente.estado === 'aceptado' && (
@@ -2999,6 +3214,7 @@ export default function App() {
                       ? { lat: pedidoActivoCliente.repartidor_lat, lng: pedidoActivoCliente.repartidor_lon }
                       : null)
                   }
+                  rumboUsuario={rumboUsuario}
                   modoSeleccion={modoSeleccionMapa}
                   onMapClick={manejarClicEnMapa}
                   onRutaCalculada={(km, min) => {
@@ -3009,6 +3225,7 @@ export default function App() {
                   onErrorRuta={setErrorRuta}
                   mostrarRuta={true}
                   mostrarPines={true}
+                  seguirUsuario={activeTab === 'cliente'}
                   darkMode={darkMode}
                   recentrarUsuario={recentrarMapa}
                 />
@@ -3155,6 +3372,9 @@ export default function App() {
                       <p><strong>Origen (Punto A):</strong> {pedidoAsignadoRepartidor.origen_texto}</p>
                       <p><strong>Destino (Punto B):</strong> {pedidoAsignadoRepartidor.destino_texto}</p>
                     </div>
+                    <button type="button" onClick={() => void abrirPerfilPublico(pedidoAsignadoRepartidor.id, pedidoAsignadoRepartidor.cliente_id)} className="rounded-xl border border-slate-200 px-3 py-2 text-[11px] font-bold text-slate-600 transition hover:border-orange-300 hover:text-[#FF5722] dark:border-slate-700 dark:text-slate-300">
+                      Ver perfil y reputación del cliente
+                    </button>
                     {mensajeNavegacion && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-[11px] font-semibold text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300">{mensajeNavegacion}</p>}
 
                     {pedidoAsignadoRepartidor.estado === 'aceptado' && (
@@ -3219,6 +3439,9 @@ export default function App() {
                             <p className="text-xs font-bold">{p.descripcion}</p>
                             <p className="text-[11px] text-slate-500"><strong>Origen:</strong> {p.origen_texto}</p>
                             <p className="text-[11px] text-slate-500"><strong>Destino:</strong> {p.destino_texto}</p>
+                            <button type="button" onClick={() => void abrirPerfilPublico(p.id, p.cliente_id)} className="rounded-xl border border-slate-200 px-3 py-2 text-[10px] font-bold text-slate-600 transition hover:border-orange-300 hover:text-[#FF5722] dark:border-slate-700 dark:text-slate-300">
+                              Ver perfil del cliente
+                            </button>
 
                             {(p.estado === 'pendiente' || p.estado === 'postulado') && segundosDisponibles !== null && (
                               <div className={`rounded-xl border p-3 ${darkMode ? 'border-slate-700 bg-slate-950/70' : 'border-orange-100 bg-orange-50/60'}`}>
@@ -3287,6 +3510,7 @@ export default function App() {
                         : (pedidoAsignadoRepartidor?.estado === 'entregado_repartidor' ? { lat: pedidoAsignadoRepartidor.destino_lat, lng: pedidoAsignadoRepartidor.destino_lon } : null)
                     }
                     coordsUsuario={coordsUsuarioGPS}
+                    rumboUsuario={rumboUsuario}
                     mostrarRuta={Boolean(pedidoAsignadoRepartidor)}
                     mostrarPines={true}
                     navegacionActiva={Boolean(pedidoAsignadoRepartidor)}
@@ -3322,9 +3546,79 @@ export default function App() {
                   <div className="text-center sm:text-left">
                     <h2 className="text-2xl font-black">{usuario.nombre}</h2>
                     <span className="mt-2 inline-flex rounded-full bg-white/20 px-3 py-1 text-[11px] font-bold capitalize">{usuario.rol === 'repartidor' ? 'Repartidor' : 'Cliente'}</span>
+                    {resumenCalificaciones && (
+                      <p className="mt-2 flex items-center justify-center gap-1.5 text-xs font-bold sm:justify-start">
+                        <Star size={14} fill="currentColor" />
+                        {resumenCalificaciones.perfil.cantidad > 0
+                          ? `${resumenCalificaciones.perfil.promedio.toFixed(2)} · ${resumenCalificaciones.perfil.cantidad} reseñas`
+                          : 'Aún sin reseñas'}
+                        <span className="rounded-full bg-white/20 px-2 py-0.5">{resumenCalificaciones.perfil.rango}</span>
+                      </p>
+                    )}
                   </div>
                 </div>
               </div>
+
+              {resumenCalificaciones && (
+                <section className={`border-b p-5 md:px-8 ${darkMode ? 'border-slate-800' : 'border-slate-100'}`} aria-labelledby="rating-history-title">
+                  <div className="mb-4">
+                    <h3 id="rating-history-title" className={`text-base font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Calificaciones de pedidos</h3>
+                    <p className="mt-1 text-xs text-slate-500">Después de completar un pedido, ambas personas pueden dejar una calificación.</p>
+                  </div>
+                  {resumenCalificaciones.pedidos.length === 0 ? (
+                    <p className={`rounded-2xl border p-4 text-xs ${darkMode ? 'border-slate-700 bg-slate-900 text-slate-300' : 'border-slate-100 bg-slate-50 text-slate-600'}`}>
+                      Tus pedidos finalizados aparecerán aquí para que puedas calificar a la otra persona.
+                    </p>
+                  ) : (
+                    <div className="space-y-3">
+                      {resumenCalificaciones.pedidos.map(pedido => {
+                        const estrellas = estrellasSeleccionadas[pedido.pedido_id] ?? 0;
+                        return (
+                          <article key={pedido.pedido_id} className={`flex flex-col gap-3 rounded-2xl border p-4 sm:flex-row sm:items-center sm:justify-between ${darkMode ? 'border-slate-700 bg-slate-900' : 'border-slate-100 bg-slate-50'}`}>
+                            <div className="flex items-center gap-3">
+                              <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-orange-500/10 font-bold text-[#FF5722]">
+                                {pedido.contraparte_foto
+                                  ? <img src={pedido.contraparte_foto} alt="" className="h-full w-full object-cover" />
+                                  : pedido.contraparte_nombre.slice(0, 1).toUpperCase()}
+                              </div>
+                              <div>
+                                <p className={`text-xs font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>{pedido.contraparte_nombre}</p>
+                                <p className="mt-0.5 text-[10px] text-slate-500">
+                                  {etiquetaTipoServicio(pedido.tipo_servicio)} · {new Date(pedido.creado_en).toLocaleDateString('es-VE')}
+                                </p>
+                              </div>
+                            </div>
+                            {pedido.mis_estrellas > 0 ? (
+                              <div className="flex items-center gap-1 text-amber-500" aria-label={`Calificaste con ${pedido.mis_estrellas} de 5 estrellas`}>
+                                {Array.from({ length: 5 }, (_, index) => (
+                                  <Star key={index} size={16} fill={index < pedido.mis_estrellas ? 'currentColor' : 'none'} />
+                                ))}
+                                <span className="ml-1 text-[10px] font-bold">Enviada</span>
+                              </div>
+                            ) : (
+                              <div className="flex flex-wrap items-center gap-2">
+                                <div className="flex items-center" aria-label={`Selecciona de 1 a 5 estrellas para ${pedido.contraparte_nombre}`}>
+                                  {Array.from({ length: 5 }, (_, index) => {
+                                    const value = index + 1;
+                                    return (
+                                      <button key={value} type="button" aria-label={`${value} estrellas`} aria-pressed={estrellas === value} onClick={() => setEstrellasSeleccionadas(current => ({ ...current, [pedido.pedido_id]: value }))} className="rounded-lg p-1 text-amber-500 transition hover:scale-110">
+                                        <Star size={19} fill={value <= estrellas ? 'currentColor' : 'none'} />
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                                <button type="button" disabled={estrellas < 1 || calificandoPedidoId === pedido.pedido_id} onClick={() => void calificarPedido(pedido.pedido_id)} className="rounded-xl bg-[#FF5722] px-3 py-2 text-[10px] font-bold text-white disabled:cursor-not-allowed disabled:opacity-50">
+                                  {calificandoPedidoId === pedido.pedido_id ? 'Enviando…' : 'Enviar'}
+                                </button>
+                              </div>
+                            )}
+                          </article>
+                        );
+                      })}
+                    </div>
+                  )}
+                </section>
+              )}
 
               {errorPerfil && <p role="alert" className={`mx-5 mt-5 rounded-xl border p-3 text-xs font-semibold md:mx-8 ${darkMode ? 'border-red-900 bg-red-950/30 text-red-300' : 'border-red-200 bg-red-50 text-red-700'}`}>{errorPerfil}</p>}
 
@@ -3843,6 +4137,90 @@ export default function App() {
           </section>
         )}
       </main>
+      {(perfilPublicoCargando || perfilPublico || errorPerfilPublico) && (
+        <div className={`fixed inset-0 z-[120] flex items-center justify-center p-4 backdrop-blur-md ${darkMode ? 'bg-slate-950/75' : 'bg-slate-900/35'}`} role="dialog" aria-modal="true" aria-labelledby="public-profile-title">
+          <div className={`w-full max-w-sm space-y-4 rounded-3xl border p-6 shadow-2xl ${darkMode ? 'border-slate-700 bg-slate-800 text-white' : 'border-orange-100 bg-white text-slate-900'}`}>
+            <div className="flex items-start justify-between gap-3">
+              <h2 id="public-profile-title" className="text-lg font-black">Perfil y reputación</h2>
+              <button type="button" aria-label="Cerrar perfil" onClick={() => { setPerfilPublico(null); setErrorPerfilPublico(''); }} className="rounded-xl p-1 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700">
+                <XCircle size={20} />
+              </button>
+            </div>
+            {perfilPublicoCargando && <p className="text-sm text-slate-500">Cargando perfil…</p>}
+            {errorPerfilPublico && <p role="alert" className="rounded-xl bg-red-50 p-3 text-xs text-red-700 dark:bg-red-950/30 dark:text-red-300">{errorPerfilPublico}</p>}
+            {perfilPublico && (
+              <>
+                <div className="flex items-center gap-4">
+                  <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-full bg-orange-500/10 text-xl font-black text-[#FF5722]">
+                    {perfilPublico.foto
+                      ? <img src={perfilPublico.foto} alt="" className="h-full w-full object-cover" />
+                      : perfilPublico.nombre.slice(0, 1).toUpperCase()}
+                  </div>
+                  <div>
+                    <p className="text-base font-black">{perfilPublico.nombre}</p>
+                    <p className="text-xs capitalize text-slate-500">{perfilPublico.rol}</p>
+                  </div>
+                </div>
+                <div className={`rounded-2xl border p-4 ${darkMode ? 'border-slate-700 bg-slate-900' : 'border-slate-100 bg-slate-50'}`}>
+                  <div className="flex items-center gap-2 text-amber-500">
+                    <Star size={18} fill="currentColor" />
+                    <span className="text-lg font-black">
+                      {perfilPublico.cantidad > 0 ? perfilPublico.promedio.toFixed(2) : 'Nuevo'}
+                    </span>
+                    <span className={`rounded-full px-2.5 py-1 text-[10px] font-black ${darkMode ? 'bg-slate-700 text-slate-100' : 'bg-white text-slate-700'}`}>{perfilPublico.rango}</span>
+                  </div>
+                  <p className="mt-1 text-[11px] text-slate-500">{perfilPublico.cantidad} {perfilPublico.cantidad === 1 ? 'calificación' : 'calificaciones'}</p>
+                </div>
+                {perfilPublico.rol === 'repartidor' && (
+                  <div className="space-y-2 text-xs">
+                    <p><strong>Vehículo:</strong> {perfilPublico.vehiculo || 'No registrado'}</p>
+                    {perfilPublico.vehiculo_foto && <img src={perfilPublico.vehiculo_foto} alt="Vehículo del repartidor" className="max-h-44 w-full rounded-2xl object-cover" />}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
+      {!coordsUsuarioGPS && (
+        <div className={`fixed inset-0 z-[110] flex items-center justify-center p-4 backdrop-blur-md ${darkMode ? 'bg-slate-950/85' : 'bg-slate-900/45'}`} role="dialog" aria-modal="true" aria-labelledby="location-required-title">
+          <div className={`w-full max-w-sm space-y-4 rounded-3xl border p-6 shadow-2xl ${darkMode ? 'border-slate-700 bg-slate-800 text-white' : 'border-orange-100 bg-white text-slate-900'}`}>
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-500/10 text-blue-500">
+              <Navigation size={27} className={ubicacionCargando ? 'animate-pulse' : ''} />
+            </div>
+            <div className="text-center">
+              <h2 id="location-required-title" className="text-lg font-black">Ubicación necesaria</h2>
+              <p className={`mt-2 text-sm leading-relaxed ${darkMode ? 'text-slate-300' : 'text-slate-600'}`}>
+                {errorUbicacion || 'Buscando tu ubicación actual para preparar el mapa…'}
+              </p>
+            </div>
+            <button type="button" onClick={() => obtenerUbicacionActual()} disabled={ubicacionCargando} className="w-full rounded-xl bg-[#FF5722] px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
+              {ubicacionCargando ? 'Buscando ubicación…' : 'Reintentar ubicación'}
+            </button>
+            {Capacitor.isNativePlatform() ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const permisoBloqueado = errorUbicacion.toLocaleLowerCase().includes('permiso');
+                    window.location.href = `llevalo://location-settings/${permisoBloqueado ? 'permission' : 'services'}`;
+                  }}
+                  className={`w-full rounded-xl border px-4 py-3 text-sm font-bold ${darkMode ? 'border-slate-600 text-slate-200' : 'border-slate-200 text-slate-700'}`}
+                >
+                  Abrir ajustes de ubicación
+                </button>
+                <button type="button" onClick={() => void CapacitorApp.exitApp()} className={`w-full rounded-xl border px-4 py-3 text-sm font-bold ${darkMode ? 'border-slate-600 text-slate-400' : 'border-slate-200 text-slate-500'}`}>
+                  Salir de la app
+                </button>
+              </>
+            ) : (
+              <p className={`text-center text-[11px] ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                Permite la ubicación en los ajustes de este navegador y vuelve a intentar. También puedes cerrar esta pestaña.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
       {estadoConexion && (
         <div className={`fixed inset-0 z-[100] flex items-center justify-center p-4 backdrop-blur-sm ${darkMode ? 'bg-slate-950/75' : 'bg-slate-900/35'}`} role="dialog" aria-modal="true" aria-labelledby="offline-title">
           <div className={`w-full max-w-sm space-y-4 rounded-3xl border p-6 shadow-2xl ${darkMode ? 'border-slate-700 bg-slate-900 text-white' : 'border-orange-100 bg-white text-slate-900'}`}>

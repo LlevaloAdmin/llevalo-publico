@@ -15,6 +15,7 @@ import authRoutes from './routes/auth';
 import notificationsRoutes from './routes/notifications';
 import pedidosRoutes from './routes/pedidos';
 import pagosRoutes from './routes/pagos';
+import reviewsRoutes from './routes/reviews';
 
 const app = express();
 app.set('trust proxy', TRUST_PROXY_HOPS);
@@ -28,6 +29,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/notifications', notificationsRoutes);
 app.use('/api/pedidos', pedidosRoutes);
 app.use('/api/pagos', pagosRoutes);
+app.use('/api/reviews', reviewsRoutes);
 
 const server = http.createServer(app);
 const io = new Server(server, {

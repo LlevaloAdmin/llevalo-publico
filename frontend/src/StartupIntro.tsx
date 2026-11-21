@@ -1,41 +1,42 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 
 interface StartupIntroProps {
   enabled: boolean;
   children: ReactNode;
 }
 
-const STARTUP_DURATION_MS = 2500;
-const REDUCED_MOTION_DURATION_MS = 900;
+const STARTUP_DURATION_MS = 3000;
+const FADE_DURATION_MS = 220;
 
 export function StartupIntro({ enabled, children }: StartupIntroProps) {
-  const [visible, setVisible] = useState(enabled);
-  const [darkMode] = useState(() => localStorage.getItem('llevalo_dark_mode') === 'true');
-
   useEffect(() => {
-    if (!enabled) return;
+    let splash = document.getElementById('startup-splash');
+    if (!enabled) {
+      splash?.remove();
+      return;
+    }
+    if (!splash) {
+      splash = document.createElement('div');
+      splash.id = 'startup-splash';
+      splash.className = 'startup-intro';
+      splash.setAttribute('role', 'status');
+      splash.setAttribute('aria-label', 'Iniciando Llévalo');
+      splash.innerHTML = '<div class="startup-wordmark" aria-hidden="true"><span class="startup-initial">L</span><span class="startup-wordmark-rest">lévalo</span></div>';
+      document.body.appendChild(splash);
+    }
 
+    const darkMode = localStorage.getItem('llevalo_dark_mode') === 'true';
+    splash.classList.toggle('startup-intro-dark', darkMode);
     window.location.href = `llevalo://theme/${darkMode ? 'dark' : 'light'}`;
-    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    const timeout = window.setTimeout(
-      () => setVisible(false),
-      reducedMotion ? REDUCED_MOTION_DURATION_MS : STARTUP_DURATION_MS
-    );
+    const startedAt = Number(document.documentElement.dataset.startupAt);
+    const elapsed = Number.isFinite(startedAt) ? performance.now() - startedAt : 0;
+    const timeout = window.setTimeout(() => {
+      splash.classList.add('startup-intro-hidden');
+      window.setTimeout(() => splash.remove(), FADE_DURATION_MS);
+    }, Math.max(0, STARTUP_DURATION_MS - elapsed));
 
     return () => window.clearTimeout(timeout);
-  }, [enabled, darkMode]);
+  }, [enabled]);
 
-  return (
-    <>
-      {children}
-      {visible && (
-        <div className={`startup-intro ${darkMode ? 'startup-intro-dark' : ''}`} role="status" aria-label="Iniciando Llévalo">
-          <div className="startup-wordmark" aria-hidden="true">
-            <span className="startup-initial">L</span>
-            <span className="startup-wordmark-rest">lévalo</span>
-          </div>
-        </div>
-      )}
-    </>
-  );
+  return children;
 }

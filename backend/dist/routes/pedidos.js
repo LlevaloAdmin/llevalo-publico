@@ -487,7 +487,7 @@ router.get('/', async (req, res) => {
          FROM pedidos
          WHERE (estado IN ('pendiente', 'postulado')
                 AND (metodo_pago IN ('efectivo', 'no_aplica') OR estado_pago = 'pagado'))
-            OR (repartidor_id = $1 AND estado IN ('aceptado', 'entregado_repartidor'))
+            OR (repartidor_id = $1 AND estado IN ('aceptado', 'entregado_repartidor', 'completado'))
          ORDER BY creado_en DESC`, [authUser.id]);
         const postulacionesRes = authUser.rol === 'cliente'
             ? await db_1.pool.query(`SELECT po.* FROM postulaciones po

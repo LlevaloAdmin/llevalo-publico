@@ -4,6 +4,31 @@ import { Capacitor } from '@capacitor/core';
 
 export type NotificationPermissionState = 'granted' | 'denied' | 'default' | 'unsupported';
 
+export const requestAppNotificationPermission = async (): Promise<NotificationPermissionState> => {
+  if (Capacitor.isNativePlatform()) {
+    let localPermission = await LocalNotifications.checkPermissions();
+    if (localPermission.display !== 'granted') {
+      localPermission = await LocalNotifications.requestPermissions();
+    }
+    if (localPermission.display !== 'granted') {
+      return localPermission.display === 'denied' ? 'denied' : 'default';
+    }
+
+    let pushPermission = await PushNotifications.checkPermissions();
+    if (pushPermission.receive !== 'granted') {
+      pushPermission = await PushNotifications.requestPermissions();
+    }
+    return pushPermission.receive === 'granted'
+      ? 'granted'
+      : pushPermission.receive === 'denied' ? 'denied' : 'default';
+  }
+
+  if (typeof Notification === 'undefined') return 'unsupported';
+  return Notification.permission === 'default'
+    ? Notification.requestPermission()
+    : Notification.permission;
+};
+
 export interface DriverOrderNotice {
   id: number;
   serviceType: string;

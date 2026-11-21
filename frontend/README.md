@@ -16,7 +16,7 @@ In Render, set `FIREBASE_SERVICE_ACCOUNT_JSON` to the Firebase Admin service-acc
 
 For Android APK builds, add the GitHub Actions secret `GOOGLE_SERVICES_JSON_BASE64`: encode the Firebase Android `google-services.json` file as Base64 and save the result as the secret. The package name in that Firebase Android app must be `com.llevalo.app`. The JSON file is ignored locally and generated from the Actions secret during CI.
 
-Repartidores must sign in, enable location, connect to the radar, and enable notifications. Web and Android notifications offer “Postularme” and “Ignorar”; on Android, “Postularme” opens the app and submits the application, while “Ignorar” dismisses the notice. Android displays a native countdown; web notifications update the remaining time while the page is active.
+The app requests location and notification permissions at startup; location is required to continue and the native app offers device settings or exit when it is unavailable. Repartidores must also connect to the radar to receive work alerts. Web and Android work notifications offer “Postularme” and “Ignorar”; Android shows a native countdown. After an order is completed, both participants can rate each other once. Reputation is based on average stars: Bronze (<3), Silver (3), Gold (4), Platinum (4.5), and Diamond (4.8); unrated accounts remain New. The header shows the official USD/VES exchange rate.
 
 Currently, two official plugins are available:
 

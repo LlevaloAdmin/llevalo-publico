@@ -32,10 +32,33 @@ const crearElementoMarcador = (color: string, tamano: number, centro: number) =>
   return marcador;
 };
 
+const crearMarcadorUsuario = () => {
+  const marker = document.createElement('div');
+  marker.style.width = '34px';
+  marker.style.height = '34px';
+  marker.style.display = 'grid';
+  marker.style.placeItems = 'center';
+  marker.style.border = '2px solid white';
+  marker.style.borderRadius = '50%';
+  marker.style.background = '#2563eb';
+  marker.style.boxShadow = '0 2px 8px rgba(15, 23, 42, .45)';
+
+  const arrow = document.createElement('div');
+  arrow.className = 'map-user-heading';
+  arrow.style.width = '18px';
+  arrow.style.height = '18px';
+  arrow.style.background = 'white';
+  arrow.style.clipPath = 'polygon(50% 0, 100% 100%, 50% 76%, 0 100%)';
+  arrow.style.transition = 'transform 120ms linear';
+  marker.append(arrow);
+  return marker;
+};
+
 interface MapaLibreProps {
   coordsOrigen?: { lat: number; lng: number } | null;
   coordsDestino?: { lat: number; lng: number } | null;
   coordsUsuario?: { lat: number; lng: number } | null;
+  rumboUsuario?: number | null;
   modoSeleccion?: 'origen' | 'destino' | null;
   onMapClick?: (lat: number, lng: number) => void;
   onRutaCalculada?: (distanciaKm: number, tiempoMin: number) => void;
@@ -54,6 +77,7 @@ export default function MapaLibre({
   coordsOrigen,
   coordsDestino,
   coordsUsuario,
+  rumboUsuario = null,
   modoSeleccion,
   onMapClick,
   onRutaCalculada,
@@ -155,9 +179,14 @@ export default function MapaLibre({
     if (coordsUsuario) {
       if (!markerUsuarioRef.current) {
         markerUsuarioRef.current = new maplibregl.Marker({
-          element: crearElementoMarcador('#3B82F6', 28, 9),
-          anchor: 'bottom'
+          element: crearMarcadorUsuario(),
+          anchor: 'center'
         });
+      }
+      const arrow = markerUsuarioRef.current.getElement().querySelector<HTMLElement>('.map-user-heading');
+      if (arrow) {
+        arrow.style.transform = `rotate(${rumboUsuario ?? 0}deg)`;
+        arrow.style.opacity = rumboUsuario === null ? '0.65' : '1';
       }
       markerUsuarioRef.current.setLngLat([coordsUsuario.lng, coordsUsuario.lat]).addTo(map);
     } else {
@@ -288,7 +317,7 @@ export default function MapaLibre({
       limpiarRutaMapa();
     }
 
-  }, [coordsOrigen, coordsDestino, coordsUsuario, mini, mostrarRuta, mostrarPines, navegacionActiva, darkMode]);
+  }, [coordsOrigen, coordsDestino, coordsUsuario, rumboUsuario, mini, mostrarRuta, mostrarPines, navegacionActiva, darkMode]);
 
   const latitudUsuario = coordsUsuario?.lat;
   const longitudUsuario = coordsUsuario?.lng;

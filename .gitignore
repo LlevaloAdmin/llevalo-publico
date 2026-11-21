@@ -19,9 +19,11 @@ backend/dist/middleware/*
 backend/dist/routes/*
 !backend/dist/routes/notifications.js
 !backend/dist/routes/pagos.js
+!backend/dist/routes/reviews.js
 !backend/dist/utils/
 backend/dist/utils/*
 !backend/dist/utils/pushNotifications.js
+!backend/dist/utils/reputation.js
 !backend/dist/utils/pricing.js
 !backend/dist/utils/payments.js
 !backend/dist/utils/exchangeRates.js

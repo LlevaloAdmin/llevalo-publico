@@ -9,6 +9,19 @@
     <link rel="canonical" href="https://llevalo.vercel.app/" />
     
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <style>
+      @keyframes startup-glow{0%,36%{opacity:0;transform:translate(-50%,-50%) scale(.72)}58%{opacity:.62;transform:translate(-50%,-50%) scale(1)}82%{opacity:.2;transform:translate(-50%,-50%) scale(1.16)}100%{opacity:0;transform:translate(-50%,-50%) scale(1.32)}}
+      @keyframes startup-wordmark-collapse{0%,34%{width:4.6ch;opacity:1;transform:scale(1)}68%,100%{width:0;opacity:0;transform:scale(.72)}}
+      @keyframes startup-initial-reveal{0%,68%{opacity:1;transform:scale(1)}82%{opacity:1;transform:scale(1.16)}100%{opacity:0;transform:scale(2.2)}}
+      .startup-intro{position:fixed;z-index:10000;inset:0;display:grid;place-items:center;overflow:hidden;background:#fdfbf7;color:#0f172a;pointer-events:none;opacity:1;transition:opacity 220ms ease}
+      .startup-intro-dark{background:#111827;color:#f8fafc}
+      .startup-intro-hidden{opacity:0}
+      .startup-intro:before{position:absolute;top:50%;left:50%;width:min(86vw,460px);aspect-ratio:1;border-radius:50%;background:radial-gradient(circle,rgb(255 87 34 / 18%),rgb(255 87 34 / 5%) 42%,transparent 70%);content:"";animation:startup-glow 3s cubic-bezier(.2,.75,.25,1) both}
+      .startup-wordmark{position:relative;z-index:1;display:inline-flex;width:100vw;align-items:center;justify-content:center;white-space:nowrap;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;font-size:clamp(3.75rem,21vw,7.5rem);font-weight:900;letter-spacing:-.075em;line-height:1}
+      .startup-initial{position:relative;z-index:1;color:#ff5722;transform-origin:center;animation:startup-initial-reveal 3s cubic-bezier(.2,.75,.25,1) both}
+      .startup-wordmark-rest{display:inline-block;width:4.6ch;overflow:hidden;transform-origin:left center;animation:startup-wordmark-collapse 3s cubic-bezier(.2,.75,.25,1) both}
+      @media(prefers-reduced-motion:reduce){.startup-intro:before,.startup-initial,.startup-wordmark-rest{animation:none}.startup-wordmark-rest{width:4.6ch}}
+    </style>
     
     <!-- Título y SEO -->
     <title>Llévalo | Delivery y Mandados en San Diego, Carabobo</title>
@@ -50,6 +63,18 @@
     </script>
   </head>
   <body>
+    <script>
+      document.documentElement.dataset.startupAt = String(performance.now());
+      if (window.Capacitor?.isNativePlatform?.()) {
+        const splash = document.createElement('div');
+        splash.id = 'startup-splash';
+        splash.className = localStorage.getItem('llevalo_dark_mode') === 'true' ? 'startup-intro startup-intro-dark' : 'startup-intro';
+        splash.setAttribute('role', 'status');
+        splash.setAttribute('aria-label', 'Iniciando Llévalo');
+        splash.innerHTML = '<div class="startup-wordmark" aria-hidden="true"><span class="startup-initial">L</span><span class="startup-wordmark-rest">lévalo</span></div>';
+        document.body.appendChild(splash);
+      }
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
