@@ -258,6 +258,7 @@ body {
   position: relative;
   z-index: 1;
   display: inline-flex;
+  width: 100vw;
   align-items: center;
   justify-content: center;
   white-space: nowrap;

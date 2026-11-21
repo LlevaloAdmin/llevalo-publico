@@ -37,7 +37,7 @@ public class MainActivity extends BridgeActivity {
             @Override
             public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
                 if (request.isForMainFrame()) {
-                    mostrarPantallaOffline(view);
+                    mostrarPantallaOffline(view, request.getUrl());
                     return;
                 }
                 super.onReceivedError(view, request, error);
@@ -46,7 +46,7 @@ public class MainActivity extends BridgeActivity {
             @Override
             public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse errorResponse) {
                 if (request.isForMainFrame()) {
-                    mostrarPantallaOffline(view);
+                    mostrarPantallaOffline(view, request.getUrl());
                     return;
                 }
                 super.onReceivedHttpError(view, request, errorResponse);
@@ -90,9 +90,8 @@ public class MainActivity extends BridgeActivity {
         return getBridge().launchIntent(uri);
     }
 
-    private void mostrarPantallaOffline(WebView view) {
-        String currentUrl = view.getUrl();
-        if (currentUrl != null && currentUrl.startsWith(OFFLINE_ASSET_URL)) return;
+    private void mostrarPantallaOffline(WebView view, Uri failedUrl) {
+        if (failedUrl.toString().startsWith(OFFLINE_ASSET_URL)) return;
 
         String offlineUrl = crearUrlOffline();
         view.stopLoading();
