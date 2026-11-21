@@ -17,6 +17,9 @@ Los usuarios pueden registrarse e iniciar sesión como cliente o repartidor.
 ## Estado actual
 
 - Existe autenticación con registro, login y sesión guardada en `localStorage`.
+- Los JWT se verifican con HS256, sesión persistida y revocable; el cierre de sesión invalida el token en el backend.
+- Login y registro tienen límites de intentos; las acciones administrativas de escritura también se limitan por cuenta.
+- El backend añade cabeceras de seguridad, valida orígenes CORS exactos y verifica los certificados TLS de PostgreSQL.
 - Los clientes pueden publicar pedidos, consultar postulaciones y aceptar repartidores.
 - Los repartidores pueden consultar pedidos, postularse, cancelar postulaciones y actualizar ubicación.
 - El selector principal agrupa los servicios en Envíos y Viajes; se conservan los tipos históricos para pedidos existentes.
@@ -68,10 +71,11 @@ Configurar las variables de entorno en el servicio correspondiente:
 - `ANDROID_DEBUG_KEYSTORE_BASE64` (APK beta, firma persistente)
 - `JWT_SECRET` (backend, mínimo 32 caracteres aleatorios)
 - `CORS_ORIGINS` (backend, lista de orígenes permitidos separados por comas)
+- `TRUST_PROXY_HOPS` (opcional; número de proxies inversos confiables para obtener la IP real y aplicar límites por IP)
 - `VITE_API_URL` (frontend, URL HTTPS pública del backend)
 - `VITE_MAPBOX_TOKEN` (frontend, Directions)
 
-Los secretos de Google Drive y `ANDROID_DEBUG_KEYSTORE_BASE64` pertenecen a GitHub Actions. `JWT_SECRET` y `CORS_ORIGINS` se configuran en el backend; `VITE_API_URL` y `VITE_MAPBOX_TOKEN`, en el entorno de compilación del frontend. El backend no inicia si `JWT_SECRET` falta o tiene menos de 32 caracteres.
+Los secretos de Google Drive y `ANDROID_DEBUG_KEYSTORE_BASE64` pertenecen a GitHub Actions. `JWT_SECRET`, `CORS_ORIGINS` y, si el backend está detrás de un proxy inverso, `TRUST_PROXY_HOPS` se configuran en el backend; `VITE_API_URL` y `VITE_MAPBOX_TOKEN`, en el entorno de compilación del frontend. El backend no inicia si `JWT_SECRET` falta o tiene menos de 32 bytes.
 
 Si algún secreto previo quedó expuesto en historial o texto, debe rotarse en Google Cloud.
 

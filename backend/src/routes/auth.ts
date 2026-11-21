@@ -6,7 +6,10 @@ import dns from 'dns/promises';
 import { pool } from '../db';
 import { JWT_SECRET } from '../config';
 import { requireAdmin, requireAuth } from '../middleware/auth';
+import { adminActionRateLimit, inicioSesionRateLimit, registroRateLimit } from '../middleware/rateLimits';
 import { asegurarTablasActividad, registrarActividad, registrarActividadDirecta } from '../utils/activity';
+import { revocarSesionAutenticada, guardarSesionAutenticada } from '../utils/authSessions';
+import { JWT_AUDIENCE, JWT_ISSUER } from '../utils/authToken';
 
 const router = Router();
 
@@ -24,6 +27,31 @@ interface UsuarioFila {
   calificacion?: number | string | null;
   es_admin?: boolean | null;
 }
+
+const emitirTokenAcceso = async (
+  id: number,
+  rol: UsuarioFila['rol'],
+  rolBase: UsuarioFila['rol'],
+  esAdmin: boolean,
+  sessionId: string = randomUUID()
+) => {
+  const token = jwt.sign(
+    { id, rol, rol_base: rolBase, es_admin: esAdmin, jti: sessionId },
+    JWT_SECRET,
+    {
+      algorithm: 'HS256',
+      audience: JWT_AUDIENCE,
+      expiresIn: 7 * 24 * 60 * 60,
+      issuer: JWT_ISSUER
+    }
+  );
+  const payload = jwt.decode(token);
+  if (typeof payload === 'string' || !payload || typeof payload.exp !== 'number') {
+    throw new Error('No se pudo determinar la expiración de la sesión.');
+  }
+  await guardarSesionAutenticada(sessionId, id, new Date(payload.exp * 1000));
+  return token;
+};
 
 let profileColumnsReady: Promise<void> | null = null;
 
@@ -64,7 +92,7 @@ const usuarioPublico = (user: UsuarioFila) => ({
 });
 
 // REGISTRO DIRECTO (Sin verificación SMS)
-router.post('/register', async (req: Request, res: Response): Promise<any> => {
+router.post('/register', registroRateLimit, async (req: Request, res: Response): Promise<any> => {
   const { nombre, email, telefono, password, cedula, foto, vehiculo, placa, vehiculo_foto } = req.body ?? {};
   const rol = req.body?.rol || 'cliente';
 
@@ -126,7 +154,7 @@ router.post('/register', async (req: Request, res: Response): Promise<any> => {
     );
 
     const user = usuarioPublico(newUser.rows[0]);
-    const token = jwt.sign({ id: user.id, rol: user.rol, rol_base: user.rol, es_admin: user.es_admin, jti: randomUUID() }, JWT_SECRET, { expiresIn: '7d' });
+    const token = await emitirTokenAcceso(user.id, user.rol, user.rol, user.es_admin);
     try {
       await registrarActividadDirecta(user.id, user.rol, 'cuenta_creada', `Se creó una cuenta de ${user.rol}.`);
     } catch (activityError) {
@@ -145,7 +173,7 @@ router.post('/register', async (req: Request, res: Response): Promise<any> => {
 });
 
 // LOGIN
-router.post('/login', async (req: Request, res: Response): Promise<any> => {
+router.post('/login', inicioSesionRateLimit, async (req: Request, res: Response): Promise<any> => {
   const { email, password } = req.body ?? {};
   if (typeof email !== 'string' || email.length > 254 || typeof password !== 'string' || password.length > 128) {
     return res.status(400).json({ error: 'Correo o contraseña incorrectos.' });
@@ -164,7 +192,7 @@ router.post('/login', async (req: Request, res: Response): Promise<any> => {
       return res.status(400).json({ error: 'Correo o contraseña incorrectos.' });
     }
 
-    const token = jwt.sign({ id: user.id, rol: user.rol, rol_base: user.rol, es_admin: user.es_admin === true, jti: randomUUID() }, JWT_SECRET, { expiresIn: '7d' });
+    const token = await emitirTokenAcceso(user.id, user.rol, user.rol, user.es_admin === true);
     try {
       await registrarActividadDirecta(user.id, user.rol, 'inicio_sesion', 'Inició sesión.');
     } catch (activityError) {
@@ -182,7 +210,7 @@ router.post('/login', async (req: Request, res: Response): Promise<any> => {
   }
 });
 
-router.put('/active-role', requireAuth, requireAdmin, async (req: Request, res: Response): Promise<any> => {
+router.put('/active-role', requireAuth, requireAdmin, adminActionRateLimit, async (req: Request, res: Response): Promise<any> => {
   const authUser = req.authUser;
   const rol = req.body?.rol;
   if (!authUser) return res.status(401).json({ error: 'Sesión inválida.' });
@@ -200,11 +228,7 @@ router.put('/active-role', requireAuth, requireAdmin, async (req: Request, res: 
 
     const user = result.rows[0] as UsuarioFila;
     const usuarioActivo = { ...usuarioPublico(user), rol };
-    const token = jwt.sign(
-      { id: user.id, rol, rol_base: user.rol, es_admin: true, jti: authUser.session_id },
-      JWT_SECRET,
-      { expiresIn: '7d' }
-    );
+    const token = await emitirTokenAcceso(user.id, rol, user.rol, true, authUser.session_id);
     res.json({ token, usuario: usuarioActivo });
   } catch (error) {
     console.error('Error al cambiar la perspectiva del administrador:', error);
@@ -238,6 +262,7 @@ router.post('/logout', requireAuth, async (req: Request, res: Response): Promise
   try {
     await client.query('BEGIN');
     await registrarActividad(client, authUser.id, authUser.rol, 'cierre_sesion', 'Cerró sesión.');
+    await revocarSesionAutenticada(client, authUser.session_id, authUser.id);
     await client.query('DELETE FROM sesiones_activas WHERE session_id = $1', [authUser.session_id]);
     await client.query('COMMIT');
     res.json({ mensaje: 'Sesión cerrada.' });

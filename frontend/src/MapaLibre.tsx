@@ -9,6 +9,29 @@ setWorkerUrl(workerUrl);
 const estiloClaro = 'https://tiles.openfreemap.org/styles/liberty';
 const estiloOscuro = 'https://tiles.openfreemap.org/styles/dark';
 
+const crearElementoMarcador = (color: string, tamano: number, centro: number) => {
+  const marcador = document.createElement('div');
+  marcador.style.backgroundColor = color;
+  marcador.style.width = `${tamano}px`;
+  marcador.style.height = `${tamano}px`;
+  marcador.style.borderRadius = '50% 50% 50% 0';
+  marcador.style.transform = 'rotate(-45deg)';
+  marcador.style.display = 'flex';
+  marcador.style.alignItems = 'center';
+  marcador.style.justifyContent = 'center';
+  marcador.style.boxShadow = '0 4px 8px rgba(0,0,0,0.35)';
+  marcador.style.border = '2px solid white';
+
+  const punto = document.createElement('div');
+  punto.style.width = `${centro}px`;
+  punto.style.height = `${centro}px`;
+  punto.style.backgroundColor = 'white';
+  punto.style.borderRadius = '50%';
+  punto.style.transform = 'rotate(45deg)';
+  marcador.append(punto);
+  return marcador;
+};
+
 interface MapaLibreProps {
   coordsOrigen?: { lat: number; lng: number } | null;
   coordsDestino?: { lat: number; lng: number } | null;
@@ -129,12 +152,10 @@ export default function MapaLibre({
     // --- MARCADOR USUARIO (AZUL) ---
     if (coordsUsuario) {
       if (!markerUsuarioRef.current) {
-        const elUsuario = document.createElement('div');
-        elUsuario.innerHTML = `
-          <div style="background-color: #3B82F6; width: 28px; height: 28px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 8px rgba(0,0,0,0.4); border: 2.5px solid white;">
-            <div style="width: 9px; height: 9px; background: white; border-radius: 50%; transform: rotate(45deg);"></div>
-          </div>`;
-        markerUsuarioRef.current = new maplibregl.Marker({ element: elUsuario, anchor: 'bottom' });
+        markerUsuarioRef.current = new maplibregl.Marker({
+          element: crearElementoMarcador('#3B82F6', 28, 9),
+          anchor: 'bottom'
+        });
       }
       markerUsuarioRef.current.setLngLat([coordsUsuario.lng, coordsUsuario.lat]).addTo(map);
     } else {
@@ -144,12 +165,10 @@ export default function MapaLibre({
     // --- MARCADOR ORIGEN (VERDE) ---
     if (mostrarPines && coordsOrigen) {
       if (!markerOrigenRef.current) {
-        const elOrigen = document.createElement('div');
-        elOrigen.innerHTML = `
-          <div style="background-color: #10B981; width: ${mini ? 20 : 26}px; height: ${mini ? 20 : 26}px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); display: flex; align-items: center; justify-content: center; box-shadow: 0 3px 5px rgba(0,0,0,0.3); border: 2px solid white;">
-            <div style="width: ${mini ? 6 : 8}px; height: ${mini ? 6 : 8}px; background: white; border-radius: 50%; transform: rotate(45deg);"></div>
-          </div>`;
-        markerOrigenRef.current = new maplibregl.Marker({ element: elOrigen, anchor: 'bottom' });
+        markerOrigenRef.current = new maplibregl.Marker({
+          element: crearElementoMarcador('#10B981', mini ? 20 : 26, mini ? 6 : 8),
+          anchor: 'bottom'
+        });
       }
       markerOrigenRef.current.setLngLat([coordsOrigen.lng, coordsOrigen.lat]).addTo(map);
     } else {
@@ -159,12 +178,10 @@ export default function MapaLibre({
     // --- MARCADOR DESTINO (ROJO) ---
     if (mostrarPines && coordsDestino) {
       if (!markerDestinoRef.current) {
-        const elDestino = document.createElement('div');
-        elDestino.innerHTML = `
-          <div style="background-color: #EF4444; width: ${mini ? 20 : 26}px; height: ${mini ? 20 : 26}px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); display: flex; align-items: center; justify-content: center; box-shadow: 0 3px 5px rgba(0,0,0,0.3); border: 2px solid white;">
-            <div style="width: ${mini ? 6 : 8}px; height: ${mini ? 6 : 8}px; background: white; border-radius: 50%; transform: rotate(45deg);"></div>
-          </div>`;
-        markerDestinoRef.current = new maplibregl.Marker({ element: elDestino, anchor: 'bottom' });
+        markerDestinoRef.current = new maplibregl.Marker({
+          element: crearElementoMarcador('#EF4444', mini ? 20 : 26, mini ? 6 : 8),
+          anchor: 'bottom'
+        });
       }
       markerDestinoRef.current.setLngLat([coordsDestino.lng, coordsDestino.lat]).addTo(map);
     } else {

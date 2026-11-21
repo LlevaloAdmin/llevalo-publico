@@ -2,7 +2,7 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "npm run build && node --test test/pricing.test.cjs test/payments.test.cjs test/orderSearch.test.cjs test/exchangeRates.test.cjs"
+    "test": "npm run build && node --test test/pricing.test.cjs test/payments.test.cjs test/orderSearch.test.cjs test/exchangeRates.test.cjs test/authToken.test.cjs"
   },
   "dependencies": {
     "axios": "^1.21.1",
@@ -10,6 +10,8 @@
     "cors": "^2.8.6",
     "dotenv": "^18.0.10",
     "express": "^5.3.0",
+    "express-rate-limit": "^8.7.5",
+    "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.3",
     "pg": "^8.23.1",
     "socket.io": "^4.8.4"

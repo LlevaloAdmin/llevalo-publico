@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import type { PoolClient } from 'pg';
 import { pool } from '../db';
 import { requireAdmin, requireAuth } from '../middleware/auth';
+import { adminActionRateLimit } from '../middleware/rateLimits';
 import { tablasPedidosListas } from './pedidos';
 import { obtenerTasasCambio } from '../utils/exchangeRates';
 import { registrarActividad, registrarActividadDirecta } from '../utils/activity';
@@ -73,7 +74,7 @@ router.get('/tarifas', async (_req: Request, res: Response): Promise<any> => {
   }
 });
 
-router.put('/admin/tarifas', requireAdmin, async (req: Request, res: Response): Promise<any> => {
+router.put('/admin/tarifas', requireAdmin, adminActionRateLimit, async (req: Request, res: Response): Promise<any> => {
   const { enviosPorKm, viajesCortoPorKm, viajesLargoPorKm, tarifaMinima, monedaVisualizacion } = req.body ?? {};
   const configuracionRecibida: unknown = { enviosPorKm, viajesCortoPorKm, viajesLargoPorKm, tarifaMinima, monedaVisualizacion };
   if (!esConfiguracionTarifasValida(configuracionRecibida)) {
@@ -146,7 +147,7 @@ router.get('/admin/historial', requireAdmin, async (_req: Request, res: Response
   }
 });
 
-router.put('/admin/config', requireAdmin, async (req: Request, res: Response): Promise<any> => {
+router.put('/admin/config', requireAdmin, adminActionRateLimit, async (req: Request, res: Response): Promise<any> => {
   const { banco, telefono, cedula, titular } = req.body ?? {};
   if (typeof banco !== 'string' || !banco.trim() || banco.length > 100
     || typeof telefono !== 'string' || !telefono.trim() || telefono.length > 30
@@ -171,7 +172,7 @@ router.put('/admin/config', requireAdmin, async (req: Request, res: Response): P
   }
 });
 
-router.put('/admin/pedidos/:id', requireAdmin, async (req: Request, res: Response): Promise<any> => {
+router.put('/admin/pedidos/:id', requireAdmin, adminActionRateLimit, async (req: Request, res: Response): Promise<any> => {
   const adminId = req.authUser?.id;
   if (!adminId) return res.status(401).json({ error: 'Sesión inválida.' });
   const id = obtenerId(req.params.id);
@@ -255,7 +256,7 @@ router.put('/admin/pedidos/:id', requireAdmin, async (req: Request, res: Respons
   }
 });
 
-router.post('/admin/saldo', requireAdmin, async (req: Request, res: Response): Promise<any> => {
+router.post('/admin/saldo', requireAdmin, adminActionRateLimit, async (req: Request, res: Response): Promise<any> => {
   const adminId = req.authUser?.id;
   if (!adminId) return res.status(401).json({ error: 'Sesión inválida.' });
   const email = req.body?.email;

@@ -10,7 +10,7 @@ dotenv_1.default.config();
 exports.pool = new pg_1.Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: {
-        rejectUnauthorized: false
+        rejectUnauthorized: true
     }
 });
 // Prueba de conexión inmediata al arrancar

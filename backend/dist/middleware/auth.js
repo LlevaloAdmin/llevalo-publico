@@ -1,46 +1,33 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.requireAdmin = exports.requireRole = exports.requireAuth = exports.verifyAccessToken = void 0;
-const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
-const config_1 = require("../config");
+exports.requireAdmin = exports.requireRole = exports.requireAuth = void 0;
 const db_1 = require("../db");
-const verifyAccessToken = (token) => {
-    try {
-        const payload = jsonwebtoken_1.default.verify(token, config_1.JWT_SECRET);
-        if (typeof payload === 'string')
-            return null;
-        const id = Number(payload.id);
-        const rol = payload.rol;
-        const rolBase = payload.rol_base ?? rol;
-        if (!Number.isSafeInteger(id) || id <= 0
-            || (rol !== 'cliente' && rol !== 'repartidor')
-            || (rolBase !== 'cliente' && rolBase !== 'repartidor'))
-            return null;
-        const sessionId = typeof payload.jti === 'string' ? payload.jti : `legacy:${id}`;
-        return { id, rol, rol_base: rolBase, es_admin: payload.es_admin === true, session_id: sessionId };
-    }
-    catch {
-        return null;
-    }
-};
-exports.verifyAccessToken = verifyAccessToken;
-const requireAuth = (req, res, next) => {
+const authSessions_1 = require("../utils/authSessions");
+const authToken_1 = require("../utils/authToken");
+const requireAuth = async (req, res, next) => {
     const authorization = req.header('authorization');
-    const [scheme, token] = authorization?.split(' ') ?? [];
-    if (scheme !== 'Bearer' || !token) {
+    const tokenMatch = authorization?.match(/^Bearer ([^\s]+)$/);
+    if (!tokenMatch) {
         res.status(401).json({ error: 'Debes iniciar sesión para realizar esta acción.' });
         return;
     }
-    const authUser = (0, exports.verifyAccessToken)(token);
+    const authUser = (0, authToken_1.verifyAccessToken)(tokenMatch[1]);
     if (!authUser) {
         res.status(401).json({ error: 'La sesión es inválida o expiró. Inicia sesión nuevamente.' });
         return;
     }
-    req.authUser = authUser;
-    next();
+    try {
+        if (!await (0, authSessions_1.sesionAutenticadaActiva)(authUser.session_id, authUser.id)) {
+            res.status(401).json({ error: 'La sesión fue cerrada o expiró. Inicia sesión nuevamente.' });
+            return;
+        }
+        req.authUser = authUser;
+        next();
+    }
+    catch (error) {
+        console.error('Error verificando la sesión autenticada:', error);
+        res.status(503).json({ error: 'No se pudo verificar la sesión. Inténtalo nuevamente.' });
+    }
 };
 exports.requireAuth = requireAuth;
 const requireRole = (rol) => async (req, res, next) => {

@@ -13,6 +13,7 @@ backend/dist/*
 !backend/dist/middleware/
 backend/dist/middleware/*
 !backend/dist/middleware/auth.js
+!backend/dist/middleware/rateLimits.js
 !backend/dist/routes/
 backend/dist/routes/*
 !backend/dist/routes/pagos.js
@@ -24,3 +25,5 @@ backend/dist/utils/*
 !backend/dist/utils/orderCode.js
 !backend/dist/utils/orderSearch.js
 !backend/dist/utils/pricingSettings.js
+!backend/dist/utils/authSessions.js
+!backend/dist/utils/authToken.js

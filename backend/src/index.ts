@@ -2,9 +2,11 @@ import express from 'express';
 import http from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
+import helmet from 'helmet';
 import dotenv from 'dotenv';
-import { allowedOrigins } from './config';
-import { verifyAccessToken } from './middleware/auth';
+import { allowedOrigins, TRUST_PROXY_HOPS } from './config';
+import { verifyAccessToken } from './utils/authToken';
+import { sesionAutenticadaActiva } from './utils/authSessions';
 
 dotenv.config();
 
@@ -14,8 +16,11 @@ import pedidosRoutes from './routes/pedidos';
 import pagosRoutes from './routes/pagos';
 
 const app = express();
+app.set('trust proxy', TRUST_PROXY_HOPS);
+app.use(helmet());
 app.use(cors({
-  origin: (origin, callback) => callback(null, !origin || allowedOrigins.includes(origin))
+  origin: (origin, callback) => callback(null, !origin || allowedOrigins.includes(origin)),
+  maxAge: 600
 }));
 app.use(express.json({ limit: '1mb' }));
 app.use('/api/auth', authRoutes);
@@ -30,15 +35,20 @@ const io = new Server(server, {
   }
 });
 
-io.use((socket, next) => {
-  const token = socket.handshake.auth?.token;
-  const authUser = typeof token === 'string' ? verifyAccessToken(token) : null;
-  if (!authUser) {
-    next(new Error('Unauthorized'));
-    return;
+io.use(async (socket, next) => {
+  try {
+    const token = socket.handshake.auth?.token;
+    const authUser = typeof token === 'string' ? verifyAccessToken(token) : null;
+    if (!authUser || !await sesionAutenticadaActiva(authUser.session_id, authUser.id)) {
+      next(new Error('Unauthorized'));
+      return;
+    }
+    socket.data.authUser = authUser;
+    next();
+  } catch (error) {
+    console.error('Error verificando la sesión del WebSocket:', error);
+    next(new Error('Service unavailable'));
   }
-  socket.data.authUser = authUser;
-  next();
 });
 
 const PORT = process.env.PORT || 5000;

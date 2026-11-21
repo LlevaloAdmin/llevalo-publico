@@ -6,7 +6,8 @@ const config: CapacitorConfig = {
   webDir: 'dist',
   server: {
     url: 'https://llevalo.vercel.app',
-    cleartext: true
+    cleartext: true,
+    errorPath: 'offline.html'
   },
   plugins: {
     StatusBar: {

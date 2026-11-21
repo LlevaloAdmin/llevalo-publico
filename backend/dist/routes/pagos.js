@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const db_1 = require("../db");
 const auth_1 = require("../middleware/auth");
+const rateLimits_1 = require("../middleware/rateLimits");
 const pedidos_1 = require("./pedidos");
 const exchangeRates_1 = require("../utils/exchangeRates");
 const activity_1 = require("../utils/activity");
@@ -69,7 +70,7 @@ router.get('/tarifas', async (_req, res) => {
         res.status(503).json({ error: 'No se pudieron cargar las tarifas configuradas. Inténtalo nuevamente.' });
     }
 });
-router.put('/admin/tarifas', auth_1.requireAdmin, async (req, res) => {
+router.put('/admin/tarifas', auth_1.requireAdmin, rateLimits_1.adminActionRateLimit, async (req, res) => {
     const { enviosPorKm, viajesCortoPorKm, viajesLargoPorKm, tarifaMinima, monedaVisualizacion } = req.body ?? {};
     const configuracionRecibida = { enviosPorKm, viajesCortoPorKm, viajesLargoPorKm, tarifaMinima, monedaVisualizacion };
     if (!(0, pricing_1.esConfiguracionTarifasValida)(configuracionRecibida)) {
@@ -133,7 +134,7 @@ router.get('/admin/historial', auth_1.requireAdmin, async (_req, res) => {
         res.status(500).json({ error: 'No se pudo consultar el historial de pagos.' });
     }
 });
-router.put('/admin/config', auth_1.requireAdmin, async (req, res) => {
+router.put('/admin/config', auth_1.requireAdmin, rateLimits_1.adminActionRateLimit, async (req, res) => {
     const { banco, telefono, cedula, titular } = req.body ?? {};
     if (typeof banco !== 'string' || !banco.trim() || banco.length > 100
         || typeof telefono !== 'string' || !telefono.trim() || telefono.length > 30
@@ -154,7 +155,7 @@ router.put('/admin/config', auth_1.requireAdmin, async (req, res) => {
         res.status(500).json({ error: 'No se pudieron guardar los datos de Pago Móvil.' });
     }
 });
-router.put('/admin/pedidos/:id', auth_1.requireAdmin, async (req, res) => {
+router.put('/admin/pedidos/:id', auth_1.requireAdmin, rateLimits_1.adminActionRateLimit, async (req, res) => {
     const adminId = req.authUser?.id;
     if (!adminId)
         return res.status(401).json({ error: 'Sesión inválida.' });
@@ -228,7 +229,7 @@ router.put('/admin/pedidos/:id', auth_1.requireAdmin, async (req, res) => {
         client?.release();
     }
 });
-router.post('/admin/saldo', auth_1.requireAdmin, async (req, res) => {
+router.post('/admin/saldo', auth_1.requireAdmin, rateLimits_1.adminActionRateLimit, async (req, res) => {
     const adminId = req.authUser?.id;
     if (!adminId)
         return res.status(401).json({ error: 'Sesión inválida.' });

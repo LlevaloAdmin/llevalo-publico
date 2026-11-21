@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#fdfbf7">
+    <title>Sin conexión · Llévalo</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-synthesis: none;
+        text-rendering: optimizeLegibility;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        background: #fdfbf7;
+        color: #172033;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        min-width: 280px;
+        min-height: 100vh;
+        min-height: 100dvh;
+        margin: 0;
+        padding: max(24px, env(safe-area-inset-top)) 20px max(24px, env(safe-area-inset-bottom));
+        display: grid;
+        place-items: center;
+        background:
+          radial-gradient(ellipse at 50% 30%, rgb(255 87 34 / 9%), transparent 58%),
+          #fdfbf7;
+      }
+
+      main {
+        width: min(100%, 380px);
+        padding: 32px 24px 24px;
+        text-align: center;
+        border: 1px solid #f1e8df;
+        border-radius: 30px;
+        background: rgb(255 255 255 / 88%);
+        box-shadow: 0 24px 70px rgb(75 44 24 / 10%);
+      }
+
+      .brand-mark {
+        width: 58px;
+        height: 58px;
+        margin: 0 auto 20px;
+        display: grid;
+        place-items: center;
+        border-radius: 19px;
+        background: #ff5722;
+        color: white;
+        font-size: 34px;
+        font-weight: 900;
+        line-height: 1;
+        box-shadow: 0 9px 22px rgb(255 87 34 / 25%);
+      }
+
+      .connection-icon {
+        width: 76px;
+        height: 76px;
+        margin: 0 auto 20px;
+        display: grid;
+        place-items: center;
+        border: 1px solid #ffe0d2;
+        border-radius: 25px;
+        background: #fff3ed;
+        color: #ff5722;
+      }
+
+      .connection-icon svg {
+        width: 38px;
+        height: 38px;
+        fill: none;
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 2;
+      }
+
+      .eyebrow {
+        margin: 0 0 8px;
+        color: #e64a19;
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.13em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(24px, 7vw, 30px);
+        font-weight: 850;
+        letter-spacing: -0.045em;
+      }
+
+      .message {
+        margin: 12px 0 26px;
+        color: #647084;
+        font-size: 15px;
+        line-height: 1.65;
+      }
+
+      .actions {
+        display: grid;
+        gap: 11px;
+      }
+
+      button {
+        min-height: 52px;
+        width: 100%;
+        border: 0;
+        border-radius: 16px;
+        font: inherit;
+        font-size: 14px;
+        font-weight: 750;
+        cursor: pointer;
+        -webkit-tap-highlight-color: transparent;
+        transition: transform 160ms ease, background-color 160ms ease;
+      }
+
+      button:active {
+        transform: scale(0.98);
+      }
+
+      .retry {
+        background: #ff5722;
+        color: white;
+        box-shadow: 0 8px 18px rgb(255 87 34 / 20%);
+      }
+
+      .retry:active {
+        background: #ed4e1d;
+      }
+
+      .exit {
+        border: 1px solid #e8e4de;
+        background: #fff;
+        color: #475166;
+      }
+
+      .exit:active {
+        background: #f8f5f0;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          scroll-behavior: auto !important;
+          transition-duration: 0.01ms !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="brand-mark" aria-hidden="true">L</div>
+      <div class="connection-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24">
+          <path d="M2 8.8a15 15 0 0 1 17.4-2.1M5.5 12.5a9.5 9.5 0 0 1 6.8-2.7c1.1 0 2.2.2 3.2.6M9.2 16.2a4.5 4.5 0 0 1 4.8-.6M12 20h.01" />
+          <path d="m3 3 18 18" />
+        </svg>
+      </div>
+      <p class="eyebrow">Llévalo</p>
+      <h1>Sin conexión a internet</h1>
+      <p class="message">No pudimos conectarnos. Revisa tu conexión a internet e inténtalo de nuevo.</p>
+      <div class="actions">
+        <button class="retry" type="button" onclick="window.location.replace('https://llevalo.vercel.app/')">
+          Recargar / Reintentar conexión
+        </button>
+        <button class="exit" type="button" onclick="window.location.href = 'llevalo://exit'">
+          Salir de la app
+        </button>
+      </div>
+    </main>
+  </body>
+</html>

@@ -1,15 +1,9 @@
-import jwt from 'jsonwebtoken';
 import { NextFunction, Request, Response } from 'express';
-import { JWT_SECRET } from '../config';
 import { pool } from '../db';
+import { sesionAutenticadaActiva } from '../utils/authSessions';
+import { type AuthenticatedUser, verifyAccessToken } from '../utils/authToken';
 
-export interface AuthenticatedUser {
-  id: number;
-  rol: 'cliente' | 'repartidor';
-  rol_base: 'cliente' | 'repartidor';
-  es_admin: boolean;
-  session_id: string;
-}
+export type { AuthenticatedUser } from '../utils/authToken';
 
 declare global {
   namespace Express {
@@ -19,41 +13,32 @@ declare global {
   }
 }
 
-export const verifyAccessToken = (token: string): AuthenticatedUser | null => {
-  try {
-    const payload = jwt.verify(token, JWT_SECRET);
-    if (typeof payload === 'string') return null;
-
-    const id = Number(payload.id);
-    const rol = payload.rol;
-    const rolBase = payload.rol_base ?? rol;
-    if (!Number.isSafeInteger(id) || id <= 0
-      || (rol !== 'cliente' && rol !== 'repartidor')
-      || (rolBase !== 'cliente' && rolBase !== 'repartidor')) return null;
-    const sessionId = typeof payload.jti === 'string' ? payload.jti : `legacy:${id}`;
-    return { id, rol, rol_base: rolBase, es_admin: payload.es_admin === true, session_id: sessionId };
-  } catch {
-    return null;
-  }
-};
-
-export const requireAuth = (req: Request, res: Response, next: NextFunction): void => {
+export const requireAuth = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   const authorization = req.header('authorization');
-  const [scheme, token] = authorization?.split(' ') ?? [];
+  const tokenMatch = authorization?.match(/^Bearer ([^\s]+)$/);
 
-  if (scheme !== 'Bearer' || !token) {
+  if (!tokenMatch) {
     res.status(401).json({ error: 'Debes iniciar sesión para realizar esta acción.' });
     return;
   }
 
-  const authUser = verifyAccessToken(token);
+  const authUser = verifyAccessToken(tokenMatch[1]);
   if (!authUser) {
     res.status(401).json({ error: 'La sesión es inválida o expiró. Inicia sesión nuevamente.' });
     return;
   }
 
-  req.authUser = authUser;
-  next();
+  try {
+    if (!await sesionAutenticadaActiva(authUser.session_id, authUser.id)) {
+      res.status(401).json({ error: 'La sesión fue cerrada o expiró. Inicia sesión nuevamente.' });
+      return;
+    }
+    req.authUser = authUser;
+    next();
+  } catch (error) {
+    console.error('Error verificando la sesión autenticada:', error);
+    res.status(503).json({ error: 'No se pudo verificar la sesión. Inténtalo nuevamente.' });
+  }
 };
 
 export const requireRole = (rol: AuthenticatedUser['rol']) =>

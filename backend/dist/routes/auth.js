@@ -11,8 +11,25 @@ const promises_1 = __importDefault(require("dns/promises"));
 const db_1 = require("../db");
 const config_1 = require("../config");
 const auth_1 = require("../middleware/auth");
+const rateLimits_1 = require("../middleware/rateLimits");
 const activity_1 = require("../utils/activity");
+const authSessions_1 = require("../utils/authSessions");
+const authToken_1 = require("../utils/authToken");
 const router = (0, express_1.Router)();
+const emitirTokenAcceso = async (id, rol, rolBase, esAdmin, sessionId = (0, crypto_1.randomUUID)()) => {
+    const token = jsonwebtoken_1.default.sign({ id, rol, rol_base: rolBase, es_admin: esAdmin, jti: sessionId }, config_1.JWT_SECRET, {
+        algorithm: 'HS256',
+        audience: authToken_1.JWT_AUDIENCE,
+        expiresIn: 7 * 24 * 60 * 60,
+        issuer: authToken_1.JWT_ISSUER
+    });
+    const payload = jsonwebtoken_1.default.decode(token);
+    if (typeof payload === 'string' || !payload || typeof payload.exp !== 'number') {
+        throw new Error('No se pudo determinar la expiración de la sesión.');
+    }
+    await (0, authSessions_1.guardarSesionAutenticada)(sessionId, id, new Date(payload.exp * 1000));
+    return token;
+};
 let profileColumnsReady = null;
 const ensureProfileColumns = () => {
     if (!profileColumnsReady) {
@@ -49,7 +66,7 @@ const usuarioPublico = (user) => ({
     es_admin: user.es_admin === true
 });
 // REGISTRO DIRECTO (Sin verificación SMS)
-router.post('/register', async (req, res) => {
+router.post('/register', rateLimits_1.registroRateLimit, async (req, res) => {
     const { nombre, email, telefono, password, cedula, foto, vehiculo, placa, vehiculo_foto } = req.body ?? {};
     const rol = req.body?.rol || 'cliente';
     if (typeof nombre !== 'string' || !nombre.trim() || nombre.length > 120
@@ -101,7 +118,7 @@ router.post('/register', async (req, res) => {
             cedula?.trim() || null, foto || null, vehiculo?.trim() || null, placa?.trim() || null, vehiculo_foto || null
         ]);
         const user = usuarioPublico(newUser.rows[0]);
-        const token = jsonwebtoken_1.default.sign({ id: user.id, rol: user.rol, rol_base: user.rol, es_admin: user.es_admin, jti: (0, crypto_1.randomUUID)() }, config_1.JWT_SECRET, { expiresIn: '7d' });
+        const token = await emitirTokenAcceso(user.id, user.rol, user.rol, user.es_admin);
         try {
             await (0, activity_1.registrarActividadDirecta)(user.id, user.rol, 'cuenta_creada', `Se creó una cuenta de ${user.rol}.`);
         }
@@ -120,7 +137,7 @@ router.post('/register', async (req, res) => {
     }
 });
 // LOGIN
-router.post('/login', async (req, res) => {
+router.post('/login', rateLimits_1.inicioSesionRateLimit, async (req, res) => {
     const { email, password } = req.body ?? {};
     if (typeof email !== 'string' || email.length > 254 || typeof password !== 'string' || password.length > 128) {
         return res.status(400).json({ error: 'Correo o contraseña incorrectos.' });
@@ -136,7 +153,7 @@ router.post('/login', async (req, res) => {
         if (!validPassword) {
             return res.status(400).json({ error: 'Correo o contraseña incorrectos.' });
         }
-        const token = jsonwebtoken_1.default.sign({ id: user.id, rol: user.rol, rol_base: user.rol, es_admin: user.es_admin === true, jti: (0, crypto_1.randomUUID)() }, config_1.JWT_SECRET, { expiresIn: '7d' });
+        const token = await emitirTokenAcceso(user.id, user.rol, user.rol, user.es_admin === true);
         try {
             await (0, activity_1.registrarActividadDirecta)(user.id, user.rol, 'inicio_sesion', 'Inició sesión.');
         }
@@ -154,7 +171,7 @@ router.post('/login', async (req, res) => {
         res.status(500).json({ error: 'Error interno al iniciar sesión.' });
     }
 });
-router.put('/active-role', auth_1.requireAuth, auth_1.requireAdmin, async (req, res) => {
+router.put('/active-role', auth_1.requireAuth, auth_1.requireAdmin, rateLimits_1.adminActionRateLimit, async (req, res) => {
     const authUser = req.authUser;
     const rol = req.body?.rol;
     if (!authUser)
@@ -169,7 +186,7 @@ router.put('/active-role', auth_1.requireAuth, auth_1.requireAdmin, async (req, 
             return res.status(403).json({ error: 'Esta acción requiere permisos de administrador.' });
         const user = result.rows[0];
         const usuarioActivo = { ...usuarioPublico(user), rol };
-        const token = jsonwebtoken_1.default.sign({ id: user.id, rol, rol_base: user.rol, es_admin: true, jti: authUser.session_id }, config_1.JWT_SECRET, { expiresIn: '7d' });
+        const token = await emitirTokenAcceso(user.id, rol, user.rol, true, authUser.session_id);
         res.json({ token, usuario: usuarioActivo });
     }
     catch (error) {
@@ -202,6 +219,7 @@ router.post('/logout', auth_1.requireAuth, async (req, res) => {
     try {
         await client.query('BEGIN');
         await (0, activity_1.registrarActividad)(client, authUser.id, authUser.rol, 'cierre_sesion', 'Cerró sesión.');
+        await (0, authSessions_1.revocarSesionAutenticada)(client, authUser.session_id, authUser.id);
         await client.query('DELETE FROM sesiones_activas WHERE session_id = $1', [authUser.session_id]);
         await client.query('COMMIT');
         res.json({ mensaje: 'Sesión cerrada.' });
