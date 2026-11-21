@@ -8,6 +8,7 @@ import { estadoPagoAlCancelar, referenciaPagoValida, solicitudExpirada } from '.
 import { registrarActividad } from '../utils/activity';
 import { codigoPedido } from '../utils/orderCode';
 import { desfaseHorarioValido, fechaIsoValida, horaPedidoValida } from '../utils/orderSearch';
+import { notifyDriverOfUpdate, notifyDriversOfNewOrder } from '../utils/pushNotifications';
 
 const router = Router();
 
@@ -508,7 +509,13 @@ router.post('/', requireRole('cliente'), async (req: Request, res: Response): Pr
     );
 
     await client.query('COMMIT');
-    res.status(201).json({ mensaje: 'Pedido publicado', pedido: result.rows[0] });
+    const pedidoCreado = result.rows[0];
+    if (pedidoCreado.publicado_en) {
+      void notifyDriversOfNewOrder(pedidoCreado).catch(error => {
+        console.error('No se pudo notificar a los repartidores sobre el nuevo pedido:', error);
+      });
+    }
+    res.status(201).json({ mensaje: 'Pedido publicado', pedido: pedidoCreado });
   } catch (error) {
     console.error('Error al crear pedido:', error);
     try {
@@ -542,7 +549,7 @@ router.get('/', async (req: Request, res: Response): Promise<any> => {
                 origen_texto, origen_lat, origen_lon, destino_texto, destino_lat, destino_lon,
                 distancia_km, tiempo_min, tarifa, metodo_pago, estado_pago, estado, repartidor_id, repartidor_nombre,
                 repartidor_vehiculo, repartidor_placa, repartidor_foto, repartidor_vehiculo_foto,
-                repartidor_calificacion, repartidor_lat, repartidor_lon, creado_en
+                repartidor_calificacion, repartidor_lat, repartidor_lon, creado_en, publicado_en
          FROM pedidos
          WHERE (estado IN ('pendiente', 'postulado')
                 AND (metodo_pago IN ('efectivo', 'no_aplica') OR estado_pago = 'pagado'))
@@ -790,6 +797,14 @@ router.put('/:id/aceptar-postulacion', requireRole('cliente'), async (req: Reque
     );
 
     await client.query('COMMIT');
+    void notifyDriverOfUpdate(
+      elegido.repartidor_id,
+      id,
+      '¡Te eligieron para el trabajo!',
+      'Abre Llévalo para revisar los datos del servicio y comenzar.'
+    ).catch(error => {
+      console.error('No se pudo notificar al repartidor seleccionado:', error);
+    });
     res.json({ mensaje: 'Repartidor seleccionado', pedido: pedidoActualizado.rows[0] });
   } catch (error) {
     console.error('Error al aceptar postulación:', error);

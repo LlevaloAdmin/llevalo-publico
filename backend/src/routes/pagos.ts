@@ -8,6 +8,7 @@ import { obtenerTasasCambio } from '../utils/exchangeRates';
 import { registrarActividad, registrarActividadDirecta } from '../utils/activity';
 import { esConfiguracionTarifasValida } from '../utils/pricing';
 import { guardarConfiguracionTarifas, obtenerConfiguracionTarifas } from '../utils/pricingSettings';
+import { notifyDriversOfNewOrder } from '../utils/pushNotifications';
 
 const router = Router();
 let tablasPagoListas: Promise<void> | null = null;
@@ -242,6 +243,11 @@ router.put('/admin/pedidos/:id', requireAdmin, adminActionRateLimit, async (req:
       );
     }
     await client.query('COMMIT');
+    if (accion === 'aprobar' && result.rows[0].publicado_en) {
+      void notifyDriversOfNewOrder(result.rows[0]).catch(error => {
+        console.error('No se pudo notificar a los repartidores sobre el pedido pagado:', error);
+      });
+    }
     res.json({ pedido: result.rows[0] });
   } catch (error) {
     console.error('Error al revisar el pago:', error);

@@ -10,6 +10,7 @@ const payments_1 = require("../utils/payments");
 const activity_1 = require("../utils/activity");
 const orderCode_1 = require("../utils/orderCode");
 const orderSearch_1 = require("../utils/orderSearch");
+const pushNotifications_1 = require("../utils/pushNotifications");
 const router = (0, express_1.Router)();
 const initTables = async () => {
     try {
@@ -443,7 +444,13 @@ router.post('/', (0, auth_1.requireRole)('cliente'), async (req, res) => {
         }
         await (0, activity_1.registrarActividad)(client, authUser.id, authUser.rol, 'pedido_creado', `Creó ${tipo_servicio === 'viajes' ? 'un viaje' : 'un envío'} por $${montoCalculado.toFixed(2)} con ${metodoPago}. ${origen_texto.trim()} → ${destino_texto.trim()}.`, Number(result.rows[0].id));
         await client.query('COMMIT');
-        res.status(201).json({ mensaje: 'Pedido publicado', pedido: result.rows[0] });
+        const pedidoCreado = result.rows[0];
+        if (pedidoCreado.publicado_en) {
+            void (0, pushNotifications_1.notifyDriversOfNewOrder)(pedidoCreado).catch(error => {
+                console.error('No se pudo notificar a los repartidores sobre el nuevo pedido:', error);
+            });
+        }
+        res.status(201).json({ mensaje: 'Pedido publicado', pedido: pedidoCreado });
     }
     catch (error) {
         console.error('Error al crear pedido:', error);
@@ -476,7 +483,7 @@ router.get('/', async (req, res) => {
                 origen_texto, origen_lat, origen_lon, destino_texto, destino_lat, destino_lon,
                 distancia_km, tiempo_min, tarifa, metodo_pago, estado_pago, estado, repartidor_id, repartidor_nombre,
                 repartidor_vehiculo, repartidor_placa, repartidor_foto, repartidor_vehiculo_foto,
-                repartidor_calificacion, repartidor_lat, repartidor_lon, creado_en
+                repartidor_calificacion, repartidor_lat, repartidor_lon, creado_en, publicado_en
          FROM pedidos
          WHERE (estado IN ('pendiente', 'postulado')
                 AND (metodo_pago IN ('efectivo', 'no_aplica') OR estado_pago = 'pagado'))
@@ -652,6 +659,9 @@ router.put('/:id/aceptar-postulacion', (0, auth_1.requireRole)('cliente'), async
        WHERE id = $7 AND cliente_id = $8 RETURNING *`, [elegido.repartidor_id, elegido.repartidor_nombre, elegido.vehiculo, elegido.placa, elegido.vehiculo_foto, elegido.calificacion, id, authUser.id]);
         await (0, activity_1.registrarActividad)(client, authUser.id, authUser.rol, 'repartidor_asignado', `Seleccionó a ${elegido.repartidor_nombre} para el pedido ${(0, orderCode_1.codigoPedido)(id)}. ${pedidoActualizado.rows[0].tipo_servicio} por $${pedidoActualizado.rows[0].tarifa}. ${pedidoActualizado.rows[0].origen_texto} → ${pedidoActualizado.rows[0].destino_texto}.`, id);
         await client.query('COMMIT');
+        void (0, pushNotifications_1.notifyDriverOfUpdate)(elegido.repartidor_id, id, '¡Te eligieron para el trabajo!', 'Abre Llévalo para revisar los datos del servicio y comenzar.').catch(error => {
+            console.error('No se pudo notificar al repartidor seleccionado:', error);
+        });
         res.json({ mensaje: 'Repartidor seleccionado', pedido: pedidoActualizado.rows[0] });
     }
     catch (error) {

@@ -15,6 +15,7 @@ const authSessions_1 = require("./utils/authSessions");
 dotenv_1.default.config();
 require("./db");
 const auth_1 = __importDefault(require("./routes/auth"));
+const notifications_1 = __importDefault(require("./routes/notifications"));
 const pedidos_1 = __importDefault(require("./routes/pedidos"));
 const pagos_1 = __importDefault(require("./routes/pagos"));
 const app = (0, express_1.default)();
@@ -26,6 +27,7 @@ app.use((0, cors_1.default)({
 }));
 app.use(express_1.default.json({ limit: '1mb' }));
 app.use('/api/auth', auth_1.default);
+app.use('/api/notifications', notifications_1.default);
 app.use('/api/pedidos', pedidos_1.default);
 app.use('/api/pagos', pagos_1.default);
 const server = http_1.default.createServer(app);

@@ -6,6 +6,7 @@ backend/.env
 frontend/node_modules/
 frontend/dist/
 frontend/.env
+frontend/android/app/google-services.json
 
 !backend/dist/
 backend/dist/*
@@ -16,9 +17,11 @@ backend/dist/middleware/*
 !backend/dist/middleware/rateLimits.js
 !backend/dist/routes/
 backend/dist/routes/*
+!backend/dist/routes/notifications.js
 !backend/dist/routes/pagos.js
 !backend/dist/utils/
 backend/dist/utils/*
+!backend/dist/utils/pushNotifications.js
 !backend/dist/utils/pricing.js
 !backend/dist/utils/payments.js
 !backend/dist/utils/exchangeRates.js

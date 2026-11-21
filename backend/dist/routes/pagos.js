@@ -9,6 +9,7 @@ const exchangeRates_1 = require("../utils/exchangeRates");
 const activity_1 = require("../utils/activity");
 const pricing_1 = require("../utils/pricing");
 const pricingSettings_1 = require("../utils/pricingSettings");
+const pushNotifications_1 = require("../utils/pushNotifications");
 const router = (0, express_1.Router)();
 let tablasPagoListas = null;
 const asegurarTablasPago = () => {
@@ -212,6 +213,11 @@ router.put('/admin/pedidos/:id', auth_1.requireAdmin, rateLimits_1.adminActionRa
             await client.query("UPDATE postulaciones SET estado = 'rechazado' WHERE pedido_id = $1 AND estado IN ('pendiente', 'aceptado')", [id]);
         }
         await client.query('COMMIT');
+        if (accion === 'aprobar' && result.rows[0].publicado_en) {
+            void (0, pushNotifications_1.notifyDriversOfNewOrder)(result.rows[0]).catch(error => {
+                console.error('No se pudo notificar a los repartidores sobre el pedido pagado:', error);
+            });
+        }
         res.json({ pedido: result.rows[0] });
     }
     catch (error) {

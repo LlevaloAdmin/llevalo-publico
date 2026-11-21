@@ -1,8 +1,20 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Activity, Bike, MapPin, ArrowLeft, ArrowRight, Camera, User, Eye, EyeOff, Clock, Send, Power, Star, Moon, Sun, DollarSign, XCircle, Navigation, CheckCircle2, Circle, Package, CarFront, LogOut, Users, UserRound, ChevronDown } from 'lucide-react';
+import { Activity, Bike, MapPin, ArrowLeft, ArrowRight, Camera, User, Eye, EyeOff, Clock, Send, Power, Star, Moon, Sun, DollarSign, XCircle, Navigation, CheckCircle2, Circle, Package, CarFront, LogOut, Users, UserRound, ChevronDown, Bell, BellOff, Sparkles } from 'lucide-react';
 import { App as CapacitorApp } from '@capacitor/app';
+import { LocalNotifications } from '@capacitor/local-notifications';
+import { PushNotifications } from '@capacitor/push-notifications';
 import { StatusBar, Style } from '@capacitor/status-bar';
 import { Capacitor, type PluginListenerHandle } from '@capacitor/core';
+import { registerWebPushToken } from './firebasePush';
+import {
+  clearDriverOrderNotification,
+  getDriverNotificationPermission,
+  requestDriverNotificationPermission,
+  showDriverOrderNotification,
+  showDriverUpdateNotification,
+  type DriverOrderNotice,
+  type NotificationPermissionState
+} from './driverNotifications';
 
 const MapaLibre = React.lazy(() => import('./MapaLibre'));
 
@@ -263,6 +275,24 @@ const authenticatedFetch = (url: string, options: RequestInit = {}) => {
   return fetch(url, { ...options, headers });
 };
 
+const guardarTokenPush = async (token: string, platform: 'android' | 'web'): Promise<void> => {
+  const response = await authenticatedFetch(`${API_URL}/api/notifications/device-token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token, platform })
+  });
+  if (!response.ok) throw new Error(await mensajeErrorApi(response, 'No se pudo registrar el dispositivo'));
+};
+
+const retirarTokenPush = async (token: string): Promise<void> => {
+  const response = await authenticatedFetch(`${API_URL}/api/notifications/device-token`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token })
+  });
+  if (!response.ok) throw new Error(await mensajeErrorApi(response, 'No se pudo retirar el dispositivo'));
+};
+
 const mensajeErrorApi = async (response: Response, mensajePredeterminado: string): Promise<string> => {
   const payload: unknown = await response.json().catch(() => null);
   if (payload && typeof payload === 'object' && 'error' in payload && typeof payload.error === 'string') {
@@ -374,6 +404,25 @@ export default function App() {
 
   const [repartidorOnline, setRepartidorOnline] = useState(true);
   const [cambiandoEstadoRepartidor, setCambiandoEstadoRepartidor] = useState(false);
+  const [avisosRepartidorActivos, setAvisosRepartidorActivos] = useState(() => {
+    const storedUser = localStorage.getItem('llevalo_usuario');
+    if (!storedUser) return false;
+    try {
+      const parsed = JSON.parse(storedUser) as UsuarioSesion;
+      return parsed.rol === 'repartidor' && localStorage.getItem(`llevalo_driver_notifications_${parsed.id}`) === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [permisoAvisosRepartidor, setPermisoAvisosRepartidor] = useState<NotificationPermissionState>('default');
+  const [pedidosCargadosUsuarioId, setPedidosCargadosUsuarioId] = useState<number | null>(null);
+  const snapshotAvisosRepartidorRef = useRef<{
+    userId: number;
+    requestIds: Set<number>;
+    applications: Map<number, string>;
+    notifiedIds: Set<number>;
+  } | null>(null);
+  const ultimoBloqueTemporizadorRef = useRef(new Map<number, number>());
   const llegadaProcesadaRef = useRef<string | null>(null);
 
   const [nombre, setNombre] = useState('');
@@ -653,10 +702,14 @@ export default function App() {
         setPedidosReales(Array.isArray(data.pedidos) ? data.pedidos : []);
         setPostulacionesReales(Array.isArray(data.postulaciones) ? data.postulaciones : []);
         setMensajesChat(Array.isArray(data.mensajes) ? data.mensajes : []);
+        if (usuario) setPedidosCargadosUsuarioId(usuario.id);
       } else if (res.status === 401) {
         localStorage.removeItem('llevalo_token');
         localStorage.removeItem('llevalo_usuario');
         setUsuario(null);
+        setPedidosCargadosUsuarioId(null);
+        snapshotAvisosRepartidorRef.current = null;
+        ultimoBloqueTemporizadorRef.current.clear();
         setFotoLocal('');
         setCedulaNumero('');
         historialNavegacionRef.current = [];
@@ -672,7 +725,7 @@ export default function App() {
     sincronizarDatos();
     const intervalo = setInterval(sincronizarDatos, 3000);
     return () => clearInterval(intervalo);
-  }, [usuario]);
+  }, [repartidorOnline, usuario]);
 
   useEffect(() => {
     if (!usuarioId) return;
@@ -1362,8 +1415,8 @@ export default function App() {
     }
   };
 
-  const postularsePedido = async (pedidoId: number) => {
-    if (!usuario) return;
+  const postularsePedido = async (pedidoId: number): Promise<boolean> => {
+    if (!usuario || usuario.rol !== 'repartidor') return false;
     try {
       const res = await authenticatedFetch(`${API_URL}/api/pedidos/${pedidoId}/postular`, {
         method: 'POST',
@@ -1374,11 +1427,190 @@ export default function App() {
           vehiculo_foto: fotoVehiculoLocal || usuario.vehiculo_foto || '', calificacion: usuario.calificacion || 4.9
         })
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      if (!res.ok) throw new Error(await mensajeErrorApi(res, 'No se pudo enviar la postulación'));
       await sincronizarDatos();
-    } catch (err: any) { alert(err.message); }
+      return true;
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'No se pudo enviar la postulación.');
+      return false;
+    }
   };
+
+  const postularsePedidoRef = useRef(postularsePedido);
+  useEffect(() => {
+    postularsePedidoRef.current = postularsePedido;
+  });
+  const manejarAccionAviso = useCallback(async (action: string, orderId: number | null) => {
+    if (action === 'ignore') return;
+    if (action !== 'apply' || orderId === null) {
+      if (usuario?.rol === 'repartidor') setActiveTab('repartidor');
+      return;
+    }
+    if (usuario?.rol !== 'repartidor') {
+      setActiveTab('auth');
+      alert('Inicia sesión como repartidor para postularte a este trabajo.');
+      return;
+    }
+    if (!repartidorOnline) {
+      setActiveTab('repartidor');
+      alert('Conéctate desde el radar antes de postularte a un trabajo.');
+      return;
+    }
+    setActiveTab('repartidor');
+    await postularsePedidoRef.current(orderId);
+  }, [repartidorOnline, usuario]);
+  const manejarAccionAvisoRef = useRef(manejarAccionAviso);
+  useEffect(() => {
+    manejarAccionAvisoRef.current = manejarAccionAviso;
+  }, [manejarAccionAviso]);
+
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    let descartado = false;
+    const listeners: PluginListenerHandle[] = [];
+    void LocalNotifications.addListener('localNotificationActionPerformed', event => {
+      const extra = event.notification.extra as { orderId?: unknown } | undefined;
+      const orderId = typeof extra?.orderId === 'number' && Number.isSafeInteger(extra.orderId)
+        ? extra.orderId
+        : null;
+      void manejarAccionAvisoRef.current(event.actionId, orderId);
+    }).then(handle => {
+      if (descartado) void handle.remove();
+      else listeners.push(handle);
+    }).catch(error => console.error('No se pudieron escuchar las acciones de notificación:', error));
+    return () => {
+      descartado = true;
+      listeners.forEach(listener => void listener.remove());
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()
+      || usuario?.rol !== 'repartidor'
+      || !avisosRepartidorActivos
+      || permisoAvisosRepartidor !== 'granted') return;
+
+    let descartado = false;
+    let errorPushMostrado = false;
+    const listeners: PluginListenerHandle[] = [];
+    const guardar = (handle: PluginListenerHandle) => {
+      if (descartado) void handle.remove();
+      else listeners.push(handle);
+    };
+    const manejarErrorPush = (error: unknown) => {
+      console.error('No se pudo configurar Firebase Push en este dispositivo:', error);
+      if (descartado || errorPushMostrado) return;
+      errorPushMostrado = true;
+      localStorage.setItem(`llevalo_driver_notifications_${usuario.id}`, 'false');
+      setAvisosRepartidorActivos(false);
+      alert('No se pudieron activar las notificaciones push de Android. Verifica la configuración de Firebase e inténtalo de nuevo.');
+    };
+
+    const iniciarPush = async () => {
+      try {
+        guardar(await PushNotifications.addListener('registration', event => {
+          if (descartado
+            || localStorage.getItem(`llevalo_driver_notifications_${usuario.id}`) !== 'true') return;
+          const token = event.value;
+          localStorage.setItem(`llevalo_push_token_${usuario.id}`, token);
+          void guardarTokenPush(token, 'android')
+            .catch(manejarErrorPush);
+        }));
+
+        guardar(await PushNotifications.addListener('registrationError', error => {
+          manejarErrorPush(error);
+        }));
+
+        guardar(await PushNotifications.addListener('pushNotificationReceived', notification => {
+          const data = notification.data as Record<string, unknown> | undefined;
+          const orderId = Number(data?.orderId);
+          if (!Number.isSafeInteger(orderId) || orderId < 1) return;
+          if (data?.kind === 'driver_order') {
+            const deadline = typeof data.deadline === 'string' ? Date.parse(data.deadline) : NaN;
+            const secondsRemaining = Number.isFinite(deadline)
+              ? Math.max(0, Math.ceil((deadline - Date.now()) / 1000))
+              : 60;
+            if (secondsRemaining === 0) return;
+            void showDriverOrderNotification({
+              id: orderId,
+              serviceType: typeof data.serviceType === 'string' ? data.serviceType : 'Servicio',
+              secondsRemaining
+            }).catch(error => console.error('No se pudo mostrar la notificación push recibida:', error));
+          } else if (data?.kind === 'driver_update') {
+            void showDriverUpdateNotification(
+              notification.title ?? 'Actualización de tu trabajo',
+              notification.body ?? 'Abre Llévalo para revisar el estado.',
+              orderId
+            ).catch(error => console.error('No se pudo mostrar la actualización push recibida:', error));
+          }
+        }));
+
+        guardar(await PushNotifications.addListener('pushNotificationActionPerformed', event => {
+          const data = event.notification.data as Record<string, unknown> | undefined;
+          const orderId = Number(data?.orderId);
+          void manejarAccionAvisoRef.current(
+            event.actionId === 'apply' ? 'apply' : 'open',
+            Number.isSafeInteger(orderId) && orderId > 0 ? orderId : null
+          );
+        }));
+
+        await PushNotifications.register();
+      } catch (error) {
+        manejarErrorPush(error);
+        listeners.forEach(listener => void listener.remove());
+      }
+    };
+    void iniciarPush();
+    return () => {
+      descartado = true;
+      listeners.forEach(listener => void listener.remove());
+    };
+  }, [avisosRepartidorActivos, permisoAvisosRepartidor, usuario?.id, usuario?.rol]);
+
+  useEffect(() => {
+    if (Capacitor.isNativePlatform()
+      || usuario?.rol !== 'repartidor'
+      || !avisosRepartidorActivos
+      || permisoAvisosRepartidor !== 'granted') return;
+
+    let descartado = false;
+    void registerWebPushToken()
+      .then(async token => {
+        if (descartado) return;
+        await guardarTokenPush(token, 'web');
+        if (descartado
+          || localStorage.getItem(`llevalo_driver_notifications_${usuario.id}`) !== 'true') {
+          await retirarTokenPush(token);
+          return;
+        }
+        localStorage.setItem(`llevalo_push_token_${usuario.id}`, token);
+      })
+      .catch(error => {
+        if (descartado) return;
+        console.error('No se pudo registrar el token push web:', error);
+        localStorage.setItem(`llevalo_driver_notifications_${usuario.id}`, 'false');
+        setAvisosRepartidorActivos(false);
+        alert(error instanceof Error ? error.message : 'No se pudieron activar las notificaciones web.');
+      });
+    return () => {
+      descartado = true;
+    };
+  }, [avisosRepartidorActivos, permisoAvisosRepartidor, usuario?.id, usuario?.rol]);
+
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return;
+    const recibirAccion = (event: MessageEvent<unknown>) => {
+      if (!event.data || typeof event.data !== 'object') return;
+      const data = event.data as { type?: unknown; action?: unknown; orderId?: unknown };
+      if (data.type !== 'driver-notification-action' || typeof data.action !== 'string') return;
+      const orderId = typeof data.orderId === 'number' && Number.isSafeInteger(data.orderId)
+        ? data.orderId
+        : null;
+      void manejarAccionAvisoRef.current(data.action, orderId);
+    };
+    navigator.serviceWorker.addEventListener('message', recibirAccion);
+    return () => navigator.serviceWorker.removeEventListener('message', recibirAccion);
+  }, []);
 
   const cancelarPostulacionEnServidor = async (pedidoId: number) => {
     if (!usuario || usuario.rol !== 'repartidor') throw new Error('Inicia sesión como repartidor para cancelar la postulación.');
@@ -1570,6 +1802,18 @@ export default function App() {
 
   const handleLogout = () => {
     const token = localStorage.getItem('llevalo_token');
+    if (usuario?.rol === 'repartidor') {
+      localStorage.setItem(`llevalo_driver_notifications_${usuario.id}`, 'false');
+      setAvisosRepartidorActivos(false);
+    }
+    const tokenPush = usuario?.rol === 'repartidor'
+      ? localStorage.getItem(`llevalo_push_token_${usuario.id}`)
+      : null;
+    if (tokenPush) {
+      void retirarTokenPush(tokenPush)
+        .catch(error => console.error('No se pudo retirar el token push al cerrar sesión:', error));
+      localStorage.removeItem(`llevalo_push_token_${usuario?.id}`);
+    }
     if (token) {
       void fetch(`${API_URL}/api/auth/logout`, {
         method: 'POST',
@@ -1582,6 +1826,9 @@ export default function App() {
     localStorage.removeItem('llevalo_token');
     localStorage.removeItem('llevalo_usuario');
     setUsuario(null);
+    setPedidosCargadosUsuarioId(null);
+    snapshotAvisosRepartidorRef.current = null;
+    ultimoBloqueTemporizadorRef.current.clear();
     historialNavegacionRef.current = [];
     setActiveTab('home');
   };
@@ -1616,6 +1863,228 @@ export default function App() {
   const postulacionesPendientesRepartidor = usuario?.rol === 'repartidor'
     ? postulacionesReales.filter(p => p.repartidor_id === usuario.id && p.estado === 'pendiente')
     : [];
+
+  useEffect(() => {
+    if (usuario?.rol !== 'repartidor') return;
+    Promise.resolve().then(() => {
+      setAvisosRepartidorActivos(localStorage.getItem(`llevalo_driver_notifications_${usuario.id}`) === 'true');
+    });
+    void getDriverNotificationPermission()
+      .then(setPermisoAvisosRepartidor)
+      .catch(error => {
+        console.error('No se pudo consultar el permiso de notificaciones:', error);
+        setPermisoAvisosRepartidor('unsupported');
+      });
+  }, [usuario?.id, usuario?.rol]);
+
+  const cambiarAvisosRepartidor = async () => {
+    if (!usuario || usuario.rol !== 'repartidor') return;
+    if (avisosRepartidorActivos) {
+      localStorage.setItem(`llevalo_driver_notifications_${usuario.id}`, 'false');
+      const token = localStorage.getItem(`llevalo_push_token_${usuario.id}`);
+      if (token) {
+        try {
+          await retirarTokenPush(token);
+          localStorage.removeItem(`llevalo_push_token_${usuario.id}`);
+        } catch (error) {
+          localStorage.setItem(`llevalo_driver_notifications_${usuario.id}`, 'true');
+          console.error('No se pudo retirar el token push del dispositivo:', error);
+          alert(error instanceof Error ? error.message : 'No se pudo desactivar este dispositivo.');
+          return;
+        }
+      }
+      setAvisosRepartidorActivos(false);
+      return;
+    }
+
+    try {
+      const permission = await requestDriverNotificationPermission();
+      setPermisoAvisosRepartidor(permission);
+      if (permission !== 'granted') {
+        alert(permission === 'unsupported'
+          ? 'Este navegador no permite notificaciones accionables. Usa la app de Android o un navegador compatible.'
+          : permission === 'denied'
+            ? 'El permiso está bloqueado. Habilita las notificaciones de Llévalo en los ajustes del dispositivo o navegador.'
+            : 'No se concedió el permiso de notificaciones.');
+        return;
+      }
+      localStorage.setItem(`llevalo_driver_notifications_${usuario.id}`, 'true');
+      setAvisosRepartidorActivos(true);
+    } catch (error) {
+      console.error('No se pudieron activar las notificaciones:', error);
+      alert('No se pudieron activar las notificaciones. Inténtalo nuevamente.');
+    }
+  };
+
+  useEffect(() => {
+    if (usuario?.rol !== 'repartidor' || pedidosCargadosUsuarioId !== usuario.id) return;
+
+    const solicitudesActivas = pedidosReales.filter(
+      pedido => pedido.estado === 'pendiente' || pedido.estado === 'postulado'
+    );
+    const idsSolicitudes = new Set(solicitudesActivas.map(pedido => pedido.id));
+    const estadosPostulaciones = new Map(
+      postulacionesReales
+        .filter(postulacion => postulacion.repartidor_id === usuario.id)
+        .map(postulacion => [postulacion.pedido_id, postulacion.estado])
+    );
+    let snapshot = snapshotAvisosRepartidorRef.current;
+    const snapshotInicializado = snapshot?.userId === usuario.id;
+    if (!snapshotInicializado) {
+      snapshot = {
+        userId: usuario.id,
+        requestIds: idsSolicitudes,
+        applications: estadosPostulaciones,
+        notifiedIds: new Set<number>()
+      };
+      snapshotAvisosRepartidorRef.current = snapshot;
+    }
+    if (!snapshot) return;
+
+    const solicitudesPorAvisar = solicitudesActivas.filter(pedido => {
+      if (pedido.estado !== 'pendiente' || snapshot.notifiedIds.has(pedido.id) || !pedido.publicado_en) return false;
+      const publicadoEn = Date.parse(pedido.publicado_en);
+      return Number.isFinite(publicadoEn) && publicadoEn + 60_000 > horaActual;
+    });
+    const cambiosPostulacion = snapshotInicializado ? postulacionesReales.filter(postulacion => {
+      if (postulacion.repartidor_id !== usuario.id) return false;
+      const estadoAnterior = snapshot.applications.get(postulacion.pedido_id);
+      return estadoAnterior === 'pendiente' && postulacion.estado !== 'pendiente';
+    }) : [];
+
+    snapshot.requestIds = idsSolicitudes;
+    snapshot.applications = estadosPostulaciones;
+
+    if (!avisosRepartidorActivos || !repartidorOnline || permisoAvisosRepartidor !== 'granted') return;
+
+    for (const pedido of solicitudesPorAvisar) {
+      const publicadoEn = pedido.publicado_en ? Date.parse(pedido.publicado_en) : Number.NaN;
+      const secondsRemaining = Number.isFinite(publicadoEn)
+        ? Math.max(0, Math.ceil((publicadoEn + 60_000 - horaActual) / 1000))
+        : 60;
+      const notice: DriverOrderNotice = {
+        id: pedido.id,
+        serviceType: etiquetaTipoServicio(pedido.tipo_servicio),
+        secondsRemaining
+      };
+      snapshot.notifiedIds.add(pedido.id);
+      void showDriverOrderNotification(notice).catch(error => {
+        snapshot.notifiedIds.delete(pedido.id);
+        console.error('No se pudo mostrar la notificación de un nuevo trabajo:', error);
+      });
+    }
+
+    for (const postulacion of cambiosPostulacion) {
+      const aceptada = postulacion.estado === 'aceptado';
+      void showDriverUpdateNotification(
+        aceptada ? '¡Te eligieron para el trabajo!' : 'El cliente eligió a otro repartidor',
+        aceptada
+          ? 'Abre Llévalo para revisar los datos del servicio y comenzar.'
+          : 'La solicitud ya fue asignada. Puedes seguir atento a nuevas oportunidades.',
+        postulacion.pedido_id
+      ).catch(error => console.error('No se pudo mostrar la actualización de la postulación:', error));
+    }
+  }, [
+    avisosRepartidorActivos,
+    horaActual,
+    pedidosCargadosUsuarioId,
+    pedidosReales,
+    permisoAvisosRepartidor,
+    postulacionesReales,
+    repartidorOnline,
+    usuario
+  ]);
+
+  useEffect(() => {
+    if (usuario?.rol !== 'repartidor' || pedidosCargadosUsuarioId !== usuario.id) return;
+    const snapshot = snapshotAvisosRepartidorRef.current;
+    if (!snapshot || snapshot.userId !== usuario.id) return;
+
+    const solicitudesPendientes = pedidosReales.filter(pedido => pedido.estado === 'pendiente');
+    const idsPendientes = new Set(solicitudesPendientes.map(pedido => pedido.id));
+    for (const pedidoId of snapshot.notifiedIds) {
+      if (!idsPendientes.has(pedidoId)) {
+        void clearDriverOrderNotification(pedidoId).catch(error => {
+          console.error('No se pudo retirar una notificación de trabajo:', error);
+        });
+        snapshot.notifiedIds.delete(pedidoId);
+        ultimoBloqueTemporizadorRef.current.delete(pedidoId);
+      }
+    }
+
+    if (!avisosRepartidorActivos || !repartidorOnline || permisoAvisosRepartidor !== 'granted') {
+      for (const pedidoId of snapshot.notifiedIds) {
+        void clearDriverOrderNotification(pedidoId).catch(error => {
+          console.error('No se pudo silenciar una notificación de trabajo:', error);
+        });
+      }
+      snapshot.notifiedIds.clear();
+      ultimoBloqueTemporizadorRef.current.clear();
+      return;
+    }
+    for (const pedido of solicitudesPendientes) {
+      if (!snapshot.notifiedIds.has(pedido.id) || !pedido.publicado_en) continue;
+      const publicadoEn = Date.parse(pedido.publicado_en);
+      if (!Number.isFinite(publicadoEn)) continue;
+      const secondsRemaining = Math.max(0, Math.ceil((publicadoEn + 60_000 - horaActual) / 1000));
+      if (secondsRemaining === 0) {
+        void clearDriverOrderNotification(pedido.id).catch(error => {
+          console.error('No se pudo retirar una notificación vencida:', error);
+        });
+        snapshot.notifiedIds.delete(pedido.id);
+        ultimoBloqueTemporizadorRef.current.delete(pedido.id);
+        continue;
+      }
+
+      const bucket = Math.ceil(secondsRemaining / 10);
+      const previousBucket = ultimoBloqueTemporizadorRef.current.get(pedido.id);
+      if (previousBucket === undefined) {
+        ultimoBloqueTemporizadorRef.current.set(pedido.id, bucket);
+      } else if (bucket !== previousBucket) {
+        ultimoBloqueTemporizadorRef.current.set(pedido.id, bucket);
+        const notice: DriverOrderNotice = {
+          id: pedido.id,
+          serviceType: etiquetaTipoServicio(pedido.tipo_servicio),
+          secondsRemaining
+        };
+        void showDriverOrderNotification(notice, true).catch(error => {
+          console.error('No se pudo actualizar la cuenta regresiva de la notificación:', error);
+        });
+      }
+    }
+  }, [
+    avisosRepartidorActivos,
+    horaActual,
+    pedidosCargadosUsuarioId,
+    pedidosReales,
+    permisoAvisosRepartidor,
+    repartidorOnline,
+    usuario
+  ]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const action = params.get('notificationAction');
+    if (!action) return;
+    if (!usuario) {
+      // oxlint-disable-next-line react/set-state-in-effect
+      setActiveTab('auth');
+      return;
+    }
+
+    const orderIdValue = Number(params.get('orderId'));
+    const orderId = Number.isSafeInteger(orderIdValue) && orderIdValue > 0 ? orderIdValue : null;
+    params.delete('notificationAction');
+    params.delete('orderId');
+    const query = params.toString();
+    window.history.replaceState(
+      null,
+      '',
+      `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`
+    );
+    void manejarAccionAvisoRef.current(action, orderId);
+  }, [usuario]);
+
   const mensajeNavegacion = (() => {
     if (usuario?.rol !== 'repartidor' || !pedidoAsignadoRepartidor || !coordsUsuarioGPS) return '';
     const etapa = pedidoAsignadoRepartidor.estado;
@@ -2481,21 +2950,23 @@ export default function App() {
         {/* --- VISTA REPARTIDOR --- */}
         {activeTab === 'repartidor' && usuario?.rol === 'repartidor' && (
           <div className="space-y-6 py-4">
-            <div className={`border p-6 rounded-3xl shadow-sm flex flex-col sm:flex-row justify-between items-center gap-4 ${darkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-orange-100'}`}>
+            <div className={`relative overflow-hidden border p-6 rounded-3xl shadow-sm flex flex-col sm:flex-row justify-between items-center gap-4 ${darkMode ? 'bg-gradient-to-br from-slate-900 via-slate-900 to-orange-950/30 border-slate-800 text-white' : 'bg-gradient-to-br from-white via-white to-orange-50 border-orange-100'}`}>
+              <div aria-hidden="true" className="pointer-events-none absolute -right-10 -top-14 h-40 w-40 rounded-full bg-orange-500/10 blur-2xl" />
               <div className="flex items-center space-x-4">
-                <div className="w-12 h-12 rounded-2xl bg-orange-100 text-[#FF5722] flex items-center justify-center font-bold text-lg">
+                <div className="relative flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-[#FF5722] to-amber-400 text-lg font-black text-white shadow-lg shadow-orange-500/20 ring-4 ring-orange-500/10">
                   {usuario.nombre ? usuario.nombre.substring(0, 2).toUpperCase() : 'R'}
                 </div>
                 <div>
-                  <h3 className={`text-lg font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Radar de Trabajos en Carabobo</h3>
-                  <p className="text-xs text-slate-500">Gestiona tu estatus y acepta carreras cercanas.</p>
+                  <p className="text-[10px] font-black uppercase tracking-[0.18em] text-[#FF5722]">Panel del repartidor</p>
+                  <h3 className={`mt-1 text-xl font-black tracking-tight ${darkMode ? 'text-white' : 'text-slate-900'}`}>Tu próximo trabajo</h3>
+                  <p className="mt-1 text-xs text-slate-500">Revisa solicitudes y mantente al tanto de tu servicio.</p>
                 </div>
               </div>
 
-              <div className="flex items-center space-x-3">
+              <div className="relative flex items-center gap-3">
                 <div className={`flex items-center space-x-2 px-3 py-1.5 rounded-xl border text-xs font-bold ${repartidorOnline ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-500' : 'bg-red-500/10 border-red-500/30 text-red-500'}`}>
                   <span className={`w-2.5 h-2.5 rounded-full ${repartidorOnline ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`}></span>
-                  <span>{repartidorOnline ? 'Conectado (Recibiendo Pedidos)' : 'Desconectado'}</span>
+                  <span>{repartidorOnline ? 'Disponible' : 'Desconectado'}</span>
                 </div>
                 
                 <button 
@@ -2511,6 +2982,49 @@ export default function App() {
                 >
                   <Power size={18} className={cambiandoEstadoRepartidor ? 'animate-pulse' : ''} />
                 </button>
+              </div>
+            </div>
+
+            <div className={`flex flex-col gap-3 rounded-2xl border p-4 sm:flex-row sm:items-center sm:justify-between ${darkMode ? 'border-slate-800 bg-slate-900/80' : 'border-orange-100 bg-white'}`}>
+              <div className="flex items-center gap-3">
+                <span className={`flex h-10 w-10 items-center justify-center rounded-xl ${avisosRepartidorActivos ? 'bg-emerald-500/10 text-emerald-500' : 'bg-orange-500/10 text-[#FF5722]'}`}>
+                  {avisosRepartidorActivos ? <Bell size={19} /> : <BellOff size={19} />}
+                </span>
+                <div>
+                  <p className={`text-sm font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Avisos de trabajo</p>
+                  <p className="mt-0.5 text-[11px] text-slate-500">
+                    {avisosRepartidorActivos
+                      ? 'Te avisaremos de nuevas solicitudes y cambios en tus postulaciones.'
+                      : permisoAvisosRepartidor === 'denied'
+                        ? 'El permiso está bloqueado en los ajustes del dispositivo.'
+                        : 'Actívalos para recibir avisos accionables mientras usas Llévalo.'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => void cambiarAvisosRepartidor()}
+                className={`inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-xs font-black transition ${avisosRepartidorActivos ? 'border border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800' : 'bg-[#FF5722] text-white shadow-md shadow-orange-500/20 hover:bg-[#F4511E]'}`}
+              >
+                {avisosRepartidorActivos ? <BellOff size={15} /> : <Bell size={15} />}
+                {avisosRepartidorActivos ? 'Silenciar avisos' : 'Activar notificaciones'}
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              <div className={`rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-900/70' : 'border-orange-100 bg-white'}`}>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">En el radar</p>
+                <p className={`mt-1 text-2xl font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>{pedidosVisiblesRepartidor.filter(p => p.estado === 'pendiente' || p.estado === 'postulado').length}</p>
+              </div>
+              <div className={`rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-900/70' : 'border-orange-100 bg-white'}`}>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Tus postulaciones</p>
+                <p className={`mt-1 text-2xl font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>{postulacionesPendientesRepartidor.length}</p>
+              </div>
+              <div className={`col-span-2 flex items-center gap-3 rounded-2xl border p-4 sm:col-span-1 ${darkMode ? 'border-slate-800 bg-slate-900/70' : 'border-orange-100 bg-white'}`}>
+                <Sparkles size={18} className="text-amber-500" />
+                <p className="text-[11px] font-semibold leading-relaxed text-slate-500">
+                  {repartidorOnline ? 'Mantente disponible para recibir nuevas oportunidades.' : 'Conéctate cuando estés listo para trabajar.'}
+                </p>
               </div>
             </div>
 
@@ -2561,16 +3075,31 @@ export default function App() {
                   </div>
                 ) : (
                   <div className="space-y-4">
-                    <h4 className="text-xs font-black uppercase text-slate-400 tracking-wider">Trabajos Disponibles en Radar</h4>
+                    <div className="flex items-end justify-between gap-3">
+                      <div>
+                        <p className="text-[10px] font-black uppercase tracking-[0.16em] text-[#FF5722]">Oportunidades</p>
+                        <h4 className={`mt-1 text-lg font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Trabajos disponibles</h4>
+                      </div>
+                      <span className="rounded-full bg-emerald-500/10 px-3 py-1 text-[10px] font-black text-emerald-600 dark:text-emerald-400">
+                        {pedidosVisiblesRepartidor.filter(p => p.estado === 'pendiente' || p.estado === 'postulado').length} activos
+                      </span>
+                    </div>
                     {pedidosVisiblesRepartidor.length === 0 ? (
-                      <div className={`border p-8 rounded-3xl text-center text-xs font-bold text-slate-400 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-orange-100'}`}>
-                        No hay pedidos cercanos en este momento. Esperando solicitudes...
+                      <div className={`border p-8 rounded-3xl text-center ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-orange-100'}`}>
+                        <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-orange-500/10 text-[#FF5722]"><Bike size={23} /></span>
+                        <p className={`mt-3 text-sm font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Todo tranquilo por ahora</p>
+                        <p className="mt-1 text-xs leading-relaxed text-slate-500">Las nuevas solicitudes aparecerán aquí. Puedes mantener activados los avisos para enterarte a tiempo.</p>
                       </div>
                     ) : (
                       pedidosVisiblesRepartidor.map(p => {
                         const yaPostulado = postulacionesReales.some(post => post.pedido_id === p.id && post.repartidor_id === usuario.id);
+                        const publicadoEn = p.publicado_en ? Date.parse(p.publicado_en) : Number.NaN;
+                        const segundosDisponibles = Number.isFinite(publicadoEn)
+                          ? Math.max(0, Math.ceil((publicadoEn + 60_000 - horaActual) / 1000))
+                          : null;
+                        const progresoSolicitud = segundosDisponibles === null ? 0 : Math.min(100, (segundosDisponibles / 60) * 100);
                         return (
-                          <div key={p.id} className={`border p-4 rounded-3xl shadow-sm space-y-3 ${darkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-orange-100'}`}>
+                          <div key={p.id} className={`driver-job-card border p-4 rounded-3xl shadow-sm space-y-3 transition duration-200 hover:-translate-y-0.5 hover:shadow-lg ${darkMode ? 'bg-slate-900 border-slate-800 text-white hover:border-orange-900' : 'bg-white border-orange-100 hover:border-orange-200'}`}>
                             <div className="flex justify-between items-center">
                               <span className="text-[10px] font-black uppercase px-2.5 py-1 rounded-full bg-orange-100 text-[#FF5722]">{etiquetaTipoServicio(p.tipo_servicio)} · {p.distancia_km} km</span>
                               <span className="text-sm font-black text-[#FF5722]">{mostrarMontoPedido(p.tarifa)}</span>
@@ -2579,6 +3108,27 @@ export default function App() {
                             <p className="text-xs font-bold">{p.descripcion}</p>
                             <p className="text-[11px] text-slate-500"><strong>Origen:</strong> {p.origen_texto}</p>
                             <p className="text-[11px] text-slate-500"><strong>Destino:</strong> {p.destino_texto}</p>
+
+                            {(p.estado === 'pendiente' || p.estado === 'postulado') && segundosDisponibles !== null && (
+                              <div className={`rounded-xl border p-3 ${darkMode ? 'border-slate-700 bg-slate-950/70' : 'border-orange-100 bg-orange-50/60'}`}>
+                                <div className="mb-2 flex items-center justify-between gap-2 text-[10px] font-bold">
+                                  <span className="inline-flex items-center gap-1.5 text-slate-500"><Clock size={13} /> Tiempo de respuesta</span>
+                                  <span className={segundosDisponibles > 10 ? 'text-[#FF5722]' : 'text-amber-600 dark:text-amber-400'}>
+                                    {yaPostulado ? 'Esperando selección del cliente' : `${segundosDisponibles}s`}
+                                  </span>
+                                </div>
+                                <div
+                                  role="progressbar"
+                                  aria-label="Tiempo de la solicitud"
+                                  aria-valuemin={0}
+                                  aria-valuemax={60}
+                                  aria-valuenow={segundosDisponibles}
+                                  className={`h-1.5 overflow-hidden rounded-full ${darkMode ? 'bg-slate-800' : 'bg-orange-100'}`}
+                                >
+                                  <div className="h-full rounded-full bg-gradient-to-r from-[#FF5722] to-amber-400 transition-[width] duration-1000 ease-linear" style={{ width: `${progresoSolicitud}%` }} />
+                                </div>
+                              </div>
+                            )}
 
                             {yaPostulado ? (
                               <div className="flex space-x-2">

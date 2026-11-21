@@ -33,6 +33,18 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
+      - name: Configurar Firebase Android
+        env:
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+        run: |
+          if [ -z "$GOOGLE_SERVICES_JSON_BASE64" ]; then
+            echo "::error::Configura GOOGLE_SERVICES_JSON_BASE64 con google-services.json codificado en Base64."
+            exit 1
+          fi
+          printf '%s' "$GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > frontend/android/app/google-services.json
+          test -s frontend/android/app/google-services.json
+          node -e "const config = require('./frontend/android/app/google-services.json'); if (config.client?.[0]?.client_info?.android_client_info?.package_name !== 'com.llevalo.app') process.exit(1)"
+
       - name: Restaurar firma debug persistente
         env:
           ANDROID_DEBUG_KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}

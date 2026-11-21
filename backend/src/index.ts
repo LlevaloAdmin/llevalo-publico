@@ -12,6 +12,7 @@ dotenv.config();
 
 import './db';
 import authRoutes from './routes/auth';
+import notificationsRoutes from './routes/notifications';
 import pedidosRoutes from './routes/pedidos';
 import pagosRoutes from './routes/pagos';
 
@@ -24,6 +25,7 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '1mb' }));
 app.use('/api/auth', authRoutes);
+app.use('/api/notifications', notificationsRoutes);
 app.use('/api/pedidos', pedidosRoutes);
 app.use('/api/pagos', pagosRoutes);
 
