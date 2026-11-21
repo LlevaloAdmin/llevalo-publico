@@ -43,6 +43,7 @@ router.use(requireAuth);
 
 router.get('/summary', async (req: Request, res: Response): Promise<any> => {
   const authUser = req.authUser;
+  const includeAllOrders = req.query.all === 'true';
   if (!authUser) return res.status(401).json({ error: 'Sesión inválida.' });
 
   try {
@@ -60,7 +61,8 @@ router.get('/summary', async (req: Request, res: Response): Promise<any> => {
                 u.id AS contraparte_id, u.nombre AS contraparte_nombre,
                 u.foto AS contraparte_foto, u.vehiculo AS contraparte_vehiculo,
                 u.vehiculo_foto AS contraparte_vehiculo_foto,
-                COALESCE(mi.estrellas, 0)::integer AS mis_estrellas
+                COALESCE(mi.estrellas, 0)::integer AS mis_estrellas,
+                COUNT(*) OVER()::integer AS total_pedidos
          FROM pedidos p
          JOIN usuarios u ON u.id = CASE WHEN p.cliente_id = $1 THEN p.repartidor_id ELSE p.cliente_id END
          LEFT JOIN evaluaciones_usuarios mi ON mi.pedido_id = p.id AND mi.evaluador_id = $1
@@ -68,16 +70,18 @@ router.get('/summary', async (req: Request, res: Response): Promise<any> => {
            AND (p.cliente_id = $1 OR p.repartidor_id = $1)
            AND p.repartidor_id IS NOT NULL
          ORDER BY p.creado_en DESC
-         LIMIT 20`,
+         ${includeAllOrders ? '' : 'LIMIT 3'}`,
         [authUser.id]
       )
     ]);
 
     const promedio = Number(profileResult.rows[0]?.promedio ?? 0);
     const cantidad = Number(profileResult.rows[0]?.cantidad ?? 0);
+    const totalPedidos = Number(completedOrders.rows[0]?.total_pedidos ?? 0);
     res.json({
       perfil: { promedio, cantidad, rango: rankForRating(promedio, cantidad) },
-      pedidos: completedOrders.rows
+      pedidos: completedOrders.rows,
+      total_pedidos: totalPedidos
     });
   } catch (error) {
     console.error('Error consultando las calificaciones:', error);

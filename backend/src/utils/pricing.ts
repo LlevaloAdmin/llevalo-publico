@@ -1,17 +1,19 @@
 export interface ConfiguracionTarifas {
   enviosPorKm: number;
-  viajesCortoPorKm: number;
-  viajesLargoPorKm: number;
+  viajesDesde1KmPorKm: number;
+  viajesLargosPorKm: number;
+  viajesLargosDesdeKm: number;
   tarifaMinima: number;
-  monedaVisualizacion: 'VES' | 'EUR' | 'USDT';
 }
+
+export const VIAJES_LARGOS_DESDE_KM = 25;
 
 export const TARIFAS_POR_DEFECTO: ConfiguracionTarifas = {
   enviosPorKm: 0.5,
-  viajesCortoPorKm: 0.38,
-  viajesLargoPorKm: 0.28,
-  tarifaMinima: 1.5,
-  monedaVisualizacion: 'VES'
+  viajesDesde1KmPorKm: 0.28,
+  viajesLargosPorKm: 0.38,
+  viajesLargosDesdeKm: VIAJES_LARGOS_DESDE_KM,
+  tarifaMinima: 1.5
 };
 
 export const esConfiguracionTarifasValida = (value: unknown): value is ConfiguracionTarifas => {
@@ -19,14 +21,11 @@ export const esConfiguracionTarifasValida = (value: unknown): value is Configura
   const tarifas = value as Record<string, unknown>;
   const montos = [
     tarifas.enviosPorKm,
-    tarifas.viajesCortoPorKm,
-    tarifas.viajesLargoPorKm,
+    tarifas.viajesDesde1KmPorKm,
+    tarifas.viajesLargosPorKm,
     tarifas.tarifaMinima
   ];
-  return montos.every(monto => typeof monto === 'number' && Number.isFinite(monto) && monto > 0 && monto <= 1000)
-    && (tarifas.monedaVisualizacion === 'VES'
-      || tarifas.monedaVisualizacion === 'EUR'
-      || tarifas.monedaVisualizacion === 'USDT');
+  return montos.every(monto => typeof monto === 'number' && Number.isFinite(monto) && monto > 0 && monto <= 1000);
 };
 
 export const tarifaPorKilometro = (
@@ -35,12 +34,21 @@ export const tarifaPorKilometro = (
   tarifas: ConfiguracionTarifas = TARIFAS_POR_DEFECTO
 ): number => {
   if (tipoServicio !== 'viajes') return tarifas.enviosPorKm;
-  return distanciaKm >= 1 ? tarifas.viajesLargoPorKm : tarifas.viajesCortoPorKm;
+  return distanciaKm >= tarifas.viajesLargosDesdeKm
+    ? tarifas.viajesLargosPorKm
+    : tarifas.viajesDesde1KmPorKm;
 };
 
 export const calcularTarifa = (
   tipoServicio: string,
   distanciaKm: number,
   tarifas: ConfiguracionTarifas = TARIFAS_POR_DEFECTO
-): number =>
-  Number(Math.max(tarifas.tarifaMinima, distanciaKm * tarifaPorKilometro(tipoServicio, distanciaKm, tarifas)).toFixed(2));
+): number => {
+  if (tipoServicio === 'viajes' && distanciaKm < 1) {
+    return Number(tarifas.tarifaMinima.toFixed(2));
+  }
+  return Number(Math.max(
+    tarifas.tarifaMinima,
+    distanciaKm * tarifaPorKilometro(tipoServicio, distanciaKm, tarifas)
+  ).toFixed(2));
+};

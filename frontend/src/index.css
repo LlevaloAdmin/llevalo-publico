@@ -82,6 +82,20 @@ body {
   color: #cbd5e1;
 }
 
+.maplibre-dark-theme .maplibregl-ctrl-attrib.maplibregl-compact {
+  background-color: rgb(30 41 59 / 82%);
+}
+
+.maplibregl-ctrl-attrib.maplibregl-compact {
+  background-color: rgb(255 255 255 / 82%);
+  font-size: 9px;
+}
+
+.maplibregl-ctrl-attrib-button {
+  width: 22px;
+  height: 22px;
+}
+
 .maplibre-dark-theme .maplibregl-ctrl-attrib a {
   color: #e2e8f0;
 }
@@ -125,51 +139,6 @@ body {
   }
 }
 
-@keyframes startup-intro-exit {
-  0%,
-  82% {
-    opacity: 1;
-  }
-
-  100% {
-    opacity: 0;
-  }
-}
-
-@keyframes startup-wordmark-collapse {
-  0%,
-  34% {
-    width: 4.6ch;
-    opacity: 1;
-    transform: scale(1);
-  }
-
-  68%,
-  100% {
-    width: 0;
-    opacity: 0;
-    transform: scale(0.72);
-  }
-}
-
-@keyframes startup-initial-reveal {
-  0%,
-  68% {
-    opacity: 1;
-    transform: scale(1);
-  }
-
-  82% {
-    opacity: 1;
-    transform: scale(1.16);
-  }
-
-  100% {
-    opacity: 0;
-    transform: scale(2.2);
-  }
-}
-
 @keyframes startup-glow {
   0%,
   36% {
@@ -193,28 +162,68 @@ body {
   }
 }
 
-@keyframes startup-initial-reduced {
-  0%,
-  82% {
+@keyframes startup-wordmark-enter {
+  0% {
+    opacity: 0;
+    transform: translateY(12px) scale(0.8);
+  }
+
+  26% {
     opacity: 1;
+    transform: translateY(0) scale(1.08);
+  }
+
+  42%,
+  80% {
+    opacity: 1;
+    transform: scale(1);
   }
 
   100% {
     opacity: 0;
+    transform: translateY(-8px) scale(1.06);
   }
 }
 
-@keyframes startup-wordmark-reduced {
-  0%,
-  34% {
-    width: 4.6ch;
-    opacity: 1;
+@keyframes startup-orbit-one {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.62) rotate(-35deg);
   }
 
-  68%,
+  16% {
+    opacity: 0.9;
+  }
+
+  76% {
+    opacity: 0.72;
+    transform: translate(-50%, -50%) scale(1) rotate(185deg);
+  }
+
   100% {
-    width: 0;
     opacity: 0;
+    transform: translate(-50%, -50%) scale(1.12) rotate(250deg);
+  }
+}
+
+@keyframes startup-orbit-two {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.74) rotate(50deg);
+  }
+
+  22% {
+    opacity: 0.55;
+  }
+
+  76% {
+    opacity: 0.4;
+    transform: translate(-50%, -50%) scale(1) rotate(-140deg);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1.1) rotate(-220deg);
   }
 }
 
@@ -225,6 +234,7 @@ body {
   display: grid;
   place-items: center;
   overflow: hidden;
+  isolation: isolate;
   background: #fdfbf7;
   color: #0f172a;
   pointer-events: none;
@@ -255,6 +265,43 @@ body {
   background: radial-gradient(circle, rgb(255 87 34 / 20%), rgb(255 87 34 / 7%) 42%, transparent 70%);
 }
 
+.startup-orbit {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  aspect-ratio: 1;
+  border: 1px solid rgb(255 87 34 / 24%);
+  border-radius: 50%;
+  opacity: 0;
+  will-change: transform, opacity;
+}
+
+.startup-orbit::before {
+  position: absolute;
+  top: 5%;
+  left: 50%;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #ff8a50;
+  content: '';
+  transform: translateX(-50%);
+}
+
+.startup-orbit-one {
+  width: min(84vw, 440px);
+  border-top-color: #ff5722;
+  border-left-color: transparent;
+  animation: startup-orbit-one 3000ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
+}
+
+.startup-orbit-two {
+  width: min(68vw, 360px);
+  border-style: dashed;
+  border-color: rgb(255 87 34 / 32%);
+  animation: startup-orbit-two 3000ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
+}
+
 .startup-wordmark {
   position: relative;
   z-index: 1;
@@ -268,23 +315,17 @@ body {
   font-weight: 900;
   letter-spacing: -0.075em;
   line-height: 1;
+  opacity: 0;
   will-change: transform, opacity;
+  animation: startup-wordmark-enter 3000ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
 }
 
 .startup-initial {
-  position: relative;
-  z-index: 1;
   color: #ff5722;
-  transform-origin: center;
-  animation: startup-initial-reveal 3000ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
 }
 
 .startup-wordmark-rest {
   display: inline-block;
-  width: 4.6ch;
-  overflow: hidden;
-  transform-origin: left center;
-  animation: startup-wordmark-collapse 3000ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
 }
 
 .startup-intro-hidden {
@@ -393,7 +434,7 @@ body {
   }
 
   .startup-intro {
-    animation: startup-intro-exit 900ms ease-out both;
+    transition: none;
   }
 
   .startup-intro::before {
@@ -401,12 +442,14 @@ body {
     opacity: 0;
   }
 
-  .startup-initial {
-    animation: startup-initial-reduced 900ms ease-out both;
+  .startup-orbit {
+    display: none;
   }
 
-  .startup-wordmark-rest {
-    animation: startup-wordmark-reduced 900ms ease-out both;
+  .startup-wordmark {
+    animation: none;
+    opacity: 1;
+    transform: none;
   }
 }
 

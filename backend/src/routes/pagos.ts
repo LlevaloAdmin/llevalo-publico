@@ -6,7 +6,7 @@ import { adminActionRateLimit } from '../middleware/rateLimits';
 import { tablasPedidosListas } from './pedidos';
 import { obtenerTasasCambio } from '../utils/exchangeRates';
 import { registrarActividad, registrarActividadDirecta } from '../utils/activity';
-import { esConfiguracionTarifasValida } from '../utils/pricing';
+import { esConfiguracionTarifasValida, type ConfiguracionTarifas } from '../utils/pricing';
 import { guardarConfiguracionTarifas, obtenerConfiguracionTarifas } from '../utils/pricingSettings';
 import { notifyDriversOfNewOrder } from '../utils/pushNotifications';
 
@@ -28,6 +28,13 @@ const obtenerId = (value: string | string[] | undefined): number | null => {
   const id = Number(value);
   return Number.isSafeInteger(id) && id > 0 ? id : null;
 };
+
+const tarifasParaCliente = (tarifas: ConfiguracionTarifas) => ({
+  ...tarifas,
+  viajesCortoPorKm: tarifas.viajesLargosPorKm,
+  viajesLargoPorKm: tarifas.viajesDesde1KmPorKm,
+  monedaVisualizacion: 'VES'
+});
 
 router.use(requireAuth);
 
@@ -62,12 +69,13 @@ router.get('/config', async (req: Request, res: Response): Promise<any> => {
 router.get('/tarifas', async (_req: Request, res: Response): Promise<any> => {
   try {
     const tarifas = await obtenerConfiguracionTarifas();
+    const tarifasPublicas = tarifasParaCliente(tarifas);
     try {
       const tasas = await obtenerTasasCambio();
-      res.json({ tarifas, tasas });
+      res.json({ tarifas: tarifasPublicas, tasas });
     } catch (error) {
       console.error('No se pudieron consultar las tasas externas:', error);
-      res.json({ tarifas, tasas: null, errorTasas: 'La tasa de cambio no está disponible en este momento.' });
+      res.json({ tarifas: tarifasPublicas, tasas: null, errorTasas: 'La tasa de cambio no está disponible en este momento.' });
     }
   } catch (error) {
     console.error('Error al consultar tarifas:', error);
@@ -76,10 +84,15 @@ router.get('/tarifas', async (_req: Request, res: Response): Promise<any> => {
 });
 
 router.put('/admin/tarifas', requireAdmin, adminActionRateLimit, async (req: Request, res: Response): Promise<any> => {
-  const { enviosPorKm, viajesCortoPorKm, viajesLargoPorKm, tarifaMinima, monedaVisualizacion } = req.body ?? {};
-  const configuracionRecibida: unknown = { enviosPorKm, viajesCortoPorKm, viajesLargoPorKm, tarifaMinima, monedaVisualizacion };
+  const body = req.body ?? {};
+  const configuracionRecibida: unknown = {
+    enviosPorKm: body.enviosPorKm,
+    viajesDesde1KmPorKm: body.viajesDesde1KmPorKm ?? body.viajesLargoPorKm,
+    viajesLargosPorKm: body.viajesLargosPorKm ?? body.viajesCortoPorKm,
+    tarifaMinima: body.tarifaMinima
+  };
   if (!esConfiguracionTarifasValida(configuracionRecibida)) {
-    return res.status(400).json({ error: 'Revisa las tarifas y selecciona una moneda de visualización válida.' });
+    return res.status(400).json({ error: 'Revisa que todas las tarifas sean valores positivos válidos.' });
   }
 
   try {
@@ -91,13 +104,13 @@ router.put('/admin/tarifas', requireAdmin, adminActionRateLimit, async (req: Req
           actorId,
           'admin',
           'configuracion_tarifas_actualizada',
-          `Actualizó tarifas por kilómetro y moneda de visualización (${tarifas.monedaVisualizacion}).`
+          'Actualizó tarifas por kilómetro; los montos se muestran en bolívares según la tasa BCV.'
         );
       } catch (activityError) {
         console.error('No se pudo registrar la actualización de tarifas:', activityError);
       }
     }
-    res.json({ tarifas });
+    res.json({ tarifas: tarifasParaCliente(tarifas) });
   } catch (error) {
     console.error('Error al guardar tarifas:', error);
     res.status(500).json({ error: 'No se pudieron guardar las tarifas.' });

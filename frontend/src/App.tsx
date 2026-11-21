@@ -108,6 +108,7 @@ interface PerfilPublico {
 
 interface ResumenCalificaciones {
   perfil: { promedio: number; cantidad: number; rango: string };
+  total_pedidos: number;
   pedidos: Array<{
     pedido_id: number;
     tipo_servicio: string;
@@ -262,21 +263,18 @@ interface MetricasAdmin {
   repartidores_activos: number;
 }
 
-type MonedaVisualizacion = 'VES' | 'EUR' | 'USDT';
 type ModoBusquedaAdmin = 'codigo' | 'fecha' | 'texto';
 
 interface ConfiguracionTarifas {
   enviosPorKm: number;
-  viajesCortoPorKm: number;
-  viajesLargoPorKm: number;
+  viajesDesde1KmPorKm: number;
+  viajesLargosPorKm: number;
+  viajesLargosDesdeKm: number;
   tarifaMinima: number;
-  monedaVisualizacion: MonedaVisualizacion;
 }
 
 interface TasasCambio {
   bolivaresPorDolar: number;
-  eurosPorDolar: number;
-  usdtPorDolar: number;
   actualizadoEn: string;
   desactualizada: boolean;
 }
@@ -347,18 +345,11 @@ const horaInicial = Date.now();
 
 const codigoPedido = (id: number) => `LLV-${String(id).padStart(6, '0')}`;
 
-const convertirDolares = (monto: number, moneda: MonedaVisualizacion, tasas: TasasCambio) => {
-  if (moneda === 'VES') return monto * tasas.bolivaresPorDolar;
-  if (moneda === 'EUR') return monto * tasas.eurosPorDolar;
-  return monto * tasas.usdtPorDolar;
-};
+const convertirDolares = (monto: number, tasas: TasasCambio) =>
+  monto * tasas.bolivaresPorDolar;
 
-const formatoMoneda = (monto: number, moneda: MonedaVisualizacion) => {
-  const formatted = monto.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  if (moneda === 'VES') return `Bs. ${formatted}`;
-  if (moneda === 'EUR') return `€${formatted}`;
-  return `${formatted} USDT`;
-};
+const formatoMoneda = (monto: number) =>
+  `Bs. ${monto.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const crearParametrosBusquedaAdmin = (
   modo: ModoBusquedaAdmin,
@@ -561,36 +552,33 @@ export default function App() {
   const [cargandoBusquedaAdmin, setCargandoBusquedaAdmin] = useState(false);
   const [configuracionTarifasAdmin, setConfiguracionTarifasAdmin] = useState<ConfiguracionTarifas>({
     enviosPorKm: 0.5,
-    viajesCortoPorKm: 0.38,
-    viajesLargoPorKm: 0.28,
-    tarifaMinima: 1.5,
-    monedaVisualizacion: 'VES'
+    viajesDesde1KmPorKm: 0.28,
+    viajesLargosPorKm: 0.38,
+    viajesLargosDesdeKm: 25,
+    tarifaMinima: 1.5
   });
 
   const costoPorKm = serviceType === 'viajes'
-    ? (distanciaKm >= 1
-      ? configuracionTarifas?.viajesLargoPorKm ?? 0.28
-      : configuracionTarifas?.viajesCortoPorKm ?? 0.38)
+    ? (distanciaKm >= (configuracionTarifas?.viajesLargosDesdeKm ?? 25)
+      ? configuracionTarifas?.viajesLargosPorKm ?? 0.38
+      : configuracionTarifas?.viajesDesde1KmPorKm ?? 0.28)
     : configuracionTarifas?.enviosPorKm ?? 0.5;
+  const tarifaMinima = configuracionTarifas?.tarifaMinima ?? 1.5;
   const tarifaTotal = rutaCompletaLista
-    ? Math.max(configuracionTarifas?.tarifaMinima ?? 1.5, distanciaKm * costoPorKm).toFixed(2)
+    ? (serviceType === 'viajes' && distanciaKm < 1
+      ? tarifaMinima
+      : Math.max(tarifaMinima, distanciaKm * costoPorKm)).toFixed(2)
     : '0.00';
   const tarifaUsd = Number(tarifaTotal);
-  const tarifaEnMonedaSeleccionada = configuracionTarifas && tasasCambio
-    ? formatoMoneda(convertirDolares(tarifaUsd, configuracionTarifas.monedaVisualizacion, tasasCambio), configuracionTarifas.monedaVisualizacion)
-    : null;
   const tarifaEnBolivares = tasasCambio
-    ? formatoMoneda(convertirDolares(tarifaUsd, 'VES', tasasCambio), 'VES')
+    ? formatoMoneda(convertirDolares(tarifaUsd, tasasCambio))
     : null;
   const mostrarMontoPedido = (monto: string | number) => {
     const montoUsd = Number(monto);
     if (!Number.isFinite(montoUsd)) return 'Monto no disponible';
     const baseUsd = `$${montoUsd.toFixed(2)} USD`;
-    if (!configuracionTarifas || !tasasCambio) return baseUsd;
-    const equivalente = formatoMoneda(
-      convertirDolares(montoUsd, configuracionTarifas.monedaVisualizacion, tasasCambio),
-      configuracionTarifas.monedaVisualizacion
-    );
+    if (!tasasCambio) return baseUsd;
+    const equivalente = formatoMoneda(convertirDolares(montoUsd, tasasCambio));
     return `${equivalente} aprox. · ${baseUsd}`;
   };
 
@@ -600,6 +588,8 @@ export default function App() {
   const [resumenCalificaciones, setResumenCalificaciones] = useState<ResumenCalificaciones | null>(null);
   const [estrellasSeleccionadas, setEstrellasSeleccionadas] = useState<Record<number, number>>({});
   const [calificandoPedidoId, setCalificandoPedidoId] = useState<number | null>(null);
+  const [calificacionesExpandidas, setCalificacionesExpandidas] = useState(false);
+  const [cargandoHistorialCalificaciones, setCargandoHistorialCalificaciones] = useState(false);
   const [perfilPublico, setPerfilPublico] = useState<PerfilPublico | null>(null);
   const [perfilPublicoCargando, setPerfilPublicoCargando] = useState(false);
   const [errorPerfilPublico, setErrorPerfilPublico] = useState('');
@@ -1347,7 +1337,7 @@ export default function App() {
       const data: { tarifas: ConfiguracionTarifas } = await response.json();
       setConfiguracionTarifas(data.tarifas);
       setConfiguracionTarifasAdmin(data.tarifas);
-      setMensajeAdmin('Tarifas y moneda de visualización actualizadas para todas las cuentas.');
+      setMensajeAdmin('Tarifas actualizadas. Los montos se muestran en bolívares a tasa BCV.');
     } catch (error) {
       setErrorAdmin(error instanceof Error ? error.message : 'No se pudieron guardar las tarifas.');
     }
@@ -1415,12 +1405,12 @@ export default function App() {
   const handleCrearPedido = async () => {
     if (!usuario) return;
     if (!configuracionTarifas) {
-      alert(errorTarifas || 'Espera a que se carguen las tarifas y tasas actuales.');
+      alert(errorTarifas || 'Espera a que se carguen las tarifas y la tasa BCV.');
       void cargarTarifas();
       return;
     }
     if (metodoPagoViaje === 'pago_movil' && !tasasCambio) {
-      alert(errorTarifas || 'Pago Móvil requiere que la tasa oficial de bolívares esté disponible.');
+      alert(errorTarifas || 'Pago Móvil requiere que la tasa BCV esté disponible.');
       void cargarTarifas();
       return;
     }
@@ -2016,6 +2006,7 @@ export default function App() {
     if (!usuario) {
       // oxlint-disable-next-line react/set-state-in-effect
       setResumenCalificaciones(null);
+      setCalificacionesExpandidas(false);
       return;
     }
     let descartado = false;
@@ -2025,7 +2016,10 @@ export default function App() {
         return response.json() as Promise<ResumenCalificaciones>;
       })
       .then(resumen => {
-        if (!descartado) setResumenCalificaciones(resumen);
+        if (!descartado) {
+          setResumenCalificaciones(resumen);
+          setCalificacionesExpandidas(false);
+        }
       })
       .catch(error => {
         if (!descartado) console.error('No se pudo cargar el resumen de calificaciones:', error);
@@ -2433,6 +2427,37 @@ export default function App() {
     }
   };
 
+  const alternarHistorialCalificaciones = async () => {
+    if (calificacionesExpandidas) {
+      setCalificacionesExpandidas(false);
+      return;
+    }
+
+    if (!resumenCalificaciones) return;
+    if (resumenCalificaciones.pedidos.length >= resumenCalificaciones.total_pedidos) {
+      setCalificacionesExpandidas(true);
+      return;
+    }
+
+    setCargandoHistorialCalificaciones(true);
+    try {
+      const response = await authenticatedFetch(`${API_URL}/api/reviews/summary?all=true`);
+      if (!response.ok) {
+        throw new Error(await mensajeErrorApi(response, 'No se pudieron cargar todas las calificaciones'));
+      }
+      const resumen = await response.json() as ResumenCalificaciones;
+      if (resumen.pedidos.length < resumen.total_pedidos) {
+        throw new Error('No se pudo cargar el historial completo de calificaciones.');
+      }
+      setResumenCalificaciones(resumen);
+      setCalificacionesExpandidas(true);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'No se pudo cargar el historial completo.');
+    } finally {
+      setCargandoHistorialCalificaciones(false);
+    }
+  };
+
   useEffect(() => {
     if (!usuario
       || (usuario.rol === 'cliente' && activeTab !== 'cliente')
@@ -2501,9 +2526,9 @@ export default function App() {
           {usuario ? (
             <>
               {tasasCambio && (
-                <span title="Tasa oficial del dólar en bolívares" className={`inline-flex flex-col rounded-xl border px-2.5 py-1.5 text-[10px] font-bold leading-tight sm:px-3.5 sm:text-xs ${darkMode ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-orange-100 bg-white text-slate-700'}`}>
-                  <span className="text-[9px] uppercase tracking-wide text-slate-500 dark:text-slate-400">Dólar oficial</span>
-                  <span>{formatoMoneda(tasasCambio.bolivaresPorDolar, 'VES')}</span>
+                <span title="Equivalente del dólar según la tasa BCV" className={`inline-flex items-center gap-1.5 rounded-xl border px-2.5 py-2 text-[10px] font-bold leading-tight sm:px-3.5 sm:text-xs ${darkMode ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-orange-100 bg-white text-slate-700'}`}>
+                  <span className="whitespace-nowrap text-slate-500 dark:text-slate-400">Dólar BCV</span>
+                  <span className="whitespace-nowrap">{formatoMoneda(tasasCambio.bolivaresPorDolar)}</span>
                 </span>
               )}
               <button
@@ -3119,11 +3144,8 @@ export default function App() {
                           <p>Tiempo: <strong>~{tiempoEstimadoMin} min</strong></p>
                         </div>
                         <div className="text-right">
-                          <p className="text-sm font-black text-[#FF5722]">{tarifaEnMonedaSeleccionada || `$${tarifaTotal}`}</p>
+                          <p className="text-sm font-black text-[#FF5722]">{tarifaEnBolivares || `$${tarifaTotal} USD`}</p>
                           <p className="text-[10px] text-slate-400">Base: ${tarifaTotal} USD</p>
-                          {tarifaEnBolivares && metodoPagoViaje === 'pago_movil' && (
-                            <p className="text-[10px] text-slate-400">Pago Móvil: {tarifaEnBolivares}</p>
-                          )}
                         </div>
                       </div>
                     )}
@@ -3570,8 +3592,10 @@ export default function App() {
                       Tus pedidos finalizados aparecerán aquí para que puedas calificar a la otra persona.
                     </p>
                   ) : (
-                    <div className="space-y-3">
-                      {resumenCalificaciones.pedidos.map(pedido => {
+                    <div id="rating-history-list" className="space-y-3">
+                      {resumenCalificaciones.pedidos
+                        .slice(0, calificacionesExpandidas ? undefined : 3)
+                        .map(pedido => {
                         const estrellas = estrellasSeleccionadas[pedido.pedido_id] ?? 0;
                         return (
                           <article key={pedido.pedido_id} className={`flex flex-col gap-3 rounded-2xl border p-4 sm:flex-row sm:items-center sm:justify-between ${darkMode ? 'border-slate-700 bg-slate-900' : 'border-slate-100 bg-slate-50'}`}>
@@ -3615,6 +3639,23 @@ export default function App() {
                           </article>
                         );
                       })}
+                      {resumenCalificaciones.total_pedidos > 3 && (
+                        <button
+                          type="button"
+                          aria-expanded={calificacionesExpandidas}
+                          aria-controls="rating-history-list"
+                          onClick={() => void alternarHistorialCalificaciones()}
+                          disabled={cargandoHistorialCalificaciones}
+                          className={`inline-flex w-full items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-xs font-bold transition ${darkMode ? 'border-slate-700 text-slate-200 hover:bg-slate-800' : 'border-orange-200 text-[#D84315] hover:bg-orange-50'}`}
+                        >
+                          {cargandoHistorialCalificaciones
+                            ? 'Cargando calificaciones…'
+                            : calificacionesExpandidas
+                            ? 'Mostrar menos'
+                            : `Ver todas las calificaciones (${resumenCalificaciones.total_pedidos})`}
+                          <ChevronDown size={16} className={`transition-transform ${calificacionesExpandidas ? 'rotate-180' : ''}`} />
+                        </button>
+                      )}
                     </div>
                   )}
                 </section>
@@ -3884,17 +3925,17 @@ export default function App() {
             </AdminAccordion>
 
             <AdminAccordion
-              title="Tarifas y moneda"
-              description="Valores globales y moneda de visualización."
+              title="Tarifas de envíos y viajes"
+              description="Costos en USD; las cuentas ven su equivalente en bolívares según la tasa BCV."
               darkMode={darkMode}
-              badge={tasasCambio ? <span className="text-xs font-bold text-[#FF5722]">{formatoMoneda(tasasCambio.bolivaresPorDolar, 'VES')}</span> : undefined}
+              badge={tasasCambio ? <span className="text-xs font-bold text-[#FF5722]">Dólar BCV · {formatoMoneda(tasasCambio.bolivaresPorDolar)}</span> : undefined}
             >
               <div className="space-y-4">
               <form onSubmit={guardarTarifasAdmin} className="grid gap-3 sm:grid-cols-2">
                 {([
                   ['enviosPorKm', 'Envíos por kilómetro (USD)'],
-                  ['viajesCortoPorKm', 'Viajes menores de 1 km (USD/km)'],
-                  ['viajesLargoPorKm', 'Viajes desde 1 km (USD/km)'],
+                  ['viajesDesde1KmPorKm', `Viajes desde 1 km y menos de ${configuracionTarifasAdmin.viajesLargosDesdeKm} km (USD/km)`],
+                  ['viajesLargosPorKm', `Viajes largos desde ${configuracionTarifasAdmin.viajesLargosDesdeKm} km (USD/km)`],
                   ['tarifaMinima', 'Tarifa mínima (USD)']
                 ] as const).map(([field, label]) => (
                   <label key={field} className="text-xs font-semibold">
@@ -3911,29 +3952,12 @@ export default function App() {
                     />
                   </label>
                 ))}
-                <label className="text-xs font-semibold">
-                  Moneda que verán las cuentas
-                  <select
-                    value={configuracionTarifasAdmin.monedaVisualizacion}
-                    onChange={event => {
-                      const value = event.target.value;
-                      if (value === 'VES' || value === 'EUR' || value === 'USDT') {
-                        setConfiguracionTarifasAdmin(current => ({ ...current, monedaVisualizacion: value }));
-                      }
-                    }}
-                    className={`mt-1 w-full rounded-xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-700 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50'}`}
-                  >
-                    <option value="VES">Bolívares (VES)</option>
-                    <option value="EUR">Euros (EUR)</option>
-                    <option value="USDT">USDT</option>
-                  </select>
-                </label>
                 <div className={`rounded-xl border p-3 text-[11px] sm:col-span-2 ${darkMode ? 'border-slate-800 bg-slate-950/60 text-slate-300' : 'border-slate-100 bg-slate-50 text-slate-600'}`}>
                   {tasasCambio && configuracionTarifas && (
-                    <p className="text-sm font-bold">{formatoMoneda(convertirDolares(1, configuracionTarifasAdmin.monedaVisualizacion, tasasCambio), configuracionTarifasAdmin.monedaVisualizacion)} <span className="text-[10px] font-normal text-slate-500">· Actualizado {new Date(tasasCambio.actualizadoEn).toLocaleString('es-VE')}</span></p>
+                    <p className="text-sm font-bold">1 USD = {formatoMoneda(convertirDolares(1, tasasCambio))} <span className="text-[10px] font-normal text-slate-500">· Tasa BCV actualizada {new Date(tasasCambio.actualizadoEn).toLocaleString('es-VE')}</span></p>
                   )}
                   {tasasCambio?.desactualizada && <p className="mt-1 text-amber-600 dark:text-amber-300">Mostrando la última tasa disponible; la actualización externa falló.</p>}
-                  <p className="mt-1">Las tarifas y pagos históricos siguen contabilizados en USD. Los cambios se reflejan automáticamente en las cuentas activas.</p>
+                  <p className="mt-1">Las tarifas se calculan en USD y se muestran en bolívares a tasa BCV. Los viajes menores de 1 km cobran la tarifa mínima; desde 1 km se aplica la tarifa por kilómetro, y desde 25 km la tarifa de viaje largo. Las carreras conservan la tarifa mínima como piso.</p>
                 </div>
                 {errorTarifas && <p role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200 sm:col-span-2">{errorTarifas}</p>}
                 <button type="submit" disabled={!configuracionTarifas || cargandoTarifas} className="rounded-xl bg-[#FF5722] px-5 py-3 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-50 sm:col-span-2">

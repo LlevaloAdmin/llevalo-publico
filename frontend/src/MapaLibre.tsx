@@ -162,8 +162,13 @@ export default function MapaLibre({
         style: darkMode ? estiloOscuro : estiloClaro,
         center: [centroInicial.lng, centroInicial.lat],
         zoom: mini ? 12 : 14,
-        interactive: mini ? false : interactivoRef.current
+        interactive: mini ? false : interactivoRef.current,
+        attributionControl: false
       });
+      mapInstance.current.addControl(
+        new maplibregl.AttributionControl({ compact: true }),
+        'bottom-right'
+      );
 
       if (!mini) {
         mapInstance.current.addControl(new maplibregl.NavigationControl(), 'top-right');

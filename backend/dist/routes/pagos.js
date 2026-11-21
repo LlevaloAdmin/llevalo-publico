@@ -27,6 +27,12 @@ const obtenerId = (value) => {
     const id = Number(value);
     return Number.isSafeInteger(id) && id > 0 ? id : null;
 };
+const tarifasParaCliente = (tarifas) => ({
+    ...tarifas,
+    viajesCortoPorKm: tarifas.viajesLargosPorKm,
+    viajesLargoPorKm: tarifas.viajesDesde1KmPorKm,
+    monedaVisualizacion: 'VES'
+});
 router.use(auth_1.requireAuth);
 router.get('/config', async (req, res) => {
     const authUser = req.authUser;
@@ -57,13 +63,14 @@ router.get('/config', async (req, res) => {
 router.get('/tarifas', async (_req, res) => {
     try {
         const tarifas = await (0, pricingSettings_1.obtenerConfiguracionTarifas)();
+        const tarifasPublicas = tarifasParaCliente(tarifas);
         try {
             const tasas = await (0, exchangeRates_1.obtenerTasasCambio)();
-            res.json({ tarifas, tasas });
+            res.json({ tarifas: tarifasPublicas, tasas });
         }
         catch (error) {
             console.error('No se pudieron consultar las tasas externas:', error);
-            res.json({ tarifas, tasas: null, errorTasas: 'La tasa de cambio no está disponible en este momento.' });
+            res.json({ tarifas: tarifasPublicas, tasas: null, errorTasas: 'La tasa de cambio no está disponible en este momento.' });
         }
     }
     catch (error) {
@@ -72,23 +79,28 @@ router.get('/tarifas', async (_req, res) => {
     }
 });
 router.put('/admin/tarifas', auth_1.requireAdmin, rateLimits_1.adminActionRateLimit, async (req, res) => {
-    const { enviosPorKm, viajesCortoPorKm, viajesLargoPorKm, tarifaMinima, monedaVisualizacion } = req.body ?? {};
-    const configuracionRecibida = { enviosPorKm, viajesCortoPorKm, viajesLargoPorKm, tarifaMinima, monedaVisualizacion };
+    const body = req.body ?? {};
+    const configuracionRecibida = {
+        enviosPorKm: body.enviosPorKm,
+        viajesDesde1KmPorKm: body.viajesDesde1KmPorKm ?? body.viajesLargoPorKm,
+        viajesLargosPorKm: body.viajesLargosPorKm ?? body.viajesCortoPorKm,
+        tarifaMinima: body.tarifaMinima
+    };
     if (!(0, pricing_1.esConfiguracionTarifasValida)(configuracionRecibida)) {
-        return res.status(400).json({ error: 'Revisa las tarifas y selecciona una moneda de visualización válida.' });
+        return res.status(400).json({ error: 'Revisa que todas las tarifas sean valores positivos válidos.' });
     }
     try {
         const tarifas = await (0, pricingSettings_1.guardarConfiguracionTarifas)(configuracionRecibida);
         const actorId = req.authUser?.id;
         if (actorId) {
             try {
-                await (0, activity_1.registrarActividadDirecta)(actorId, 'admin', 'configuracion_tarifas_actualizada', `Actualizó tarifas por kilómetro y moneda de visualización (${tarifas.monedaVisualizacion}).`);
+                await (0, activity_1.registrarActividadDirecta)(actorId, 'admin', 'configuracion_tarifas_actualizada', 'Actualizó tarifas por kilómetro; los montos se muestran en bolívares según la tasa BCV.');
             }
             catch (activityError) {
                 console.error('No se pudo registrar la actualización de tarifas:', activityError);
             }
         }
-        res.json({ tarifas });
+        res.json({ tarifas: tarifasParaCliente(tarifas) });
     }
     catch (error) {
         console.error('Error al guardar tarifas:', error);

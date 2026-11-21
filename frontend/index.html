@@ -10,17 +10,73 @@
     
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <style>
-      @keyframes startup-glow{0%,36%{opacity:0;transform:translate(-50%,-50%) scale(.72)}58%{opacity:.62;transform:translate(-50%,-50%) scale(1)}82%{opacity:.2;transform:translate(-50%,-50%) scale(1.16)}100%{opacity:0;transform:translate(-50%,-50%) scale(1.32)}}
-      @keyframes startup-wordmark-collapse{0%,34%{width:4.6ch;opacity:1;transform:scale(1)}68%,100%{width:0;opacity:0;transform:scale(.72)}}
-      @keyframes startup-initial-reveal{0%,68%{opacity:1;transform:scale(1)}82%{opacity:1;transform:scale(1.16)}100%{opacity:0;transform:scale(2.2)}}
-      .startup-intro{position:fixed;z-index:10000;inset:0;display:grid;place-items:center;overflow:hidden;background:#fdfbf7;color:#0f172a;pointer-events:none;opacity:1;transition:opacity 220ms ease}
-      .startup-intro-dark{background:#111827;color:#f8fafc}
-      .startup-intro-hidden{opacity:0}
-      .startup-intro:before{position:absolute;top:50%;left:50%;width:min(86vw,460px);aspect-ratio:1;border-radius:50%;background:radial-gradient(circle,rgb(255 87 34 / 18%),rgb(255 87 34 / 5%) 42%,transparent 70%);content:"";animation:startup-glow 3s cubic-bezier(.2,.75,.25,1) both}
-      .startup-wordmark{position:relative;z-index:1;display:inline-flex;width:100vw;align-items:center;justify-content:center;white-space:nowrap;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;font-size:clamp(3.75rem,21vw,7.5rem);font-weight:900;letter-spacing:-.075em;line-height:1}
-      .startup-initial{position:relative;z-index:1;color:#ff5722;transform-origin:center;animation:startup-initial-reveal 3s cubic-bezier(.2,.75,.25,1) both}
-      .startup-wordmark-rest{display:inline-block;width:4.6ch;overflow:hidden;transform-origin:left center;animation:startup-wordmark-collapse 3s cubic-bezier(.2,.75,.25,1) both}
-      @media(prefers-reduced-motion:reduce){.startup-intro:before,.startup-initial,.startup-wordmark-rest{animation:none}.startup-wordmark-rest{width:4.6ch}}
+      @keyframes startup-glow {
+        0%,36% { opacity:0; transform:translate(-50%,-50%) scale(.72) }
+        58% { opacity:.62; transform:translate(-50%,-50%) scale(1) }
+        82% { opacity:.2; transform:translate(-50%,-50%) scale(1.16) }
+        100% { opacity:0; transform:translate(-50%,-50%) scale(1.32) }
+      }
+      @keyframes startup-wordmark-enter {
+        0% { opacity:0; transform:translateY(12px) scale(.8) }
+        26% { opacity:1; transform:translateY(0) scale(1.08) }
+        42%,80% { opacity:1; transform:scale(1) }
+        100% { opacity:0; transform:translateY(-8px) scale(1.06) }
+      }
+      @keyframes startup-orbit-one {
+        0% { opacity:0; transform:translate(-50%,-50%) scale(.62) rotate(-35deg) }
+        16% { opacity:.9 }
+        76% { opacity:.72; transform:translate(-50%,-50%) scale(1) rotate(185deg) }
+        100% { opacity:0; transform:translate(-50%,-50%) scale(1.12) rotate(250deg) }
+      }
+      @keyframes startup-orbit-two {
+        0% { opacity:0; transform:translate(-50%,-50%) scale(.74) rotate(50deg) }
+        22% { opacity:.55 }
+        76% { opacity:.4; transform:translate(-50%,-50%) scale(1) rotate(-140deg) }
+        100% { opacity:0; transform:translate(-50%,-50%) scale(1.1) rotate(-220deg) }
+      }
+      .startup-intro {
+        position:fixed; z-index:10000; inset:0; display:grid; place-items:center;
+        overflow:hidden; isolation:isolate; background:#fdfbf7; color:#0f172a;
+        pointer-events:none; opacity:1; transition:opacity 220ms ease
+      }
+      .startup-intro-dark { background:#0b1120; color:#f8fafc }
+      .startup-intro-hidden { opacity:0 }
+      .startup-intro:before {
+        position:absolute; top:50%; left:50%; width:min(86vw,460px); aspect-ratio:1;
+        border-radius:50%; background:radial-gradient(circle,rgb(255 87 34 / 18%),rgb(255 87 34 / 5%) 42%,transparent 70%);
+        content:""; animation:startup-glow 3s cubic-bezier(.2,.75,.25,1) both
+      }
+      .startup-orbit {
+        position:absolute; top:50%; left:50%; aspect-ratio:1; border:1px solid rgb(255 87 34 / 24%);
+        border-radius:50%; opacity:0; will-change:transform,opacity
+      }
+      .startup-orbit:before {
+        position:absolute; top:5%; left:50%; width:7px; height:7px; border-radius:50%;
+        background:#ff8a50; content:""; transform:translateX(-50%)
+      }
+      .startup-orbit-one {
+        width:min(84vw,440px); border-top-color:#ff5722; border-left-color:transparent;
+        animation:startup-orbit-one 3s cubic-bezier(.2,.75,.25,1) both
+      }
+      .startup-orbit-two {
+        width:min(68vw,360px); border-style:dashed; border-color:rgb(255 87 34 / 32%);
+        animation:startup-orbit-two 3s cubic-bezier(.2,.75,.25,1) both
+      }
+      .startup-wordmark {
+        position:relative; z-index:1; display:inline-flex; width:100vw; align-items:center;
+        justify-content:center; white-space:nowrap; font-family:system-ui,-apple-system,"Segoe UI",sans-serif;
+        font-size:clamp(3.75rem,21vw,7.5rem); font-weight:900; letter-spacing:-.075em;
+        line-height:1; opacity:0; will-change:transform,opacity;
+        animation:startup-wordmark-enter 3s cubic-bezier(.2,.75,.25,1) both
+      }
+      .startup-initial { color:#ff5722 }
+      .startup-wordmark-rest { display:inline-block }
+      @media(prefers-reduced-motion:reduce) {
+        .startup-intro { transition:none }
+        .startup-intro:before { animation:none; opacity:0 }
+        .startup-orbit { display:none }
+        .startup-wordmark { animation:none; opacity:1; transform:none }
+      }
     </style>
     
     <!-- Título y SEO -->
@@ -71,7 +127,7 @@
         splash.className = localStorage.getItem('llevalo_dark_mode') === 'true' ? 'startup-intro startup-intro-dark' : 'startup-intro';
         splash.setAttribute('role', 'status');
         splash.setAttribute('aria-label', 'Iniciando Llévalo');
-        splash.innerHTML = '<div class="startup-wordmark" aria-hidden="true"><span class="startup-initial">L</span><span class="startup-wordmark-rest">lévalo</span></div>';
+        splash.innerHTML = '<span class="startup-orbit startup-orbit-one" aria-hidden="true"></span><span class="startup-orbit startup-orbit-two" aria-hidden="true"></span><div class="startup-wordmark" aria-hidden="true"><span class="startup-initial">L</span><span class="startup-wordmark-rest">lévalo</span></div>';
         document.body.appendChild(splash);
       }
     </script>

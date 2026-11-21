@@ -37,15 +37,15 @@ const asegurarTablaConfiguracion = () => {
 };
 const convertirFila = (fila) => ({
     enviosPorKm: Number(fila.envios_por_km),
-    viajesCortoPorKm: Number(fila.viajes_corto_por_km),
-    viajesLargoPorKm: Number(fila.viajes_largo_por_km),
-    tarifaMinima: Number(fila.tarifa_minima),
-    monedaVisualizacion: fila.moneda_visualizacion
+    viajesDesde1KmPorKm: Number(fila.viajes_largo_por_km),
+    viajesLargosPorKm: Number(fila.viajes_corto_por_km),
+    viajesLargosDesdeKm: pricing_1.VIAJES_LARGOS_DESDE_KM,
+    tarifaMinima: Number(fila.tarifa_minima)
 });
 const obtenerConfiguracionTarifas = async () => {
     await asegurarTablaConfiguracion();
     const result = await db_1.pool.query(`SELECT envios_por_km, viajes_corto_por_km, viajes_largo_por_km,
-            tarifa_minima, moneda_visualizacion
+            tarifa_minima
      FROM configuracion_tarifas WHERE id = 1`);
     if (!result.rows[0])
         return pricing_1.TARIFAS_POR_DEFECTO;
@@ -57,15 +57,14 @@ const guardarConfiguracionTarifas = async (configuracion) => {
     const result = await db_1.pool.query(`UPDATE configuracion_tarifas
      SET envios_por_km = $1, viajes_corto_por_km = $2,
          viajes_largo_por_km = $3, tarifa_minima = $4,
-         moneda_visualizacion = $5, actualizado_en = CURRENT_TIMESTAMP
+         moneda_visualizacion = 'VES', actualizado_en = CURRENT_TIMESTAMP
      WHERE id = 1
      RETURNING envios_por_km, viajes_corto_por_km, viajes_largo_por_km,
-               tarifa_minima, moneda_visualizacion`, [
+               tarifa_minima`, [
         configuracion.enviosPorKm,
-        configuracion.viajesCortoPorKm,
-        configuracion.viajesLargoPorKm,
-        configuracion.tarifaMinima,
-        configuracion.monedaVisualizacion
+        configuracion.viajesLargosPorKm,
+        configuracion.viajesDesde1KmPorKm,
+        configuracion.tarifaMinima
     ]);
     return convertirFila(result.rows[0]);
 };
