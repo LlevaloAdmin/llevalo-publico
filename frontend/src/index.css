@@ -157,19 +157,39 @@ body {
   68% {
     opacity: 1;
     transform: scale(1);
-    text-shadow: 0 0 0 rgb(255 87 34 / 0%);
   }
 
   82% {
     opacity: 1;
     transform: scale(1.16);
-    text-shadow: 0 0 28px rgb(255 87 34 / 45%);
   }
 
   100% {
     opacity: 0;
     transform: scale(2.2);
-    text-shadow: 0 0 40px rgb(255 87 34 / 0%);
+  }
+}
+
+@keyframes startup-glow {
+  0%,
+  36% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.72);
+  }
+
+  58% {
+    opacity: 0.62;
+    transform: translate(-50%, -50%) scale(1);
+  }
+
+  82% {
+    opacity: 0.2;
+    transform: translate(-50%, -50%) scale(1.16);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1.32);
   }
 }
 
@@ -211,16 +231,42 @@ body {
   animation: startup-intro-exit 1800ms ease-in-out both;
 }
 
+.startup-intro-dark {
+  background: #0b1120;
+  color: #f8fafc;
+}
+
+.startup-intro::before {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: min(86vw, 460px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgb(255 87 34 / 18%), rgb(255 87 34 / 5%) 42%, transparent 70%);
+  content: '';
+  will-change: transform, opacity;
+  transform: translate(-50%, -50%) scale(0.72);
+  animation: startup-glow 1800ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
+}
+
+.startup-intro-dark::before {
+  background: radial-gradient(circle, rgb(255 87 34 / 20%), rgb(255 87 34 / 7%) 42%, transparent 70%);
+}
+
 .startup-wordmark {
+  position: relative;
+  z-index: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   white-space: nowrap;
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  font-size: clamp(2.8rem, 16vw, 5rem);
+  font-size: clamp(3.75rem, 21vw, 7.5rem);
   font-weight: 900;
   letter-spacing: -0.075em;
   line-height: 1;
+  will-change: transform, opacity;
 }
 
 .startup-initial {
@@ -315,6 +361,11 @@ body {
 
   .startup-intro {
     animation: startup-intro-exit 450ms ease-out both;
+  }
+
+  .startup-intro::before {
+    animation: none;
+    opacity: 0;
   }
 
   .startup-initial {

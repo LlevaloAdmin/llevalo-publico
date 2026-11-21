@@ -10,10 +10,12 @@ const REDUCED_MOTION_DURATION_MS = 450;
 
 export function StartupIntro({ enabled, children }: StartupIntroProps) {
   const [visible, setVisible] = useState(enabled);
+  const [darkMode] = useState(() => localStorage.getItem('llevalo_dark_mode') === 'true');
 
   useEffect(() => {
     if (!enabled) return;
 
+    window.location.href = `llevalo://theme/${darkMode ? 'dark' : 'light'}`;
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const timeout = window.setTimeout(
       () => setVisible(false),
@@ -21,13 +23,13 @@ export function StartupIntro({ enabled, children }: StartupIntroProps) {
     );
 
     return () => window.clearTimeout(timeout);
-  }, [enabled]);
+  }, [enabled, darkMode]);
 
   return (
     <>
       {children}
       {visible && (
-        <div className="startup-intro" role="status" aria-label="Iniciando Llévalo">
+        <div className={`startup-intro ${darkMode ? 'startup-intro-dark' : ''}`} role="status" aria-label="Iniciando Llévalo">
           <div className="startup-wordmark" aria-hidden="true">
             <span className="startup-initial">L</span>
             <span className="startup-wordmark-rest">lévalo</span>

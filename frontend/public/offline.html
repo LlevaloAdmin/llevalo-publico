@@ -5,6 +5,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#fdfbf7">
     <title>Sin conexión · Llévalo</title>
+    <script>
+      (() => {
+        const themeFromUrl = new URLSearchParams(window.location.search).get('theme');
+        let darkMode = themeFromUrl === 'dark'
+          || (themeFromUrl !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        if (themeFromUrl !== 'dark' && themeFromUrl !== 'light') {
+          try {
+            const savedMode = localStorage.getItem('llevalo_dark_mode');
+            if (savedMode === 'true' || savedMode === 'false') darkMode = savedMode === 'true';
+          } catch {
+            // Use the device appearance if local storage is unavailable.
+          }
+        }
+        document.documentElement.dataset.theme = darkMode ? 'dark' : 'light';
+        document.querySelector('meta[name="theme-color"]').content = darkMode ? '#0b1120' : '#fdfbf7';
+      })();
+    </script>
     <style>
       :root {
         color-scheme: light;
@@ -13,8 +30,40 @@
         text-rendering: optimizeLegibility;
         -webkit-font-smoothing: antialiased;
         -moz-osx-font-smoothing: grayscale;
-        background: #fdfbf7;
-        color: #172033;
+        --page: #fdfbf7;
+        --text: #172033;
+        --surface: rgb(255 255 255 / 88%);
+        --border: #f1e8df;
+        --muted: #647084;
+        --icon-border: #ffe0d2;
+        --icon-background: #fff3ed;
+        --eyebrow: #e64a19;
+        --exit-border: #e8e4de;
+        --exit-background: #fff;
+        --exit-text: #475166;
+        --exit-active: #f8f5f0;
+        --backdrop-glow: rgb(255 87 34 / 9%);
+        --card-shadow: 0 24px 70px rgb(75 44 24 / 10%);
+        background: var(--page);
+        color: var(--text);
+      }
+
+      :root[data-theme="dark"] {
+        color-scheme: dark;
+        --page: #0b1120;
+        --text: #f8fafc;
+        --surface: rgb(15 23 42 / 94%);
+        --border: #263244;
+        --muted: #a6b0c2;
+        --icon-border: #71321f;
+        --icon-background: #351f19;
+        --eyebrow: #fd8a61;
+        --exit-border: #3a4659;
+        --exit-background: #1e293b;
+        --exit-text: #e2e8f0;
+        --exit-active: #334155;
+        --backdrop-glow: rgb(255 87 34 / 11%);
+        --card-shadow: 0 24px 70px rgb(0 0 0 / 35%);
       }
 
       * {
@@ -30,18 +79,18 @@
         display: grid;
         place-items: center;
         background:
-          radial-gradient(ellipse at 50% 30%, rgb(255 87 34 / 9%), transparent 58%),
-          #fdfbf7;
+          radial-gradient(ellipse at 50% 30%, var(--backdrop-glow), transparent 58%),
+          var(--page);
       }
 
       main {
         width: min(100%, 380px);
         padding: 32px 24px 24px;
         text-align: center;
-        border: 1px solid #f1e8df;
+        border: 1px solid var(--border);
         border-radius: 30px;
-        background: rgb(255 255 255 / 88%);
-        box-shadow: 0 24px 70px rgb(75 44 24 / 10%);
+        background: var(--surface);
+        box-shadow: var(--card-shadow);
       }
 
       .brand-mark {
@@ -65,9 +114,9 @@
         margin: 0 auto 20px;
         display: grid;
         place-items: center;
-        border: 1px solid #ffe0d2;
+        border: 1px solid var(--icon-border);
         border-radius: 25px;
-        background: #fff3ed;
+        background: var(--icon-background);
         color: #ff5722;
       }
 
@@ -83,7 +132,7 @@
 
       .eyebrow {
         margin: 0 0 8px;
-        color: #e64a19;
+        color: var(--eyebrow);
         font-size: 12px;
         font-weight: 800;
         letter-spacing: 0.13em;
@@ -99,7 +148,7 @@
 
       .message {
         margin: 12px 0 26px;
-        color: #647084;
+        color: var(--muted);
         font-size: 15px;
         line-height: 1.65;
       }
@@ -137,13 +186,13 @@
       }
 
       .exit {
-        border: 1px solid #e8e4de;
-        background: #fff;
-        color: #475166;
+        border: 1px solid var(--exit-border);
+        background: var(--exit-background);
+        color: var(--exit-text);
       }
 
       .exit:active {
-        background: #f8f5f0;
+        background: var(--exit-active);
       }
 
       @media (prefers-reduced-motion: reduce) {

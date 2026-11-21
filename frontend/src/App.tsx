@@ -342,8 +342,12 @@ export default function App() {
   const [serviceType, setServiceType] = useState<TipoServicio>('envios');
   
   const [darkMode, setDarkMode] = useState<boolean>(() => localStorage.getItem('llevalo_dark_mode') === 'true');
-  const [sinConexion, setSinConexion] = useState(() => typeof navigator !== 'undefined' && !navigator.onLine);
+  const [estadoConexion, setEstadoConexion] = useState<'sin-internet' | 'lenta' | null>(
+    () => typeof navigator !== 'undefined' && !navigator.onLine ? 'sin-internet' : null
+  );
   const [probandoConexion, setProbandoConexion] = useState(false);
+  const fallosConexionRef = useRef(0);
+  const medicionesLentasRef = useRef(0);
 
   const [usuario, setUsuario] = useState<UsuarioSesion | null>(() => {
     const storedUser = localStorage.getItem('llevalo_usuario');
@@ -551,16 +555,75 @@ export default function App() {
     };
   }, [activeTab, volverMenu]);
 
+  const comprobarConexion = useCallback(async (manual = false): Promise<boolean> => {
+    if (manual) setProbandoConexion(true);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 7000);
+    const inicio = performance.now();
+
+    try {
+      if (!navigator.onLine) {
+        fallosConexionRef.current = 2;
+        setEstadoConexion('sin-internet');
+        return false;
+      }
+
+      const url = API_URL ? `${API_URL}/api/ping` : window.location.origin;
+      const response = await fetch(url, { cache: 'no-store', signal: controller.signal });
+      if (!response.ok) throw new Error(`La verificación de conexión respondió ${response.status}.`);
+
+      fallosConexionRef.current = 0;
+      if (performance.now() - inicio > 3500) {
+        medicionesLentasRef.current += 1;
+        if (medicionesLentasRef.current >= 2) setEstadoConexion('lenta');
+      } else {
+        medicionesLentasRef.current = 0;
+        setEstadoConexion(null);
+      }
+      return true;
+    } catch {
+      medicionesLentasRef.current = 0;
+      fallosConexionRef.current += 1;
+      if (manual || !navigator.onLine || fallosConexionRef.current >= 2) {
+        setEstadoConexion('sin-internet');
+      }
+      return false;
+    } finally {
+      window.clearTimeout(timeout);
+      if (manual) setProbandoConexion(false);
+    }
+  }, []);
+
+  const reintentarConexion = async () => {
+    if (await comprobarConexion(true)) window.location.reload();
+  };
+
   useEffect(() => {
-    const alDesconectar = () => setSinConexion(true);
-    const alConectar = () => setSinConexion(false);
+    const alDesconectar = () => {
+      fallosConexionRef.current = 2;
+      setEstadoConexion('sin-internet');
+    };
+    const alConectar = () => {
+      fallosConexionRef.current = 0;
+      void comprobarConexion();
+    };
+    const alVolverALaApp = () => {
+      if (!document.hidden) void comprobarConexion();
+    };
+
+    const primerChequeo = window.setTimeout(() => void comprobarConexion(), 0);
+    const intervalo = window.setInterval(() => void comprobarConexion(), 15_000);
     window.addEventListener('offline', alDesconectar);
     window.addEventListener('online', alConectar);
+    document.addEventListener('visibilitychange', alVolverALaApp);
     return () => {
+      window.clearInterval(intervalo);
+      window.clearTimeout(primerChequeo);
       window.removeEventListener('offline', alDesconectar);
       window.removeEventListener('online', alConectar);
+      document.removeEventListener('visibilitychange', alVolverALaApp);
     };
-  }, []);
+  }, [comprobarConexion]);
 
   useEffect(() => {
     const setupFullScreen = async () => {
@@ -579,25 +642,7 @@ export default function App() {
     const nuevo = !darkMode;
     setDarkMode(nuevo);
     localStorage.setItem('llevalo_dark_mode', String(nuevo));
-  };
-
-  const reintentarConexion = async () => {
-    setProbandoConexion(true);
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 5000);
-    try {
-      const response = await fetch(API_URL || window.location.origin, {
-        method: 'HEAD',
-        cache: 'no-store',
-        signal: controller.signal
-      });
-      setSinConexion(response.status >= 500);
-    } catch {
-      setSinConexion(true);
-    } finally {
-      window.clearTimeout(timeout);
-      setProbandoConexion(false);
-    }
+    if (Capacitor.isNativePlatform()) window.location.href = `llevalo://theme/${nuevo ? 'dark' : 'light'}`;
   };
 
   const sincronizarDatos = async () => {
@@ -1768,34 +1813,61 @@ export default function App() {
 
       <main className="app-page flex-1 flex flex-col p-4 md:p-6 max-w-7xl mx-auto w-full">
         {activeTab === 'home' && !usuario && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center py-8 lg:py-14">
-            <div className="space-y-6">
-              <div className={`inline-flex items-center space-x-2 px-4 py-1.5 rounded-full text-xs font-bold uppercase border ${darkMode ? 'bg-orange-950/60 border-orange-900 text-orange-300' : 'bg-orange-100 border-orange-200 text-[#FF5722]'}`}>
-                <MapPin size={14} className="text-[#FF5722]" />
-                <span>Carabobo, Venezuela 🇻🇪</span>
-              </div>
-              <h1 className={`text-4xl lg:text-7xl font-black tracking-tight leading-[1.08] ${darkMode ? 'text-white' : 'text-slate-900'}`}>
-                Lo que necesites, <span className="text-[#FF5722]">llévalo ya.</span>
-              </h1>
-              <p className={`text-base lg:text-lg leading-relaxed max-w-xl ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>
-                Envíos y viajes en San Diego. Conoce quién realizará el servicio y sigue cada solicitud desde la app.
-              </p>
+          <>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center py-8 lg:py-14">
+              <div className="space-y-6">
+                <div className={`inline-flex items-center space-x-2 px-4 py-1.5 rounded-full text-xs font-bold uppercase border ${darkMode ? 'bg-orange-950/60 border-orange-900 text-orange-300' : 'bg-orange-100 border-orange-200 text-[#FF5722]'}`}>
+                  <MapPin size={14} className="text-[#FF5722]" />
+                  <span>Carabobo, Venezuela 🇻🇪</span>
+                </div>
+                <h1 className={`text-4xl lg:text-7xl font-black tracking-tight leading-[1.08] ${darkMode ? 'text-white' : 'text-slate-900'}`}>
+                  Lo que necesites, <span className="text-[#FF5722]">llévalo ya.</span>
+                </h1>
+                <p className={`text-base lg:text-lg leading-relaxed max-w-xl ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>
+                  Envíos y viajes en San Diego. Conoce quién realizará el servicio y sigue cada solicitud desde la app.
+                </p>
 
-              <div className="pt-2">
-                <button onClick={() => { setAuthMode('choice'); setAuthRoleSelection('cliente'); navegarA('auth'); }} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-[#FF5722] px-8 py-4 font-bold text-white shadow-lg transition hover:bg-[#F4511E] cursor-pointer sm:w-fit">
-                  <span>Empezar aquí</span>
-                  <ArrowRight size={18} />
+                <div className="pt-2">
+                  <button onClick={() => { setAuthMode('choice'); setAuthRoleSelection('cliente'); navegarA('auth'); }} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-[#FF5722] px-8 py-4 font-bold text-white shadow-lg transition hover:bg-[#F4511E] cursor-pointer sm:w-fit">
+                    <span>Empezar aquí</span>
+                    <ArrowRight size={18} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="relative">
+                <div className={`rounded-3xl overflow-hidden shadow-xl border p-2 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-orange-100 border-orange-200'}`}>
+                  <img src="/hero-moto.jpg" alt="Repartidor de Llévalo en moto" className="rounded-2xl object-cover w-full h-[420px]" />
+                </div>
+              </div>
+            </div>
+
+            <section className="mx-auto w-full max-w-6xl space-y-5 pb-10">
+              <div className="max-w-2xl">
+                <p className="text-xs font-black uppercase tracking-[0.18em] text-[#FF5722]">A tu ritmo, desde un solo lugar</p>
+                <h2 className={`mt-2 text-2xl font-black md:text-3xl ${darkMode ? 'text-white' : 'text-slate-900'}`}>Resuelve más con Llévalo</h2>
+              </div>
+              <div className="grid gap-3 md:grid-cols-3">
+                {[
+                  { icon: Package, title: 'Envíos y mandados', description: 'Comida, mercado y encargos para tu día a día.' },
+                  { icon: CarFront, title: 'Viajes en la ciudad', description: 'Solicita un traslado y conoce el estado del servicio.' },
+                  { icon: Navigation, title: 'Seguimiento sencillo', description: 'Consulta el avance de tu solicitud desde la app.' }
+                ].map(({ icon: Icon, title, description }) => (
+                  <article key={title} className={`rounded-2xl border p-5 transition-colors ${darkMode ? 'border-slate-800 bg-slate-900/80' : 'border-orange-100 bg-white'}`}>
+                    <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-orange-100 text-[#FF5722]"><Icon size={20} /></div>
+                    <h3 className={`mt-4 font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>{title}</h3>
+                    <p className={`mt-2 text-sm leading-relaxed ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>{description}</p>
+                  </article>
+                ))}
+              </div>
+              <div className={`flex flex-col gap-3 rounded-2xl border p-4 text-sm sm:flex-row sm:items-center sm:justify-between ${darkMode ? 'border-slate-800 bg-slate-900/70 text-slate-300' : 'border-orange-100 bg-white text-slate-600'}`}>
+                <span><strong className={darkMode ? 'text-white' : 'text-slate-900'}>Así de fácil:</strong> crea tu cuenta, indica qué necesitas y sigue el servicio.</span>
+                <button type="button" onClick={() => { setAuthMode('choice'); setAuthRoleSelection('cliente'); navegarA('auth'); }} className="inline-flex shrink-0 items-center gap-2 font-bold text-[#FF5722]">
+                  Crear cuenta <ArrowRight size={16} />
                 </button>
               </div>
-            </div>
-
-            {/* Imagen exacta apuntando al archivo local /hero-moto.jpg */}
-            <div className="relative">
-              <div className={`rounded-3xl overflow-hidden shadow-xl border p-2 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-orange-100 border-orange-200'}`}>
-                <img src="/hero-moto.jpg" alt="Repartidor de Llévalo en moto" className="rounded-2xl object-cover w-full h-[420px]" />
-              </div>
-            </div>
-          </div>
+            </section>
+          </>
         )}
 
         {activeTab === 'home' && usuario && (
@@ -1827,11 +1899,18 @@ export default function App() {
             </div>
 
             {usuario.rol === 'cliente' ? (
-              <div className="grid gap-4 md:grid-cols-2">
-                <button onClick={irAPedidos} className={`rounded-3xl border p-6 text-left transition hover:-translate-y-0.5 ${darkMode ? 'bg-slate-900 border-slate-800 hover:border-orange-700' : 'bg-white border-orange-100 hover:border-orange-300'}`}>
+              <div className="grid gap-4 md:grid-cols-3">
+                <button onClick={() => { setServiceType('envios'); irAPedidos(); }} className={`rounded-3xl border p-6 text-left transition hover:-translate-y-0.5 ${darkMode ? 'bg-slate-900 border-slate-800 hover:border-orange-700' : 'bg-white border-orange-100 hover:border-orange-300'}`}>
                   <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-orange-100 text-[#FF5722]"><Package size={20} /></div>
-                  <h2 className="font-black">Solicitar un envío</h2>
-                  <p className="mt-2 text-xs text-slate-500">Indica origen y destino, y sigue tu solicitud desde aquí.</p>
+                  <h2 className="font-black">Pedir un envío</h2>
+                  <p className="mt-2 text-xs text-slate-500">Comida, mercado, mandados y más.</p>
+                  <span className="mt-4 inline-flex items-center gap-1 text-xs font-bold text-[#FF5722]">Continuar <ArrowRight size={14} /></span>
+                </button>
+                <button onClick={() => { setServiceType('viajes'); irAPedidos(); }} className={`rounded-3xl border p-6 text-left transition hover:-translate-y-0.5 ${darkMode ? 'bg-slate-900 border-slate-800 hover:border-orange-700' : 'bg-white border-orange-100 hover:border-orange-300'}`}>
+                  <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-700"><CarFront size={20} /></div>
+                  <h2 className="font-black">Pedir un viaje</h2>
+                  <p className="mt-2 text-xs text-slate-500">Indica tu origen y destino para ver el costo.</p>
+                  <span className="mt-4 inline-flex items-center gap-1 text-xs font-bold text-[#FF5722]">Continuar <ArrowRight size={14} /></span>
                 </button>
                 <div className={`rounded-3xl border p-6 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-orange-100'}`}>
                   <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-700"><Clock size={20} /></div>
@@ -1849,7 +1928,7 @@ export default function App() {
                 </div>
               </div>
             ) : (
-              <div className="grid gap-4 md:grid-cols-2">
+              <div className="grid gap-4 md:grid-cols-3">
                 <div className={`rounded-3xl border p-6 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-orange-100'}`}>
                   <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-700"><Bike size={20} /></div>
                   <h2 className="font-black">{pedidoAsignadoRepartidor ? 'Entrega en curso' : 'Trabaja con Llévalo'}</h2>
@@ -1865,6 +1944,12 @@ export default function App() {
                   <p className="mt-2 text-xs text-slate-500">{repartidorOnline ? 'Estás conectado y puedes recibir pedidos.' : 'Estás desconectado y no recibirás nuevas solicitudes.'}</p>
                   <button onClick={() => navegarA('repartidor')} className="mt-4 text-xs font-bold text-[#FF5722] hover:underline">Ir al radar de trabajos</button>
                 </div>
+                <button type="button" onClick={() => navegarA('perfil')} className={`rounded-3xl border p-6 text-left transition hover:-translate-y-0.5 ${darkMode ? 'bg-slate-900 border-slate-800 hover:border-orange-700' : 'bg-white border-orange-100 hover:border-orange-300'}`}>
+                  <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-orange-100 text-[#FF5722]"><User size={20} /></div>
+                  <h2 className="font-black">Tu perfil</h2>
+                  <p className="mt-2 text-xs text-slate-500">Revisa tus datos, vehículo y disponibilidad.</p>
+                  <span className="mt-4 inline-flex items-center gap-1 text-xs font-bold text-[#FF5722]">Abrir perfil <ArrowRight size={14} /></span>
+                </button>
               </div>
             )}
 
@@ -3102,25 +3187,31 @@ export default function App() {
           </section>
         )}
       </main>
-      {sinConexion && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="offline-title">
-          <div className="w-full max-w-sm space-y-4 rounded-3xl border border-slate-700 bg-slate-900 p-6 text-white shadow-2xl">
+      {estadoConexion && (
+        <div className={`fixed inset-0 z-[100] flex items-center justify-center p-4 backdrop-blur-sm ${darkMode ? 'bg-slate-950/75' : 'bg-slate-900/35'}`} role="dialog" aria-modal="true" aria-labelledby="offline-title">
+          <div className={`w-full max-w-sm space-y-4 rounded-3xl border p-6 shadow-2xl ${darkMode ? 'border-slate-700 bg-slate-900 text-white' : 'border-orange-100 bg-white text-slate-900'}`}>
             <div className="flex items-start gap-3">
-              <XCircle size={24} className="mt-0.5 shrink-0 text-amber-400" />
+              <XCircle size={24} className={`mt-0.5 shrink-0 ${darkMode ? 'text-amber-400' : 'text-[#FF5722]'}`} />
               <div>
-                <h2 id="offline-title" className="text-lg font-black">Sin conexión</h2>
-                <p className="mt-1 text-sm leading-relaxed text-slate-300">Reconecta tu internet para continuar. Tus solicitudes no se enviarán hasta recuperar la conexión.</p>
+                <h2 id="offline-title" className="text-lg font-black">
+                  {estadoConexion === 'lenta' ? 'Conexión débil' : 'Sin conexión'}
+                </h2>
+                <p className={`mt-1 text-sm leading-relaxed ${darkMode ? 'text-slate-300' : 'text-slate-600'}`}>
+                  {estadoConexion === 'lenta'
+                    ? 'La respuesta está tardando demasiado. Revisa tu señal de Wi-Fi o datos móviles; tus solicitudes podrían no enviarse.'
+                    : 'Se perdió la conexión a internet. Reconéctate para continuar; tus solicitudes no se enviarán mientras estés sin conexión.'}
+                </p>
               </div>
             </div>
             <button type="button" onClick={() => void reintentarConexion()} disabled={probandoConexion} className="w-full rounded-xl bg-[#FF5722] px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
               {probandoConexion ? 'Comprobando conexión…' : 'Reintentar conexión'}
             </button>
             {Capacitor.getPlatform() === 'android' ? (
-              <button type="button" onClick={() => void CapacitorApp.exitApp()} className="w-full rounded-xl border border-slate-600 px-4 py-3 text-sm font-bold text-slate-200">
+              <button type="button" onClick={() => void CapacitorApp.exitApp()} className={`w-full rounded-xl border px-4 py-3 text-sm font-bold ${darkMode ? 'border-slate-600 text-slate-200' : 'border-slate-200 text-slate-700'}`}>
                 Salir de la app
               </button>
             ) : (
-              <p className="text-center text-[11px] text-slate-400">Para salir, cierra esta pestaña del navegador.</p>
+              <p className={`text-center text-[11px] ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>Para salir, cierra esta pestaña del navegador.</p>
             )}
           </div>
         </div>
