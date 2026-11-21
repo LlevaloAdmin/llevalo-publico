@@ -5,8 +5,8 @@ interface StartupIntroProps {
   children: ReactNode;
 }
 
-const STARTUP_DURATION_MS = 1800;
-const REDUCED_MOTION_DURATION_MS = 450;
+const STARTUP_DURATION_MS = 2500;
+const REDUCED_MOTION_DURATION_MS = 900;
 
 export function StartupIntro({ enabled, children }: StartupIntroProps) {
   const [visible, setVisible] = useState(enabled);

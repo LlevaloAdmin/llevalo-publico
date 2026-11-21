@@ -15,6 +15,7 @@ import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.BridgeWebViewClient;
 
 public class MainActivity extends BridgeActivity {
+    private static final String OFFLINE_ASSET_URL = "file:///android_asset/public/offline.html";
     private static final String CLAVE_MODO_OSCURO = "dark_mode";
 
     @Override
@@ -36,7 +37,7 @@ public class MainActivity extends BridgeActivity {
             @Override
             public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
                 if (request.isForMainFrame()) {
-                    if (!mostrarPantallaOffline(view)) view.stopLoading();
+                    mostrarPantallaOffline(view);
                     return;
                 }
                 super.onReceivedError(view, request, error);
@@ -45,7 +46,7 @@ public class MainActivity extends BridgeActivity {
             @Override
             public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse errorResponse) {
                 if (request.isForMainFrame()) {
-                    if (!mostrarPantallaOffline(view)) view.stopLoading();
+                    mostrarPantallaOffline(view);
                     return;
                 }
                 super.onReceivedHttpError(view, request, errorResponse);
@@ -53,10 +54,8 @@ public class MainActivity extends BridgeActivity {
         });
         if (!hayInternetValidado()) {
             String offlineUrl = crearUrlOffline();
-            if (offlineUrl != null) {
-                webView.stopLoading();
-                webView.loadUrl(offlineUrl);
-            }
+            webView.stopLoading();
+            webView.loadUrl(offlineUrl);
         }
     }
 
@@ -91,24 +90,19 @@ public class MainActivity extends BridgeActivity {
         return getBridge().launchIntent(uri);
     }
 
-    private boolean mostrarPantallaOffline(WebView view) {
-        String errorUrl = getBridge().getErrorUrl();
+    private void mostrarPantallaOffline(WebView view) {
         String currentUrl = view.getUrl();
-        if (errorUrl == null || (currentUrl != null && currentUrl.startsWith(errorUrl))) return false;
+        if (currentUrl != null && currentUrl.startsWith(OFFLINE_ASSET_URL)) return;
 
         String offlineUrl = crearUrlOffline();
-        if (offlineUrl == null) return false;
         view.stopLoading();
         view.loadUrl(offlineUrl);
-        return true;
     }
 
     private String crearUrlOffline() {
-        String errorUrl = getBridge().getErrorUrl();
-        if (errorUrl == null) return null;
         boolean darkMode = getPreferences(Context.MODE_PRIVATE)
             .getBoolean(CLAVE_MODO_OSCURO, modoOscuroDelDispositivo());
-        return Uri.parse(errorUrl)
+        return Uri.parse(OFFLINE_ASSET_URL)
             .buildUpon()
             .appendQueryParameter("theme", darkMode ? "dark" : "light")
             .build()

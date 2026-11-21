@@ -228,7 +228,7 @@ body {
   background: #fdfbf7;
   color: #0f172a;
   pointer-events: none;
-  animation: startup-intro-exit 1800ms ease-in-out both;
+  animation: startup-intro-exit 2500ms ease-in-out both;
 }
 
 .startup-intro-dark {
@@ -247,7 +247,7 @@ body {
   content: '';
   will-change: transform, opacity;
   transform: translate(-50%, -50%) scale(0.72);
-  animation: startup-glow 1800ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
+  animation: startup-glow 2500ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
 }
 
 .startup-intro-dark::before {
@@ -274,7 +274,7 @@ body {
   z-index: 1;
   color: #ff5722;
   transform-origin: center;
-  animation: startup-initial-reveal 1800ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
+  animation: startup-initial-reveal 2500ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
 }
 
 .startup-wordmark-rest {
@@ -282,7 +282,7 @@ body {
   width: 4.6ch;
   overflow: hidden;
   transform-origin: left center;
-  animation: startup-wordmark-collapse 1800ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
+  animation: startup-wordmark-collapse 2500ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
 }
 
 .admin-accordion > summary::-webkit-details-marker {
@@ -360,7 +360,7 @@ body {
   }
 
   .startup-intro {
-    animation: startup-intro-exit 450ms ease-out both;
+    animation: startup-intro-exit 900ms ease-out both;
   }
 
   .startup-intro::before {
@@ -369,11 +369,11 @@ body {
   }
 
   .startup-initial {
-    animation: startup-initial-reduced 450ms ease-out both;
+    animation: startup-initial-reduced 900ms ease-out both;
   }
 
   .startup-wordmark-rest {
-    animation: startup-wordmark-reduced 450ms ease-out both;
+    animation: startup-wordmark-reduced 900ms ease-out both;
   }
 }
 

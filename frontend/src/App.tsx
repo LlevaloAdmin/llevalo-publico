@@ -1884,17 +1884,11 @@ export default function App() {
                       : 'Tu próximo trabajo está a un toque. Revisa el radar y mantente disponible.'}
                   </p>
                 </div>
-                <div className="flex flex-col sm:flex-row gap-3">
-                  {usuario.rol === 'cliente' ? (
-                    <button onClick={irAPedidos} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-[#FF5722] px-6 py-3.5 text-sm font-bold text-white shadow-md transition hover:bg-[#F4511E]">
-                      Hacer un pedido <ArrowRight size={17} />
-                    </button>
-                  ) : (
-                    <button onClick={() => navegarA('repartidor')} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-[#FF5722] px-6 py-3.5 text-sm font-bold text-white shadow-md transition hover:bg-[#F4511E]">
-                      <Bike size={17} /> Abrir radar
-                    </button>
-                  )}
-                </div>
+                {usuario.rol === 'repartidor' && (
+                  <button onClick={() => navegarA('repartidor')} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-[#FF5722] px-6 py-3.5 text-sm font-bold text-white shadow-md transition hover:bg-[#F4511E]">
+                    <Bike size={17} /> Abrir radar
+                  </button>
+                )}
               </div>
             </div>
 
