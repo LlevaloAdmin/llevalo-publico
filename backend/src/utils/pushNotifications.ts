@@ -30,10 +30,14 @@ export const ensurePushTargetsTable = async (): Promise<void> => {
           token TEXT PRIMARY KEY,
           user_id INTEGER NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
           platform VARCHAR(10) NOT NULL CHECK (platform IN ('android', 'web')),
+          disponible BOOLEAN NOT NULL DEFAULT FALSE,
           creado_en TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
           actualizado_en TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
       `);
+      await pool.query(
+        'ALTER TABLE notification_devices ADD COLUMN IF NOT EXISTS disponible BOOLEAN NOT NULL DEFAULT FALSE'
+      );
       await pool.query(
         'CREATE INDEX IF NOT EXISTS notification_devices_user_id_idx ON notification_devices(user_id)'
       );
@@ -113,12 +117,10 @@ const sendToTargets = async (targets: PushTarget[], event: PushEvent): Promise<v
       const message: MulticastMessage = platform === 'android'
         ? {
           tokens,
-          notification: { title: event.title, body: event.body },
           data: messageData,
           android: {
             priority: 'high',
-            ttl: (remainingSeconds ?? 60) * 1000,
-            notification: { channelId: 'driver-requests', tag: `llevalo-${event.kind}-${event.orderId}` }
+            ttl: (remainingSeconds ?? 60) * 1000
           }
         }
         : {
@@ -169,7 +171,7 @@ export const notifyDriversOfNewOrder = async (pedido: {
     `SELECT d.token, d.platform
      FROM notification_devices d
      JOIN usuarios u ON u.id = d.user_id
-     WHERE u.rol = 'repartidor'`,
+     WHERE u.rol = 'repartidor' AND d.disponible = TRUE`,
   );
   await sendToTargets(result.rows, {
     kind: 'driver_order',
@@ -189,7 +191,7 @@ export const notifyDriverOfUpdate = async (
 ): Promise<void> => {
   await ensurePushTargetsTable();
   const result = await pool.query(
-    'SELECT token, platform FROM notification_devices WHERE user_id = $1',
+    'SELECT token, platform FROM notification_devices WHERE user_id = $1 AND disponible = TRUE',
     [driverId]
   );
   await sendToTargets(result.rows, {

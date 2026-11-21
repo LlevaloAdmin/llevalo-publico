@@ -16,7 +16,7 @@ In Render, set `FIREBASE_SERVICE_ACCOUNT_JSON` to the Firebase Admin service-acc
 
 For Android APK builds, add the GitHub Actions secret `GOOGLE_SERVICES_JSON_BASE64`: encode the Firebase Android `google-services.json` file as Base64 and save the result as the secret. The package name in that Firebase Android app must be `com.llevalo.app`. The JSON file is ignored locally and generated from the Actions secret during CI.
 
-Repartidores must sign in and enable notifications on each device. Web notifications support the “Postularme” and “Ignorar” actions. Android notifications open the app when tapped; Android action buttons while the app is closed require a separate native notification implementation. The request countdown is calculated when a notification arrives and updates while the app is active; a system notification cannot animate its countdown while the app is closed.
+Repartidores must sign in, enable location, connect to the radar, and enable notifications. Web and Android notifications offer “Postularme” and “Ignorar”; on Android, “Postularme” opens the app and submits the application, while “Ignorar” dismisses the notice. Android displays a native countdown; web notifications update the remaining time while the page is active.
 
 Currently, two official plugins are available:
 

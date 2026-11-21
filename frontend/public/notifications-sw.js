@@ -36,6 +36,8 @@ self.addEventListener('push', event => {
         badge: '/logo.svg',
         tag: `${data.kind}-${orderId}`,
         renotify: true,
+        requireInteraction: isNewOrder,
+        vibrate: isNewOrder ? [160, 80, 160] : undefined,
         actions: isNewOrder
           ? [
             { action: 'apply', title: 'Postularme' },

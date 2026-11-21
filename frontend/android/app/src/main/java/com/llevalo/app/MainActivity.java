@@ -1,12 +1,14 @@
 package com.llevalo.app;
 
 import android.content.Context;
+import android.content.Intent;
 import android.content.res.Configuration;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.Uri;
 import android.os.Bundle;
+import android.provider.Settings;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
@@ -56,7 +58,16 @@ public class MainActivity extends BridgeActivity {
             String offlineUrl = crearUrlOffline();
             webView.stopLoading();
             webView.loadUrl(offlineUrl);
+        } else {
+            abrirAccionNotificacion(getIntent());
         }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        abrirAccionNotificacion(intent);
     }
 
     @Override
@@ -77,6 +88,12 @@ public class MainActivity extends BridgeActivity {
             finish();
             return true;
         }
+        if ("llevalo".equals(uri.getScheme()) && "location-settings".equals(uri.getHost())) {
+            Intent settings = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                .setData(Uri.fromParts("package", getPackageName(), null));
+            startActivity(settings);
+            return true;
+        }
         if ("llevalo".equals(uri.getScheme()) && "theme".equals(uri.getHost())) {
             String mode = uri.getLastPathSegment();
             if ("dark".equals(mode) || "light".equals(mode)) {
@@ -88,6 +105,22 @@ public class MainActivity extends BridgeActivity {
             return true;
         }
         return getBridge().launchIntent(uri);
+    }
+
+    private void abrirAccionNotificacion(Intent intent) {
+        if (intent == null || !intent.hasExtra("notificationAction")) return;
+        String action = intent.getStringExtra("notificationAction");
+        int orderId = intent.getIntExtra("orderId", 0);
+        if (orderId < 1 || (!"apply".equals(action) && !"open".equals(action))) return;
+
+        Uri url = Uri.parse("https://llevalo.vercel.app/")
+            .buildUpon()
+            .appendQueryParameter("notificationAction", action)
+            .appendQueryParameter("orderId", String.valueOf(orderId))
+            .build();
+        getBridge().getWebView().post(() -> getBridge().getWebView().loadUrl(url.toString()));
+        intent.removeExtra("notificationAction");
+        intent.removeExtra("orderId");
     }
 
     private void mostrarPantallaOffline(WebView view, Uri failedUrl) {

@@ -15,10 +15,12 @@ const ensurePushTargetsTable = async () => {
           token TEXT PRIMARY KEY,
           user_id INTEGER NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
           platform VARCHAR(10) NOT NULL CHECK (platform IN ('android', 'web')),
+          disponible BOOLEAN NOT NULL DEFAULT FALSE,
           creado_en TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
           actualizado_en TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
       `);
+            await db_1.pool.query('ALTER TABLE notification_devices ADD COLUMN IF NOT EXISTS disponible BOOLEAN NOT NULL DEFAULT FALSE');
             await db_1.pool.query('CREATE INDEX IF NOT EXISTS notification_devices_user_id_idx ON notification_devices(user_id)');
         })().catch(error => {
             tablaDispositivosPromise = null;
@@ -95,12 +97,10 @@ const sendToTargets = async (targets, event) => {
             const message = platform === 'android'
                 ? {
                     tokens,
-                    notification: { title: event.title, body: event.body },
                     data: messageData,
                     android: {
                         priority: 'high',
-                        ttl: (remainingSeconds ?? 60) * 1000,
-                        notification: { channelId: 'driver-requests', tag: `llevalo-${event.kind}-${event.orderId}` }
+                        ttl: (remainingSeconds ?? 60) * 1000
                     }
                 }
                 : {
@@ -144,7 +144,7 @@ const notifyDriversOfNewOrder = async (pedido) => {
     const result = await db_1.pool.query(`SELECT d.token, d.platform
      FROM notification_devices d
      JOIN usuarios u ON u.id = d.user_id
-     WHERE u.rol = 'repartidor'`);
+     WHERE u.rol = 'repartidor' AND d.disponible = TRUE`);
     await sendToTargets(result.rows, {
         kind: 'driver_order',
         orderId: pedido.id,
@@ -157,7 +157,7 @@ const notifyDriversOfNewOrder = async (pedido) => {
 exports.notifyDriversOfNewOrder = notifyDriversOfNewOrder;
 const notifyDriverOfUpdate = async (driverId, orderId, title, body) => {
     await (0, exports.ensurePushTargetsTable)();
-    const result = await db_1.pool.query('SELECT token, platform FROM notification_devices WHERE user_id = $1', [driverId]);
+    const result = await db_1.pool.query('SELECT token, platform FROM notification_devices WHERE user_id = $1 AND disponible = TRUE', [driverId]);
     await sendToTargets(result.rows, {
         kind: 'driver_update',
         orderId,

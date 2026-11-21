@@ -23,6 +23,7 @@ const progressLine = (secondsRemaining: number) => {
 
 interface ActionableNotificationOptions extends NotificationOptions {
   actions: Array<{ action: string; title: string }>;
+  vibrate?: number[];
 }
 
 export const requestDriverNotificationPermission = async (): Promise<NotificationPermissionState> => {
@@ -109,8 +110,10 @@ export const showDriverOrderNotification = async (
     body,
     icon: '/logo.svg',
     badge: '/logo.svg',
-    tag: `driver-request-${order.id}`,
+    tag: `driver_order-${order.id}`,
     silent: update,
+    requireInteraction: !update,
+    vibrate: update ? undefined : [160, 80, 160],
     actions: [
       { action: 'apply', title: 'Postularme' },
       { action: 'ignore', title: 'Ignorar' }
@@ -159,6 +162,36 @@ export const clearDriverOrderNotification = async (orderId: number): Promise<voi
 
   if (!('serviceWorker' in navigator)) return;
   const registration = await navigator.serviceWorker.ready;
-  const notifications = await registration.getNotifications({ tag: `driver-request-${orderId}` });
-  notifications.forEach(notification => notification.close());
+  const notifications = await registration.getNotifications();
+  notifications
+    .filter(notification => {
+      const data = notification.data as { orderId?: unknown; kind?: unknown } | undefined;
+      return Number(data?.orderId) === orderId
+        && (data?.kind === 'driver-request' || data?.kind === 'driver_order');
+    })
+    .forEach(notification => notification.close());
+};
+
+export const clearAllDriverNotifications = async (): Promise<void> => {
+  if (Capacitor.isNativePlatform()) {
+    const delivered = await LocalNotifications.getDeliveredNotifications();
+    const ids = delivered.notifications
+      .map(notification => notification.id)
+      .filter(id => id >= 1_000_000 && id < 3_000_000);
+    if (ids.length > 0) await LocalNotifications.removeDeliveredNotificationsById({ ids });
+    return;
+  }
+
+  if (!('serviceWorker' in navigator)) return;
+  const registration = await navigator.serviceWorker.ready;
+  const notifications = await registration.getNotifications();
+  notifications
+    .filter(notification => {
+      const data = notification.data as { kind?: unknown } | undefined;
+      return data?.kind === 'driver-request'
+        || data?.kind === 'driver-update'
+        || data?.kind === 'driver_order'
+        || data?.kind === 'driver_update';
+    })
+    .forEach(notification => notification.close());
 };

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Activity, Bike, MapPin, ArrowLeft, ArrowRight, Camera, User, Eye, EyeOff, Clock, Send, Power, Star, Moon, Sun, DollarSign, XCircle, Navigation, CheckCircle2, Circle, Package, CarFront, LogOut, Users, UserRound, ChevronDown, Bell, BellOff, Sparkles } from 'lucide-react';
+import { Activity, Bike, MapPin, ArrowLeft, ArrowRight, Camera, User, Eye, EyeOff, Clock, Send, Power, Star, Moon, Sun, DollarSign, XCircle, Navigation, CheckCircle2, Circle, Package, CarFront, LogOut, Users, UserRound, ChevronDown, Bell, BellOff } from 'lucide-react';
 import { App as CapacitorApp } from '@capacitor/app';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { PushNotifications } from '@capacitor/push-notifications';
@@ -7,6 +7,7 @@ import { StatusBar, Style } from '@capacitor/status-bar';
 import { Capacitor, type PluginListenerHandle } from '@capacitor/core';
 import { registerWebPushToken } from './firebasePush';
 import {
+  clearAllDriverNotifications,
   clearDriverOrderNotification,
   getDriverNotificationPermission,
   requestDriverNotificationPermission,
@@ -275,13 +276,26 @@ const authenticatedFetch = (url: string, options: RequestInit = {}) => {
   return fetch(url, { ...options, headers });
 };
 
-const guardarTokenPush = async (token: string, platform: 'android' | 'web'): Promise<void> => {
+const guardarTokenPush = async (
+  token: string,
+  platform: 'android' | 'web',
+  disponible: boolean
+): Promise<void> => {
   const response = await authenticatedFetch(`${API_URL}/api/notifications/device-token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token, platform })
+    body: JSON.stringify({ token, platform, disponible })
   });
   if (!response.ok) throw new Error(await mensajeErrorApi(response, 'No se pudo registrar el dispositivo'));
+};
+
+const actualizarDisponibilidadPush = async (disponible: boolean): Promise<void> => {
+  const response = await authenticatedFetch(`${API_URL}/api/notifications/availability`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ disponible })
+  });
+  if (!response.ok) throw new Error(await mensajeErrorApi(response, 'No se pudo actualizar tu disponibilidad'));
 };
 
 const retirarTokenPush = async (token: string): Promise<void> => {
@@ -402,7 +416,17 @@ export default function App() {
   const [guardandoPerfil, setGuardandoPerfil] = useState(false);
   const [errorPerfil, setErrorPerfil] = useState('');
 
-  const [repartidorOnline, setRepartidorOnline] = useState(true);
+  const [repartidorOnline, setRepartidorOnline] = useState<boolean>(() => {
+    const storedUser = localStorage.getItem('llevalo_usuario');
+    if (!storedUser) return false;
+    try {
+      const parsed = JSON.parse(storedUser) as UsuarioSesion;
+      return parsed.rol === 'repartidor'
+        && localStorage.getItem(`llevalo_driver_online_${parsed.id}`) === 'true';
+    } catch {
+      return false;
+    }
+  });
   const [cambiandoEstadoRepartidor, setCambiandoEstadoRepartidor] = useState(false);
   const [avisosRepartidorActivos, setAvisosRepartidorActivos] = useState(() => {
     const storedUser = localStorage.getItem('llevalo_usuario');
@@ -452,6 +476,11 @@ export default function App() {
   const [coordsUsuarioGPS, setCoordsUsuarioGPS] = useState<{ lat: number; lng: number } | null>(null);
   const [ubicacionCargando, setUbicacionCargando] = useState(false);
   const [errorUbicacion, setErrorUbicacion] = useState('');
+  const disponiblePushRepartidor = repartidorOnline && Boolean(coordsUsuarioGPS);
+  const disponiblePushRepartidorRef = useRef(disponiblePushRepartidor);
+  useEffect(() => {
+    disponiblePushRepartidorRef.current = disponiblePushRepartidor;
+  }, [disponiblePushRepartidor]);
   const [recentrarMapa, setRecentrarMapa] = useState(0);
   const objetivoUbicacionRef = useRef<'origen' | 'destino' | null>(null);
 
@@ -926,6 +955,7 @@ export default function App() {
         }
       },
       (error) => {
+        if (error.code === error.PERMISSION_DENIED) setCoordsUsuarioGPS(null);
         const mensaje = error.code === error.PERMISSION_DENIED
           ? 'Permite el acceso a la ubicación en los permisos de la app o del navegador y vuelve a intentarlo.'
           : error.code === error.POSITION_UNAVAILABLE
@@ -1513,36 +1543,12 @@ export default function App() {
             || localStorage.getItem(`llevalo_driver_notifications_${usuario.id}`) !== 'true') return;
           const token = event.value;
           localStorage.setItem(`llevalo_push_token_${usuario.id}`, token);
-          void guardarTokenPush(token, 'android')
+          void guardarTokenPush(token, 'android', disponiblePushRepartidorRef.current)
             .catch(manejarErrorPush);
         }));
 
         guardar(await PushNotifications.addListener('registrationError', error => {
           manejarErrorPush(error);
-        }));
-
-        guardar(await PushNotifications.addListener('pushNotificationReceived', notification => {
-          const data = notification.data as Record<string, unknown> | undefined;
-          const orderId = Number(data?.orderId);
-          if (!Number.isSafeInteger(orderId) || orderId < 1) return;
-          if (data?.kind === 'driver_order') {
-            const deadline = typeof data.deadline === 'string' ? Date.parse(data.deadline) : NaN;
-            const secondsRemaining = Number.isFinite(deadline)
-              ? Math.max(0, Math.ceil((deadline - Date.now()) / 1000))
-              : 60;
-            if (secondsRemaining === 0) return;
-            void showDriverOrderNotification({
-              id: orderId,
-              serviceType: typeof data.serviceType === 'string' ? data.serviceType : 'Servicio',
-              secondsRemaining
-            }).catch(error => console.error('No se pudo mostrar la notificación push recibida:', error));
-          } else if (data?.kind === 'driver_update') {
-            void showDriverUpdateNotification(
-              notification.title ?? 'Actualización de tu trabajo',
-              notification.body ?? 'Abre Llévalo para revisar el estado.',
-              orderId
-            ).catch(error => console.error('No se pudo mostrar la actualización push recibida:', error));
-          }
         }));
 
         guardar(await PushNotifications.addListener('pushNotificationActionPerformed', event => {
@@ -1577,7 +1583,7 @@ export default function App() {
     void registerWebPushToken()
       .then(async token => {
         if (descartado) return;
-        await guardarTokenPush(token, 'web');
+        await guardarTokenPush(token, 'web', disponiblePushRepartidor);
         if (descartado
           || localStorage.getItem(`llevalo_driver_notifications_${usuario.id}`) !== 'true') {
           await retirarTokenPush(token);
@@ -1595,7 +1601,7 @@ export default function App() {
     return () => {
       descartado = true;
     };
-  }, [avisosRepartidorActivos, permisoAvisosRepartidor, usuario?.id, usuario?.rol]);
+  }, [avisosRepartidorActivos, disponiblePushRepartidor, permisoAvisosRepartidor, usuario?.id, usuario?.rol]);
 
   useEffect(() => {
     if (!('serviceWorker' in navigator)) return;
@@ -1804,7 +1810,11 @@ export default function App() {
     const token = localStorage.getItem('llevalo_token');
     if (usuario?.rol === 'repartidor') {
       localStorage.setItem(`llevalo_driver_notifications_${usuario.id}`, 'false');
+      localStorage.setItem(`llevalo_driver_online_${usuario.id}`, 'false');
       setAvisosRepartidorActivos(false);
+      setRepartidorOnline(false);
+      void actualizarDisponibilidadPush(false)
+        .catch(error => console.error('No se pudo marcar al repartidor como desconectado:', error));
     }
     const tokenPush = usuario?.rol === 'repartidor'
       ? localStorage.getItem(`llevalo_push_token_${usuario.id}`)
@@ -1853,7 +1863,10 @@ export default function App() {
     : [];
 
   const pedidosVisiblesRepartidor = usuario?.rol === 'repartidor' && Array.isArray(pedidosReales)
-    ? pedidosReales.filter(p => p.estado === 'pendiente' || p.estado === 'postulado' || (p.estado === 'aceptado' && p.repartidor_id === usuario.id) || (p.estado === 'entregado_repartidor' && p.repartidor_id === usuario.id))
+    ? pedidosReales.filter(p =>
+      (disponiblePushRepartidor && (p.estado === 'pendiente' || p.estado === 'postulado'))
+      || (p.estado === 'aceptado' && p.repartidor_id === usuario.id)
+      || (p.estado === 'entregado_repartidor' && p.repartidor_id === usuario.id))
     : [];
 
   const pedidoAsignadoRepartidor = usuario?.rol === 'repartidor' && Array.isArray(pedidosReales)
@@ -1868,6 +1881,7 @@ export default function App() {
     if (usuario?.rol !== 'repartidor') return;
     Promise.resolve().then(() => {
       setAvisosRepartidorActivos(localStorage.getItem(`llevalo_driver_notifications_${usuario.id}`) === 'true');
+      setRepartidorOnline(localStorage.getItem(`llevalo_driver_online_${usuario.id}`) === 'true');
     });
     void getDriverNotificationPermission()
       .then(setPermisoAvisosRepartidor)
@@ -1876,6 +1890,12 @@ export default function App() {
         setPermisoAvisosRepartidor('unsupported');
       });
   }, [usuario?.id, usuario?.rol]);
+
+  useEffect(() => {
+    if (usuario?.rol !== 'repartidor') return;
+    void actualizarDisponibilidadPush(disponiblePushRepartidor)
+      .catch(error => console.error('No se pudo sincronizar el estado disponible del repartidor:', error));
+  }, [disponiblePushRepartidor, usuario?.id, usuario?.rol]);
 
   const cambiarAvisosRepartidor = async () => {
     if (!usuario || usuario.rol !== 'repartidor') return;
@@ -1955,9 +1975,14 @@ export default function App() {
     snapshot.requestIds = idsSolicitudes;
     snapshot.applications = estadosPostulaciones;
 
-    if (!avisosRepartidorActivos || !repartidorOnline || permisoAvisosRepartidor !== 'granted') return;
+    if (!avisosRepartidorActivos || !disponiblePushRepartidor || permisoAvisosRepartidor !== 'granted') return;
 
     for (const pedido of solicitudesPorAvisar) {
+      if (Capacitor.isNativePlatform()
+        && localStorage.getItem(`llevalo_push_token_${usuario.id}`)) {
+        snapshot.notifiedIds.add(pedido.id);
+        continue;
+      }
       const publicadoEn = pedido.publicado_en ? Date.parse(pedido.publicado_en) : Number.NaN;
       const secondsRemaining = Number.isFinite(publicadoEn)
         ? Math.max(0, Math.ceil((publicadoEn + 60_000 - horaActual) / 1000))
@@ -1975,6 +2000,8 @@ export default function App() {
     }
 
     for (const postulacion of cambiosPostulacion) {
+      if (Capacitor.isNativePlatform()
+        && localStorage.getItem(`llevalo_push_token_${usuario.id}`)) continue;
       const aceptada = postulacion.estado === 'aceptado';
       void showDriverUpdateNotification(
         aceptada ? '¡Te eligieron para el trabajo!' : 'El cliente eligió a otro repartidor',
@@ -1987,11 +2014,11 @@ export default function App() {
   }, [
     avisosRepartidorActivos,
     horaActual,
+    disponiblePushRepartidor,
     pedidosCargadosUsuarioId,
     pedidosReales,
     permisoAvisosRepartidor,
     postulacionesReales,
-    repartidorOnline,
     usuario
   ]);
 
@@ -2012,7 +2039,7 @@ export default function App() {
       }
     }
 
-    if (!avisosRepartidorActivos || !repartidorOnline || permisoAvisosRepartidor !== 'granted') {
+    if (!avisosRepartidorActivos || !disponiblePushRepartidor || permisoAvisosRepartidor !== 'granted') {
       for (const pedidoId of snapshot.notifiedIds) {
         void clearDriverOrderNotification(pedidoId).catch(error => {
           console.error('No se pudo silenciar una notificación de trabajo:', error);
@@ -2055,10 +2082,10 @@ export default function App() {
   }, [
     avisosRepartidorActivos,
     horaActual,
+    disponiblePushRepartidor,
     pedidosCargadosUsuarioId,
     pedidosReales,
     permisoAvisosRepartidor,
-    repartidorOnline,
     usuario
   ]);
 
@@ -2140,7 +2167,21 @@ export default function App() {
   const cambiarEstadoRepartidor = async () => {
     if (!usuario || usuario.rol !== 'repartidor' || cambiandoEstadoRepartidor) return;
     if (!repartidorOnline) {
-      setRepartidorOnline(true);
+      if (!coordsUsuarioGPS) {
+        setErrorUbicacion('Activa la ubicación para conectarte y recibir trabajos.');
+        obtenerUbicacionActual();
+        return;
+      }
+      setCambiandoEstadoRepartidor(true);
+      try {
+        await actualizarDisponibilidadPush(true);
+        localStorage.setItem(`llevalo_driver_online_${usuario.id}`, 'true');
+        setRepartidorOnline(true);
+      } catch (error) {
+        alert(error instanceof Error ? error.message : 'No se pudo activar tu disponibilidad.');
+      } finally {
+        setCambiandoEstadoRepartidor(false);
+      }
       return;
     }
     if (pedidoAsignadoRepartidor) {
@@ -2161,33 +2202,62 @@ export default function App() {
         await cancelarPostulacionEnServidor(postulacion.pedido_id);
       }
       if (postulacionesPendientesRepartidor.length > 0) await sincronizarDatos();
+      await actualizarDisponibilidadPush(false);
+      localStorage.setItem(`llevalo_driver_online_${usuario.id}`, 'false');
       setRepartidorOnline(false);
+      void clearAllDriverNotifications()
+        .catch(error => console.error('No se pudieron retirar todas las notificaciones al desconectarte:', error));
     } catch (error) {
       await sincronizarDatos();
-      alert(error instanceof Error ? error.message : 'No se pudo cancelar las postulaciones.');
+      alert(error instanceof Error ? error.message : 'No se pudo desconectar al repartidor.');
     } finally {
       setCambiandoEstadoRepartidor(false);
     }
   };
 
+  const salirDelRadar = async () => {
+    if (!usuario || usuario.rol !== 'repartidor') return;
+    try {
+      await actualizarDisponibilidadPush(false);
+      localStorage.setItem(`llevalo_driver_online_${usuario.id}`, 'false');
+      setRepartidorOnline(false);
+      void clearAllDriverNotifications()
+        .catch(error => console.error('No se pudieron retirar las notificaciones al salir del radar:', error));
+    } catch (error) {
+      console.error('No se pudo desactivar la disponibilidad antes de salir:', error);
+      alert('No se pudo confirmar la desconexión. Comprueba tu conexión e inténtalo de nuevo.');
+      return;
+    }
+
+    if (Capacitor.isNativePlatform()) void CapacitorApp.exitApp();
+    else setActiveTab('home');
+  };
+
   useEffect(() => {
-    if (usuario?.rol !== 'repartidor' || !pedidoAsignadoRepartidorId || !navigator.geolocation) return;
+    if (usuario?.rol !== 'repartidor'
+      || (!pedidoAsignadoRepartidorId && activeTab !== 'repartidor')) return;
+    if (!navigator.geolocation) return;
 
     const watchId = navigator.geolocation.watchPosition(
       ({ coords }) => {
         setCoordsUsuarioGPS({ lat: coords.latitude, lng: coords.longitude });
         setErrorUbicacion('');
+        setUbicacionCargando(false);
       },
       (error) => {
+        if (error.code === error.PERMISSION_DENIED || document.visibilityState === 'visible') {
+          setCoordsUsuarioGPS(null);
+        }
         setErrorUbicacion(error.code === error.PERMISSION_DENIED
-          ? 'Activa el permiso de ubicación para compartir tu posición durante una entrega.'
+          ? 'Activa el permiso de ubicación para ver el mapa y recibir trabajos cercanos.'
           : 'No se pudo actualizar tu ubicación. Comprueba que el GPS esté activo.');
+        setUbicacionCargando(false);
       },
-      { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
+      { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 }
     );
 
     return () => navigator.geolocation.clearWatch(watchId);
-  }, [usuario?.id, usuario?.rol, pedidoAsignadoRepartidorId]);
+  }, [activeTab, usuario?.id, usuario?.rol, pedidoAsignadoRepartidorId]);
 
   useEffect(() => {
     if (usuario?.rol !== 'repartidor' || !pedidoAsignadoRepartidorId || !coordsUsuarioGPS) return;
@@ -2404,7 +2474,7 @@ export default function App() {
                 <div className={`rounded-3xl border p-6 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-orange-100'}`}>
                   <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-orange-100 text-[#FF5722]"><MapPin size={20} /></div>
                   <h2 className="font-black">Estado de conexión</h2>
-                  <p className="mt-2 text-xs text-slate-500">{repartidorOnline ? 'Estás conectado y puedes recibir pedidos.' : 'Estás desconectado y no recibirás nuevas solicitudes.'}</p>
+                  <p className="mt-2 text-xs text-slate-500">{disponiblePushRepartidor ? 'Estás conectado y puedes recibir pedidos.' : 'Activa la ubicación y conéctate desde el radar para recibir solicitudes.'}</p>
                   <button onClick={() => navegarA('repartidor')} className="mt-4 text-xs font-bold text-[#FF5722] hover:underline">Ir al radar de trabajos</button>
                 </div>
                 <button type="button" onClick={() => navegarA('perfil')} className={`rounded-3xl border p-6 text-left transition hover:-translate-y-0.5 ${darkMode ? 'bg-slate-900 border-slate-800 hover:border-orange-700' : 'bg-white border-orange-100 hover:border-orange-300'}`}>
@@ -2950,83 +3020,124 @@ export default function App() {
         {/* --- VISTA REPARTIDOR --- */}
         {activeTab === 'repartidor' && usuario?.rol === 'repartidor' && (
           <div className="space-y-6 py-4">
-            <div className={`relative overflow-hidden border p-6 rounded-3xl shadow-sm flex flex-col sm:flex-row justify-between items-center gap-4 ${darkMode ? 'bg-gradient-to-br from-slate-900 via-slate-900 to-orange-950/30 border-slate-800 text-white' : 'bg-gradient-to-br from-white via-white to-orange-50 border-orange-100'}`}>
-              <div aria-hidden="true" className="pointer-events-none absolute -right-10 -top-14 h-40 w-40 rounded-full bg-orange-500/10 blur-2xl" />
-              <div className="flex items-center space-x-4">
-                <div className="relative flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-[#FF5722] to-amber-400 text-lg font-black text-white shadow-lg shadow-orange-500/20 ring-4 ring-orange-500/10">
-                  {usuario.nombre ? usuario.nombre.substring(0, 2).toUpperCase() : 'R'}
+            <section className={`rounded-3xl border p-4 shadow-sm ${darkMode ? 'border-slate-800 bg-slate-900/90' : 'border-orange-100 bg-white'}`}>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#FF5722] text-sm font-black text-white">
+                    {usuario.nombre ? usuario.nombre.substring(0, 2).toUpperCase() : 'R'}
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-[#FF5722]">Radar de trabajos</p>
+                    <h3 className={`text-lg font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Hola, {usuario.nombre.split(' ')[0]}</h3>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-[10px] font-black uppercase tracking-[0.18em] text-[#FF5722]">Panel del repartidor</p>
-                  <h3 className={`mt-1 text-xl font-black tracking-tight ${darkMode ? 'text-white' : 'text-slate-900'}`}>Tu próximo trabajo</h3>
-                  <p className="mt-1 text-xs text-slate-500">Revisa solicitudes y mantente al tanto de tu servicio.</p>
+                <div className="flex items-center gap-2">
+                  <span className={`rounded-full px-3 py-1.5 text-[11px] font-bold ${
+                    disponiblePushRepartidor && !errorUbicacion
+                      ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                      : repartidorOnline || disponiblePushRepartidor
+                        ? 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
+                        : 'bg-slate-500/10 text-slate-500'
+                  }`}>
+                    {disponiblePushRepartidor && errorUbicacion
+                      ? 'GPS inestable'
+                      : disponiblePushRepartidor
+                      ? 'Disponible'
+                      : repartidorOnline
+                        ? errorUbicacion ? 'Ubicación pausada' : 'Buscando ubicación'
+                        : 'Desconectado'}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={(repartidorOnline && Boolean(pedidoAsignadoRepartidor)) || cambiandoEstadoRepartidor}
+                    onClick={() => void cambiarEstadoRepartidor()}
+                    title={pedidoAsignadoRepartidor
+                      ? 'No puedes desconectarte durante una entrega activa'
+                      : !disponiblePushRepartidor && !repartidorOnline
+                        ? 'Activa la ubicación para conectarte'
+                        : 'Cambiar disponibilidad'}
+                    aria-label={repartidorOnline ? 'Desconectarme' : 'Conectarme'}
+                    className={`rounded-xl p-2.5 transition ${
+                      repartidorOnline
+                        ? 'bg-red-500/10 text-red-600 hover:bg-red-500/20 dark:text-red-400'
+                        : 'bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 dark:text-emerald-400'
+                    } disabled:cursor-not-allowed disabled:opacity-50`}
+                  >
+                    <Power size={18} className={cambiandoEstadoRepartidor ? 'animate-pulse' : ''} />
+                  </button>
                 </div>
               </div>
 
-              <div className="relative flex items-center gap-3">
-                <div className={`flex items-center space-x-2 px-3 py-1.5 rounded-xl border text-xs font-bold ${repartidorOnline ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-500' : 'bg-red-500/10 border-red-500/30 text-red-500'}`}>
-                  <span className={`w-2.5 h-2.5 rounded-full ${repartidorOnline ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`}></span>
-                  <span>{repartidorOnline ? 'Disponible' : 'Desconectado'}</span>
+              <div className={`mt-4 flex flex-wrap items-center justify-between gap-3 border-t pt-3 ${darkMode ? 'border-slate-800' : 'border-slate-100'}`}>
+                <div className="flex items-center gap-2">
+                  <span className={`rounded-lg p-2 ${avisosRepartidorActivos ? 'bg-emerald-500/10 text-emerald-500' : 'bg-orange-500/10 text-[#FF5722]'}`}>
+                    {avisosRepartidorActivos ? <Bell size={16} /> : <BellOff size={16} />}
+                  </span>
+                  <div>
+                    <p className={`text-xs font-bold ${darkMode ? 'text-white' : 'text-slate-800'}`}>Notificaciones</p>
+                    <p className="text-[10px] text-slate-500">
+                      {avisosRepartidorActivos ? 'Avisos de trabajos activados' : 'Avisos desactivados'}
+                    </p>
+                  </div>
                 </div>
-                
-                <button 
-                  disabled={(repartidorOnline && Boolean(pedidoAsignadoRepartidor)) || cambiandoEstadoRepartidor}
-                  onClick={() => void cambiarEstadoRepartidor()}
-                  title={pedidoAsignadoRepartidor
-                    ? 'No puedes desconectarte durante una entrega activa'
-                    : postulacionesPendientesRepartidor.length > 0
-                      ? 'Al desconectarte se cancelarán tus postulaciones pendientes'
-                      : 'Cambiar estatus'}
-                  aria-label={repartidorOnline ? 'Desconectarme' : 'Conectarme'}
-                  className={`p-2 rounded-xl border transition cursor-pointer ${pedidoAsignadoRepartidor || cambiandoEstadoRepartidor ? 'opacity-50 cursor-not-allowed bg-slate-200 border-slate-300 text-slate-400' : (repartidorOnline ? 'bg-red-50 text-red-600 border-red-200' : 'bg-emerald-50 text-emerald-600 border-emerald-200')}`}
+                <button
+                  type="button"
+                  onClick={() => void cambiarAvisosRepartidor()}
+                  className={`rounded-xl px-3 py-2 text-[11px] font-bold transition ${
+                    avisosRepartidorActivos
+                      ? 'text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800'
+                      : 'bg-[#FF5722] text-white hover:bg-[#F4511E]'
+                  }`}
                 >
-                  <Power size={18} className={cambiandoEstadoRepartidor ? 'animate-pulse' : ''} />
+                  {avisosRepartidorActivos ? 'Silenciar' : 'Activar avisos'}
                 </button>
-              </div>
-            </div>
-
-            <div className={`flex flex-col gap-3 rounded-2xl border p-4 sm:flex-row sm:items-center sm:justify-between ${darkMode ? 'border-slate-800 bg-slate-900/80' : 'border-orange-100 bg-white'}`}>
-              <div className="flex items-center gap-3">
-                <span className={`flex h-10 w-10 items-center justify-center rounded-xl ${avisosRepartidorActivos ? 'bg-emerald-500/10 text-emerald-500' : 'bg-orange-500/10 text-[#FF5722]'}`}>
-                  {avisosRepartidorActivos ? <Bell size={19} /> : <BellOff size={19} />}
-                </span>
-                <div>
-                  <p className={`text-sm font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Avisos de trabajo</p>
-                  <p className="mt-0.5 text-[11px] text-slate-500">
-                    {avisosRepartidorActivos
-                      ? 'Te avisaremos de nuevas solicitudes y cambios en tus postulaciones.'
-                      : permisoAvisosRepartidor === 'denied'
-                        ? 'El permiso está bloqueado en los ajustes del dispositivo.'
-                        : 'Actívalos para recibir avisos accionables mientras usas Llévalo.'}
-                  </p>
+                <div className="ml-auto flex items-center gap-4 text-[11px]">
+                  <span className="text-slate-500">En radar <strong className={darkMode ? 'text-white' : 'text-slate-900'}>{pedidosVisiblesRepartidor.filter(p => p.estado === 'pendiente' || p.estado === 'postulado').length}</strong></span>
+                  <span className="text-slate-500">Postulaciones <strong className={darkMode ? 'text-white' : 'text-slate-900'}>{postulacionesPendientesRepartidor.length}</strong></span>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => void cambiarAvisosRepartidor()}
-                className={`inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-xs font-black transition ${avisosRepartidorActivos ? 'border border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800' : 'bg-[#FF5722] text-white shadow-md shadow-orange-500/20 hover:bg-[#F4511E]'}`}
-              >
-                {avisosRepartidorActivos ? <BellOff size={15} /> : <Bell size={15} />}
-                {avisosRepartidorActivos ? 'Silenciar avisos' : 'Activar notificaciones'}
-              </button>
-            </div>
+            </section>
 
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-              <div className={`rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-900/70' : 'border-orange-100 bg-white'}`}>
-                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">En el radar</p>
-                <p className={`mt-1 text-2xl font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>{pedidosVisiblesRepartidor.filter(p => p.estado === 'pendiente' || p.estado === 'postulado').length}</p>
-              </div>
-              <div className={`rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-900/70' : 'border-orange-100 bg-white'}`}>
-                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Tus postulaciones</p>
-                <p className={`mt-1 text-2xl font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>{postulacionesPendientesRepartidor.length}</p>
-              </div>
-              <div className={`col-span-2 flex items-center gap-3 rounded-2xl border p-4 sm:col-span-1 ${darkMode ? 'border-slate-800 bg-slate-900/70' : 'border-orange-100 bg-white'}`}>
-                <Sparkles size={18} className="text-amber-500" />
-                <p className="text-[11px] font-semibold leading-relaxed text-slate-500">
-                  {repartidorOnline ? 'Mantente disponible para recibir nuevas oportunidades.' : 'Conéctate cuando estés listo para trabajar.'}
-                </p>
-              </div>
-            </div>
+            {(!coordsUsuarioGPS || errorUbicacion) && (
+              <section role="alert" className={`flex flex-col gap-3 rounded-2xl border p-4 sm:flex-row sm:items-center sm:justify-between ${
+                darkMode ? 'border-amber-900/70 bg-amber-950/30 text-amber-200' : 'border-amber-200 bg-amber-50 text-amber-900'
+              }`}>
+                <div className="flex items-start gap-3">
+                  <MapPin size={19} className="mt-0.5 shrink-0 text-amber-500" />
+                  <div>
+                    <p className="text-sm font-bold">Activa la ubicación para usar el radar</p>
+                    <p className="mt-1 text-xs opacity-80">
+                      {errorUbicacion || (ubicacionCargando
+                        ? 'Buscando tu posición actual…'
+                        : 'Necesitamos tu ubicación para mantener el mapa actualizado y habilitar trabajos cercanos.')}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (Capacitor.isNativePlatform() && errorUbicacion) {
+                        window.location.href = 'llevalo://location-settings';
+                      } else {
+                        obtenerUbicacionActual();
+                      }
+                    }}
+                    disabled={ubicacionCargando}
+                    className="rounded-xl bg-[#FF5722] px-3 py-2 text-xs font-bold text-white disabled:opacity-60"
+                  >
+                    {ubicacionCargando ? 'Buscando…' : 'Activar ubicación'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void salirDelRadar()}
+                    className="rounded-xl border border-current/20 px-3 py-2 text-xs font-bold"
+                  >
+                    {Capacitor.isNativePlatform() ? 'Salir de la app' : 'Salir del radar'}
+                  </button>
+                </div>
+              </section>
+            )}
 
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
               <div className="lg:col-span-5 space-y-4">
@@ -3140,7 +3251,7 @@ export default function App() {
                                 </button>
                               </div>
                             ) : (
-                              <button disabled={!repartidorOnline} onClick={() => postularsePedido(p.id)} className={`w-full py-2.5 rounded-xl font-bold text-xs transition cursor-pointer ${!repartidorOnline ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-[#FF5722] hover:bg-[#F4511E] text-white shadow-sm'}`}>
+                              <button disabled={!disponiblePushRepartidor} onClick={() => postularsePedido(p.id)} className={`w-full py-2.5 rounded-xl font-bold text-xs transition cursor-pointer ${!disponiblePushRepartidor ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-[#FF5722] hover:bg-[#F4511E] text-white shadow-sm'}`}>
                                 Postularme a este trabajo
                               </button>
                             )}
@@ -3179,6 +3290,7 @@ export default function App() {
                     mostrarRuta={Boolean(pedidoAsignadoRepartidor)}
                     mostrarPines={true}
                     navegacionActiva={Boolean(pedidoAsignadoRepartidor)}
+                    seguirUsuario={activeTab === 'repartidor'}
                     darkMode={darkMode}
                     recentrarUsuario={recentrarMapa}
                   />

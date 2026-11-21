@@ -45,6 +45,7 @@ interface MapaLibreProps {
   mostrarRuta?: boolean;
   mostrarPines?: boolean;
   navegacionActiva?: boolean;
+  seguirUsuario?: boolean;
   darkMode?: boolean;
   recentrarUsuario?: number;
 }
@@ -62,6 +63,7 @@ export default function MapaLibre({
   mostrarRuta = false,
   mostrarPines = false,
   navegacionActiva = false,
+  seguirUsuario = false,
   darkMode = false,
   recentrarUsuario = 0
 }: MapaLibreProps) {
@@ -287,6 +289,17 @@ export default function MapaLibre({
     }
 
   }, [coordsOrigen, coordsDestino, coordsUsuario, mini, mostrarRuta, mostrarPines, navegacionActiva, darkMode]);
+
+  const latitudUsuario = coordsUsuario?.lat;
+  const longitudUsuario = coordsUsuario?.lng;
+  useEffect(() => {
+    if (!seguirUsuario || latitudUsuario === undefined || longitudUsuario === undefined) return;
+    const map = mapInstance.current;
+    if (!map) return;
+    const centro = new maplibregl.LngLat(longitudUsuario, latitudUsuario);
+    if (map.getCenter().distanceTo(centro) < 4) return;
+    map.easeTo({ center: centro, duration: 450, essential: true });
+  }, [latitudUsuario, longitudUsuario, seguirUsuario]);
 
   useEffect(() => {
     const coordinates = routeCoordinatesRef.current;
