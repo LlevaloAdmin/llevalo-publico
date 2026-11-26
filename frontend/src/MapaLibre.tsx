@@ -14,8 +14,7 @@ const crearElementoMarcador = (color: string, tamano: number, centro: number) =>
   marcador.style.backgroundColor = color;
   marcador.style.width = `${tamano}px`;
   marcador.style.height = `${tamano}px`;
-  marcador.style.borderRadius = '50% 50% 50% 0';
-  marcador.style.transform = 'rotate(-45deg)';
+  marcador.style.borderRadius = '50%';
   marcador.style.display = 'flex';
   marcador.style.alignItems = 'center';
   marcador.style.justifyContent = 'center';
@@ -27,7 +26,6 @@ const crearElementoMarcador = (color: string, tamano: number, centro: number) =>
   punto.style.height = `${centro}px`;
   punto.style.backgroundColor = 'white';
   punto.style.borderRadius = '50%';
-  punto.style.transform = 'rotate(45deg)';
   marcador.append(punto);
   return marcador;
 };
@@ -183,11 +181,10 @@ export default function MapaLibre({
       });
       mapInstance.current.addControl(
         new maplibregl.AttributionControl({ compact: true }),
-        'bottom-right'
+        'top-right'
       );
 
       if (!mini) {
-        mapInstance.current.addControl(new maplibregl.NavigationControl(), 'top-right');
         mapInstance.current.on('click', (e) => {
           if (onMapClickRef.current) onMapClickRef.current(e.lngLat.lat, e.lngLat.lng);
         });
@@ -232,7 +229,7 @@ export default function MapaLibre({
       if (!markerOrigenRef.current) {
         markerOrigenRef.current = new maplibregl.Marker({
           element: crearElementoMarcador('#10B981', mini ? 20 : 26, mini ? 6 : 8),
-          anchor: 'bottom'
+          anchor: 'center'
         });
       }
       markerOrigenRef.current.setLngLat([coordsOrigen.lng, coordsOrigen.lat]).addTo(map);
@@ -245,7 +242,7 @@ export default function MapaLibre({
       if (!markerDestinoRef.current) {
         markerDestinoRef.current = new maplibregl.Marker({
           element: crearElementoMarcador('#EF4444', mini ? 20 : 26, mini ? 6 : 8),
-          anchor: 'bottom'
+          anchor: 'center'
         });
       }
       markerDestinoRef.current.setLngLat([coordsDestino.lng, coordsDestino.lat]).addTo(map);

@@ -21,7 +21,7 @@ export function StartupIntro({ enabled, children }: StartupIntroProps) {
       splash.className = 'startup-intro';
       splash.setAttribute('role', 'status');
       splash.setAttribute('aria-label', 'Iniciando Llévalo');
-      splash.innerHTML = '<span class="startup-orbit startup-orbit-one" aria-hidden="true"></span><span class="startup-orbit startup-orbit-two" aria-hidden="true"></span><div class="startup-wordmark" aria-hidden="true"><span class="startup-initial">L</span><span class="startup-wordmark-rest">lévalo</span></div><span class="startup-tagline" aria-hidden="true">Lo que necesites, Llévalo ya</span>';
+      splash.innerHTML = '<span class="startup-orbit startup-orbit-one" aria-hidden="true"></span><span class="startup-orbit startup-orbit-two" aria-hidden="true"></span><div class="startup-wordmark" aria-hidden="true"><span class="startup-initial">L</span><span class="startup-wordmark-rest">lévalo</span></div>';
       document.body.appendChild(splash);
     }
 

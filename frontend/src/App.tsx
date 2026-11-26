@@ -3616,7 +3616,7 @@ export default function App() {
           <>
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 py-4 items-start">
             <div className="lg:col-span-5 space-y-4">
-              <div className={`border p-6 rounded-3xl shadow-sm space-y-4 ${darkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-orange-100'}`}>
+              <div className={`space-y-4 ${darkMode ? 'text-white' : ''}`}>
                 <div className="flex justify-between items-center">
                   <h3 className={`text-lg font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Nuevo Pedido</h3>
                 </div>
@@ -3869,7 +3869,7 @@ export default function App() {
 
                           {pasoSolicitud === 'tipo' && (
                             <div className="flex flex-1 items-center justify-center py-6">
-                              <div className={`w-full max-w-xl space-y-5 rounded-3xl border p-5 shadow-sm md:p-7 ${darkMode ? 'border-slate-800 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+                              <div className="w-full max-w-xl space-y-5">
                                 <p className={`text-center text-sm ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>Elige una opción para continuar con tu solicitud.</p>
                                 <div className="grid gap-4 sm:grid-cols-2">
                                   {([
@@ -3891,11 +3891,16 @@ export default function App() {
                           )}
 
                           {pasoSolicitud === 'ruta' && (
-                            <div className={`mx-auto flex w-full max-w-6xl min-h-0 flex-1 flex-col gap-3 rounded-3xl border p-3 shadow-sm md:gap-4 md:p-5 ${darkMode ? 'border-slate-800 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+                            <div className="mx-auto flex w-full max-w-6xl min-h-0 flex-1 flex-col gap-3 py-3 md:gap-4">
                               <div className="grid gap-2 sm:grid-cols-2">
                                 <label className="relative block text-[10px] font-bold text-slate-500">
                                   {serviceType === 'viajes' ? 'Punto de partida' : 'Origen'}
-                                  <input type="text" value={origenInput} onChange={event => buscarDireccionGeocoding(event.target.value, 'origen')} placeholder="Sector, calle o establecimiento" className={`mt-1 w-full rounded-2xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-700 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50 text-slate-900'}`} />
+                                  <div className="mt-1 flex gap-2">
+                                    <input type="text" value={origenInput} onChange={event => buscarDireccionGeocoding(event.target.value, 'origen')} placeholder="Sector, calle o establecimiento" className={`min-w-0 flex-1 rounded-2xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-700 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50 text-slate-900'}`} />
+                                    <button type="button" onClick={() => obtenerUbicacionActual('origen')} disabled={ubicacionCargando} aria-label="Usar mi ubicación como origen" title="Usar mi ubicación como origen" className="inline-flex items-center justify-center rounded-2xl border border-orange-200 bg-orange-50 px-3 text-[#FF5722] disabled:opacity-50 dark:border-orange-900 dark:bg-orange-950/30">
+                                      <Navigation size={17} className={ubicacionCargando && objetivoUbicacionRef.current === 'origen' ? 'animate-pulse' : ''} />
+                                    </button>
+                                  </div>
                                   {sugerenciasOrigen.length > 0 && (
                                     <span className={`absolute left-0 right-0 top-full z-40 mt-1 max-h-36 overflow-y-auto rounded-2xl border shadow-lg ${darkMode ? 'border-slate-700 bg-slate-900' : 'border-orange-100 bg-white'}`}>
                                       {sugerenciasOrigen.map((sugerencia, indice) => (
@@ -3906,7 +3911,12 @@ export default function App() {
                                 </label>
                                 <label className="relative block text-[10px] font-bold text-slate-500">
                                   {serviceType === 'viajes' ? 'Destino del viaje' : 'Destino'}
-                                  <input type="text" value={destinoInput} onChange={event => buscarDireccionGeocoding(event.target.value, 'destino')} placeholder="Sector, calle o establecimiento" className={`mt-1 w-full rounded-2xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-700 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50 text-slate-900'}`} />
+                                  <div className="mt-1 flex gap-2">
+                                    <input type="text" value={destinoInput} onChange={event => buscarDireccionGeocoding(event.target.value, 'destino')} placeholder="Sector, calle o establecimiento" className={`min-w-0 flex-1 rounded-2xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-700 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50 text-slate-900'}`} />
+                                    <button type="button" onClick={() => obtenerUbicacionActual('destino')} disabled={ubicacionCargando} aria-label="Usar mi ubicación como destino" title="Usar mi ubicación como destino" className="inline-flex items-center justify-center rounded-2xl border border-orange-200 bg-orange-50 px-3 text-[#FF5722] disabled:opacity-50 dark:border-orange-900 dark:bg-orange-950/30">
+                                      <Navigation size={17} className={ubicacionCargando && objetivoUbicacionRef.current === 'destino' ? 'animate-pulse' : ''} />
+                                    </button>
+                                  </div>
                                   {sugerenciasDestino.length > 0 && (
                                     <span className={`absolute left-0 right-0 top-full z-40 mt-1 max-h-36 overflow-y-auto rounded-2xl border shadow-lg ${darkMode ? 'border-slate-700 bg-slate-900' : 'border-orange-100 bg-white'}`}>
                                       {sugerenciasDestino.map((sugerencia, indice) => (
@@ -3931,9 +3941,6 @@ export default function App() {
                                   </button>
                                   <button type="button" aria-pressed={modoSeleccionMapa === 'origen'} onClick={() => setModoSeleccionMapa('origen')} className={`rounded-2xl border px-3 py-2 text-xs font-black shadow-md ${modoSeleccionMapa === 'origen' ? 'border-emerald-600 bg-emerald-600 text-white' : darkMode ? 'border-emerald-900 bg-slate-900 text-emerald-300' : 'border-emerald-200 bg-white text-emerald-700'}`}>Origen</button>
                                   <button type="button" aria-pressed={modoSeleccionMapa === 'destino'} onClick={() => setModoSeleccionMapa('destino')} className={`rounded-2xl border px-3 py-2 text-xs font-black shadow-md ${modoSeleccionMapa === 'destino' ? 'border-red-600 bg-red-600 text-white' : darkMode ? 'border-red-900 bg-slate-900 text-red-300' : 'border-red-200 bg-white text-red-700'}`}>Destino</button>
-                                  <span className={`basis-full w-fit rounded-2xl border px-3 py-1.5 text-[10px] font-bold shadow-sm backdrop-blur ${darkMode ? 'border-slate-700 bg-slate-900/90 text-slate-200' : 'border-white/80 bg-white/90 text-slate-600'}`}>
-                                    {modoSeleccionMapa ? `Toca el mapa para fijar el ${modoSeleccionMapa}` : 'Selecciona Origen y Destino en el mapa'}
-                                  </span>
                                 </div>
                                 <React.Suspense fallback={<div className="flex h-full items-center justify-center bg-slate-100 text-xs font-bold text-slate-500">Cargando mapa...</div>}>
                                   <MapaLibre
@@ -3964,7 +3971,7 @@ export default function App() {
 
                           {pasoSolicitud === 'pago' && (
                             <div className="flex flex-1 items-center justify-center overflow-y-auto py-5">
-                              <div className={`w-full max-w-lg space-y-4 rounded-3xl border p-5 shadow-xl md:p-7 ${darkMode ? 'border-slate-800 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+                              <div className="w-full max-w-lg space-y-4 py-5 md:py-7">
                                 <div className="rounded-2xl border border-orange-100 bg-orange-50/70 p-4 dark:border-slate-700 dark:bg-slate-950/70">
                                   <p className="text-[10px] font-black uppercase tracking-wider text-[#FF5722]">Pago Móvil</p>
                                   {cargandoConfiguracionPago ? <p className="mt-2 text-xs text-slate-500">Cargando datos de pago…</p> : configuracionPago?.pagoMovil.telefono ? (
@@ -4907,7 +4914,6 @@ export default function App() {
               }
             >
               <div className="space-y-5">
-              <p className="text-[11px] text-slate-500">Las cuentas activas se actualizan automáticamente cada 15 segundos.</p>
               <div className="horizontal-story-carousel admin-metric-carousel" role="region" aria-label="Métricas de actividad" aria-roledescription="carrusel" tabIndex={0}>
                 <article className={`rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-950/60' : 'border-slate-100 bg-slate-50'}`}>
                   <Users size={17} className="text-[#FF5722]" />
@@ -4932,11 +4938,6 @@ export default function App() {
                   <p className="mt-3 text-2xl font-black">{metricasAdmin?.repartidores_activos ?? '—'}</p>
                   <p className="text-[11px] font-semibold text-slate-500">Repartidores activos</p>
                   <p className="mt-1 text-[10px] text-slate-400">De {metricasAdmin?.repartidores_totales ?? '—'} registrados</p>
-                </article>
-                <article className={`rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-950/60' : 'border-slate-100 bg-slate-50'}`}>
-                  <Clock size={17} className="text-violet-500" />
-                  <p className="mt-3 text-sm font-black">Actualización automática</p>
-                  <p className="mt-1 text-[11px] text-slate-500">La presencia se renueva mientras la app está abierta.</p>
                 </article>
               </div>
 

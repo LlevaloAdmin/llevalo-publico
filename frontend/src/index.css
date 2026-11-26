@@ -451,10 +451,6 @@ body {
     transform: none;
   }
 
-  .startup-tagline {
-    animation: none;
-    opacity: 0;
-  }
 }
 
 @media (max-width: 640px) {
@@ -522,7 +518,7 @@ body {
   border: 1px solid rgb(255 255 255 / 48%);
   border-radius: 16px;
   background: linear-gradient(145deg, #ff8259 0%, #ef4f2c 60%, #d93d23 100%);
-  box-shadow: 0 7px 16px rgb(221 70 39 / 24%), inset 0 1px 0 rgb(255 255 255 / 35%);
+  box-shadow: none;
   color: white;
   font-size: 21px;
   font-weight: 950;
@@ -898,37 +894,6 @@ body {
   padding-bottom: calc(5.5rem + env(safe-area-inset-bottom));
 }
 
-.startup-tagline {
-  position: absolute;
-  top: calc(50% + clamp(3rem, 12vw, 5.5rem));
-  color: #68766f;
-  font-size: clamp(0.72rem, 2.8vw, 0.95rem);
-  font-weight: 800;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  opacity: 0;
-  animation: startup-tagline-enter 2700ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
-}
-
-@keyframes startup-tagline-enter {
-  0%,
-  35% {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-
-  58%,
-  78% {
-    opacity: 0.85;
-    transform: translateY(0);
-  }
-
-  100% {
-    opacity: 0;
-    transform: translateY(-4px);
-  }
-}
-
 @media (min-width: 768px) {
   .app-shell nav.mobile-nav {
     display: none;
@@ -1030,13 +995,8 @@ body {
   .landing-photo > div:first-child,
   .landing-service-card,
   .landing-info-card,
-  .dashboard-action-card::after,
-  .startup-tagline {
+  .dashboard-action-card::after {
     animation: none;
     transition: none;
-  }
-
-  .startup-tagline {
-    opacity: 0;
   }
 }
