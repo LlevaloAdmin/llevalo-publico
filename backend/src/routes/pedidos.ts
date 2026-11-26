@@ -1,5 +1,7 @@
-import { Router, Request, Response } from 'express';
+import express, { Router, Request, Response, type RequestHandler } from 'express';
 import type { PoolClient } from 'pg';
+import { gzip, gunzip } from 'node:zlib';
+import { promisify } from 'node:util';
 import { pool } from '../db';
 import { requireAdmin, requireAuth, requireRole } from '../middleware/auth';
 import { calcularTarifa } from '../utils/pricing';
@@ -12,6 +14,24 @@ import { sanitizarPedidoParaUsuario } from '../utils/orderPrivacy';
 import { notifyDriverOfUpdate, notifyDriversOfNewOrder } from '../utils/pushNotifications';
 
 const router = Router();
+const gzipAsync = promisify(gzip);
+const gunzipAsync = promisify(gunzip);
+const MAX_CHAT_MEDIA_BYTES = 10 * 1024 * 1024;
+const chatMediaBodyParser = express.raw({ type: '*/*', limit: MAX_CHAT_MEDIA_BYTES });
+
+const parseChatMediaBody: RequestHandler = (req, res, next) => {
+  chatMediaBodyParser(req, res, error => {
+    if (error) {
+      if (typeof error === 'object' && error !== null && 'type' in error && error.type === 'entity.too.large') {
+        res.status(413).json({ error: 'El archivo supera el límite de 10 MB.' });
+        return;
+      }
+      next(error);
+      return;
+    }
+    next();
+  });
+};
 
 const initTables = async () => {
   try {
@@ -47,6 +67,8 @@ const initTables = async () => {
         pago_confirmado_en TIMESTAMP,
         reembolso_confirmado_por INTEGER,
         reembolso_confirmado_en TIMESTAMP,
+        iniciado_en TIMESTAMPTZ,
+        completado_en TIMESTAMPTZ,
         estado VARCHAR(30) DEFAULT 'pendiente',
         repartidor_lat DOUBLE PRECISION,
         repartidor_lon DOUBLE PRECISION,
@@ -73,6 +95,8 @@ const initTables = async () => {
       ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS pago_confirmado_en TIMESTAMP;
       ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS reembolso_confirmado_por INTEGER;
       ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS reembolso_confirmado_en TIMESTAMP;
+      ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS iniciado_en TIMESTAMPTZ;
+      ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS completado_en TIMESTAMPTZ;
       ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS publicado_en TIMESTAMPTZ;
       ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS motivo_cancelacion VARCHAR(40);
 
@@ -130,7 +154,32 @@ const initTables = async () => {
         remitente_id INTEGER NOT NULL,
         remitente_nombre VARCHAR(120) NOT NULL,
         mensaje TEXT NOT NULL,
+        tipo VARCHAR(10) NOT NULL DEFAULT 'texto',
+        media_mime VARCHAR(100),
+        media_nombre VARCHAR(120),
+        media_comprimida BYTEA,
+        media_bytes INTEGER,
         creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      ALTER TABLE chat_mensajes ADD COLUMN IF NOT EXISTS tipo VARCHAR(10) NOT NULL DEFAULT 'texto';
+      ALTER TABLE chat_mensajes ADD COLUMN IF NOT EXISTS media_mime VARCHAR(100);
+      ALTER TABLE chat_mensajes ADD COLUMN IF NOT EXISTS media_nombre VARCHAR(120);
+      ALTER TABLE chat_mensajes ADD COLUMN IF NOT EXISTS media_comprimida BYTEA;
+      ALTER TABLE chat_mensajes ADD COLUMN IF NOT EXISTS media_bytes INTEGER;
+
+      CREATE TABLE IF NOT EXISTS chat_archivos_admin (
+        pedido_id INTEGER PRIMARY KEY REFERENCES pedidos(id) ON DELETE CASCADE,
+        cliente_nombre VARCHAR(120) NOT NULL,
+        repartidor_nombre VARCHAR(120),
+        tipo_servicio VARCHAR(50) NOT NULL,
+        iniciado_en TIMESTAMPTZ,
+        completado_en TIMESTAMPTZ NOT NULL,
+        duracion_segundos INTEGER,
+        cantidad_mensajes INTEGER NOT NULL,
+        vence_en TIMESTAMPTZ NOT NULL,
+        contenido_comprimido BYTEA NOT NULL,
+        creado_en TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
       );
     `);
   } catch (err) {
@@ -139,7 +188,153 @@ const initTables = async () => {
 };
 export const tablasPedidosListas = initTables();
 
+interface PedidoArchivoChat {
+  id: number;
+  cliente_id: number;
+  cliente_nombre: string;
+  repartidor_id: number | null;
+  repartidor_nombre: string | null;
+  tipo_servicio: string;
+  origen_texto: string;
+  destino_texto: string;
+  distancia_km: number;
+  tarifa: string | number;
+  creado_en: Date | string;
+  iniciado_en: Date | string | null;
+  completado_en: Date | string;
+}
+
+const crearArchivoChatAdmin = async (client: PoolClient, pedido: PedidoArchivoChat) => {
+  const mensajesResult = await client.query(
+    `SELECT id, remitente_id, remitente_nombre, mensaje, tipo, media_mime, media_nombre,
+            media_comprimida, media_bytes, creado_en
+     FROM chat_mensajes WHERE pedido_id = $1 ORDER BY creado_en ASC, id ASC`,
+    [pedido.id]
+  );
+  const mensajes = await Promise.all(mensajesResult.rows.map(async mensaje => ({
+    id: mensaje.id,
+    remitente_id: mensaje.remitente_id,
+    remitente_nombre: mensaje.remitente_nombre,
+    mensaje: mensaje.mensaje,
+    tipo: mensaje.tipo,
+    media_mime: mensaje.media_mime,
+    media_nombre: mensaje.media_nombre,
+    media_bytes: mensaje.media_bytes,
+    media_base64: mensaje.media_comprimida
+      ? (await gunzipAsync(mensaje.media_comprimida as Buffer)).toString('base64')
+      : null,
+    creado_en: mensaje.creado_en
+  })));
+  const iniciadoMs = pedido.iniciado_en ? new Date(pedido.iniciado_en).getTime() : Number.NaN;
+  const completadoMs = new Date(pedido.completado_en).getTime();
+  const duracionSegundos = Number.isFinite(iniciadoMs) && Number.isFinite(completadoMs)
+    ? Math.max(0, Math.round((completadoMs - iniciadoMs) / 1000))
+    : null;
+  const contenido = Buffer.from(JSON.stringify({
+    pedido: {
+      id: pedido.id,
+      codigo: codigoPedido(pedido.id),
+      cliente_id: pedido.cliente_id,
+      cliente_nombre: pedido.cliente_nombre,
+      repartidor_id: pedido.repartidor_id,
+      repartidor_nombre: pedido.repartidor_nombre,
+      tipo_servicio: pedido.tipo_servicio,
+      origen_texto: pedido.origen_texto,
+      destino_texto: pedido.destino_texto,
+      distancia_km: pedido.distancia_km,
+      tarifa: pedido.tarifa,
+      creado_en: pedido.creado_en,
+      iniciado_en: pedido.iniciado_en,
+      completado_en: pedido.completado_en,
+      duracion_segundos: duracionSegundos
+    },
+    mensajes
+  }), 'utf8');
+  const contenidoComprimido = await gzipAsync(contenido);
+  await client.query(
+    `INSERT INTO chat_archivos_admin
+     (pedido_id, cliente_nombre, repartidor_nombre, tipo_servicio, iniciado_en, completado_en,
+      duracion_segundos, cantidad_mensajes, vence_en, contenido_comprimido)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $6::timestamptz + INTERVAL '15 days', $9)
+     ON CONFLICT (pedido_id) DO UPDATE SET
+       cliente_nombre = EXCLUDED.cliente_nombre,
+       repartidor_nombre = EXCLUDED.repartidor_nombre,
+       tipo_servicio = EXCLUDED.tipo_servicio,
+       iniciado_en = EXCLUDED.iniciado_en,
+       completado_en = EXCLUDED.completado_en,
+       duracion_segundos = EXCLUDED.duracion_segundos,
+       cantidad_mensajes = EXCLUDED.cantidad_mensajes,
+       vence_en = EXCLUDED.vence_en,
+       contenido_comprimido = EXCLUDED.contenido_comprimido`,
+    [
+      pedido.id,
+      pedido.cliente_nombre,
+      pedido.repartidor_nombre,
+      pedido.tipo_servicio,
+      pedido.iniciado_en,
+      pedido.completado_en,
+      duracionSegundos,
+      mensajes.length,
+      contenidoComprimido
+    ]
+  );
+};
+
+const limpiarChatsExpirados = async () => {
+  await tablasPedidosListas;
+  await pool.query(
+    `DELETE FROM chat_mensajes cm USING pedidos p
+     WHERE p.id = cm.pedido_id AND p.estado = 'completado'
+       AND p.completado_en <= CURRENT_TIMESTAMP - INTERVAL '7 days'`
+  );
+  await pool.query('DELETE FROM chat_archivos_admin WHERE vence_en <= CURRENT_TIMESTAMP');
+};
+
+const temporizadorChats = setInterval(() => {
+  void limpiarChatsExpirados().catch(error => console.error('Error limpiando chats expirados:', error));
+}, 60_000);
+temporizadorChats.unref();
+void limpiarChatsExpirados().catch(error => console.error('Error limpiando chats expirados:', error));
+
 router.use(requireAuth);
+
+router.get('/admin/chat-archives', requireAdmin, async (_req: Request, res: Response): Promise<any> => {
+  try {
+    await tablasPedidosListas;
+    const result = await pool.query(
+      `SELECT pedido_id, cliente_nombre, repartidor_nombre, tipo_servicio, iniciado_en,
+              completado_en, duracion_segundos, cantidad_mensajes, vence_en
+       FROM chat_archivos_admin
+       WHERE vence_en > CURRENT_TIMESTAMP
+       ORDER BY completado_en DESC`
+    );
+    res.json({ archivos: result.rows });
+  } catch (error) {
+    console.error('Error al consultar archivos de chat:', error);
+    res.status(500).json({ error: 'No se pudieron cargar los archivos de chat.' });
+  }
+});
+
+router.get('/admin/chat-archives/:id', requireAdmin, async (req: Request, res: Response): Promise<any> => {
+  const id = getOrderId(req.params.id);
+  if (!id) return res.status(400).json({ error: 'El pedido indicado no es válido.' });
+  try {
+    await tablasPedidosListas;
+    const result = await pool.query(
+      `SELECT contenido_comprimido FROM chat_archivos_admin
+       WHERE pedido_id = $1 AND vence_en > CURRENT_TIMESTAMP`,
+      [id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'El archivo no existe o ya expiró.' });
+    res.setHeader('Content-Type', 'application/gzip');
+    res.setHeader('Content-Disposition', `attachment; filename="chat-pedido-${id}.json.gz"`);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.send(result.rows[0].contenido_comprimido);
+  } catch (error) {
+    console.error('Error al descargar archivo de chat:', error);
+    res.status(500).json({ error: 'No se pudo descargar el archivo de chat.' });
+  }
+});
 
 router.get('/admin/buscar', requireAdmin, async (req: Request, res: Response): Promise<any> => {
   const modo = typeof req.query.modo === 'string' ? req.query.modo : 'texto';
@@ -366,7 +561,7 @@ router.post('/', requireRole('cliente'), async (req: Request, res: Response): Pr
   const tiempo = Number(tiempo_min);
   const montoSolicitado = Number(tarifa);
   const serviciosPermitidos = ['envios', 'viajes', 'comida', 'mercado', 'mandados'];
-  const metodosPagoPermitidos = ['pago_movil', 'efectivo'];
+  const metodosPagoPermitidos = ['pago_movil'];
   const metodoPago = metodo_pago;
   const referenciaPago = typeof referencia_pago === 'string' ? referencia_pago.trim() : '';
   let tarifas;
@@ -503,11 +698,15 @@ router.get('/', async (req: Request, res: Response): Promise<any> => {
                 origen_texto, origen_lat, origen_lon, destino_texto, destino_lat, destino_lon,
                 distancia_km, tiempo_min, tarifa, metodo_pago, estado_pago, estado, repartidor_id, repartidor_nombre,
                 repartidor_vehiculo, repartidor_placa, repartidor_foto, repartidor_vehiculo_foto,
-                repartidor_calificacion, repartidor_lat, repartidor_lon, creado_en, publicado_en
+                repartidor_calificacion, repartidor_lat, repartidor_lon, creado_en, publicado_en,
+                iniciado_en, completado_en
          FROM pedidos
          WHERE (estado IN ('pendiente', 'postulado')
                 AND (metodo_pago IN ('efectivo', 'no_aplica') OR estado_pago = 'pagado'))
-            OR (repartidor_id = $1 AND estado IN ('aceptado', 'entregado_repartidor', 'completado'))
+            OR (repartidor_id = $1 AND (
+                  estado IN ('aceptado', 'entregado_repartidor')
+                  OR (estado = 'completado' AND completado_en > CURRENT_TIMESTAMP - INTERVAL '7 days')
+                ))
          ORDER BY creado_en DESC`,
         [authUser.id]
       );
@@ -525,16 +724,22 @@ router.get('/', async (req: Request, res: Response): Promise<any> => {
 
     const chatRes = authUser.rol === 'cliente'
       ? await pool.query(
-        `SELECT cm.* FROM chat_mensajes cm
+        `SELECT cm.id, cm.pedido_id, cm.remitente_id, cm.remitente_nombre, cm.mensaje,
+                cm.tipo, cm.media_mime, cm.media_nombre, cm.media_bytes, cm.creado_en
+         FROM chat_mensajes cm
          JOIN pedidos pe ON pe.id = cm.pedido_id
          WHERE pe.cliente_id = $1
+           AND (pe.estado <> 'completado' OR pe.completado_en > CURRENT_TIMESTAMP - INTERVAL '7 days')
          ORDER BY cm.creado_en ASC`,
         [authUser.id]
       )
       : await pool.query(
-        `SELECT cm.* FROM chat_mensajes cm
+        `SELECT cm.id, cm.pedido_id, cm.remitente_id, cm.remitente_nombre, cm.mensaje,
+                cm.tipo, cm.media_mime, cm.media_nombre, cm.media_bytes, cm.creado_en
+         FROM chat_mensajes cm
          JOIN pedidos pe ON pe.id = cm.pedido_id
          WHERE pe.repartidor_id = $1
+           AND (pe.estado <> 'completado' OR pe.completado_en > CURRENT_TIMESTAMP - INTERVAL '7 days')
          ORDER BY cm.creado_en ASC`,
         [authUser.id]
       );
@@ -821,7 +1026,10 @@ router.post('/:id/chat', async (req: Request, res: Response): Promise<any> => {
     const order = await pool.query(
       `SELECT id FROM pedidos
        WHERE id = $1 AND (cliente_id = $2 OR repartidor_id = $2)
-         AND estado IN ('aceptado', 'entregado_repartidor')`,
+         AND (
+           estado IN ('aceptado', 'entregado_repartidor')
+           OR (estado = 'completado' AND completado_en > CURRENT_TIMESTAMP - INTERVAL '7 days')
+         )`,
       [id, authUser.id]
     );
     if (order.rows.length === 0) return res.status(404).json({ error: 'No tienes acceso al chat de este pedido.' });
@@ -838,6 +1046,88 @@ router.post('/:id/chat', async (req: Request, res: Response): Promise<any> => {
   } catch (error) {
     console.error('Error en chat:', error);
     res.status(500).json({ error: 'Error chat' });
+  }
+});
+
+router.post('/:id/chat/media', parseChatMediaBody, async (req: Request, res: Response): Promise<any> => {
+  const authUser = req.authUser;
+  const id = getOrderId(req.params.id);
+  const tipo = req.query.tipo;
+  const mime = (req.get('content-type') || '').split(';', 1)[0].trim().toLowerCase();
+  const caption = typeof req.query.caption === 'string' ? req.query.caption.trim().slice(0, 500) : '';
+  const rawName = typeof req.query.nombre === 'string' ? req.query.nombre : '';
+  const nombre = rawName.replace(/[\\/\u0000-\u001f]/g, '').slice(0, 120);
+  const tiposMime: Record<string, string[]> = {
+    imagen: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
+    audio: ['audio/webm', 'audio/ogg', 'audio/mp4', 'audio/mpeg', 'audio/wav', 'audio/aac']
+  };
+  if (!authUser) return res.status(401).json({ error: 'Sesión inválida.' });
+  if (!id || (tipo !== 'imagen' && tipo !== 'audio') || !tiposMime[tipo].includes(mime)) {
+    return res.status(400).json({ error: 'El tipo de archivo no es válido.' });
+  }
+  if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+    return res.status(400).json({ error: 'El archivo está vacío o no se pudo leer.' });
+  }
+  if (req.body.length > MAX_CHAT_MEDIA_BYTES) {
+    return res.status(413).json({ error: 'El archivo supera el límite de 10 MB.' });
+  }
+
+  try {
+    await tablasPedidosListas;
+    const order = await pool.query(
+      `SELECT id FROM pedidos
+       WHERE id = $1 AND (cliente_id = $2 OR repartidor_id = $2)
+         AND (
+           estado IN ('aceptado', 'entregado_repartidor')
+           OR (estado = 'completado' AND completado_en > CURRENT_TIMESTAMP - INTERVAL '7 days')
+         )`,
+      [id, authUser.id]
+    );
+    if (order.rows.length === 0) return res.status(404).json({ error: 'No tienes acceso al chat de este pedido.' });
+    const sender = await pool.query('SELECT nombre FROM usuarios WHERE id = $1', [authUser.id]);
+    if (sender.rows.length === 0) return res.status(401).json({ error: 'La cuenta ya no está disponible.' });
+    const mediaComprimida = await gzipAsync(req.body);
+    const nuevoMensaje = await pool.query(
+      `INSERT INTO chat_mensajes
+       (pedido_id, remitente_id, remitente_nombre, mensaje, tipo, media_mime, media_nombre, media_comprimida, media_bytes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING id, pedido_id, remitente_id, remitente_nombre, mensaje, tipo, media_mime, media_nombre, media_bytes, creado_en`,
+      [id, authUser.id, sender.rows[0].nombre, caption, tipo, mime, nombre || null, mediaComprimida, req.body.length]
+    );
+    res.status(201).json(nuevoMensaje.rows[0]);
+  } catch (error) {
+    console.error('Error al enviar archivo de chat:', error);
+    res.status(500).json({ error: 'No se pudo enviar el archivo.' });
+  }
+});
+
+router.get('/:id/chat/media/:mensajeId', async (req: Request, res: Response): Promise<any> => {
+  const authUser = req.authUser;
+  const id = getOrderId(req.params.id);
+  const mensajeId = getOrderId(req.params.mensajeId);
+  if (!authUser) return res.status(401).json({ error: 'Sesión inválida.' });
+  if (!id || !mensajeId) return res.status(400).json({ error: 'El archivo indicado no es válido.' });
+
+  try {
+    await tablasPedidosListas;
+    const result = await pool.query(
+      `SELECT cm.media_comprimida, cm.media_mime
+       FROM chat_mensajes cm
+       JOIN pedidos pe ON pe.id = cm.pedido_id
+       WHERE cm.id = $1 AND cm.pedido_id = $2
+         AND cm.media_comprimida IS NOT NULL
+         AND (pe.cliente_id = $3 OR pe.repartidor_id = $3)
+         AND (pe.estado <> 'completado' OR pe.completado_en > CURRENT_TIMESTAMP - INTERVAL '7 days')`,
+      [mensajeId, id, authUser.id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'El archivo no existe o ya expiró.' });
+    const media = await gunzipAsync(result.rows[0].media_comprimida as Buffer);
+    res.setHeader('Content-Type', result.rows[0].media_mime);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.send(media);
+  } catch (error) {
+    console.error('Error al descargar archivo de chat:', error);
+    res.status(500).json({ error: 'No se pudo cargar el archivo.' });
   }
 });
 
@@ -1056,6 +1346,7 @@ router.put('/:id/estado', async (req: Request, res: Response): Promise<any> => {
       const update = await client.query(
         `UPDATE pedidos
          SET estado = 'entregado_repartidor',
+             iniciado_en = COALESCE(iniciado_en, CURRENT_TIMESTAMP),
              estado_pago = CASE
                WHEN metodo_pago = 'efectivo' AND estado_pago = 'pendiente' THEN 'pagado'
                ELSE estado_pago
@@ -1111,7 +1402,7 @@ router.put('/:id/estado', async (req: Request, res: Response): Promise<any> => {
     try {
       await client.query('BEGIN');
       const resultado = await client.query(
-        `UPDATE pedidos SET estado = 'completado'
+        `UPDATE pedidos SET estado = 'completado', completado_en = CURRENT_TIMESTAMP
          WHERE id = $1 AND estado = 'entregado_repartidor'
            AND (cliente_id = $2 OR repartidor_id = $2)
          RETURNING *`,
@@ -1122,6 +1413,7 @@ router.put('/:id/estado', async (req: Request, res: Response): Promise<any> => {
         return res.status(409).json({ error: 'El pedido no existe o no admite ese cambio de estado.' });
       }
       const pedido = resultado.rows[0];
+      await crearArchivoChatAdmin(client, pedido);
       await registrarActividad(
         client,
         authUser.id,

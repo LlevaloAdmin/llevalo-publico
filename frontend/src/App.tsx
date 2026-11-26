@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Activity, Bike, MapPin, ArrowLeft, ArrowRight, Camera, User, Eye, EyeOff, Clock, Send, Power, Star, Moon, Sun, DollarSign, XCircle, Navigation, CheckCircle2, Circle, Package, CarFront, LogOut, Users, UserRound, ChevronDown, Bell, BellOff } from 'lucide-react';
+import { Activity, Bike, MapPin, ArrowLeft, ArrowRight, Camera, ImagePlus, Mic, MicOff, User, Eye, EyeOff, Clock, Send, Power, Star, Moon, Sun, DollarSign, XCircle, Navigation, CheckCircle2, Circle, Package, CarFront, LogOut, Users, UserRound, ChevronDown, Bell, BellOff } from 'lucide-react';
 import { App as CapacitorApp } from '@capacitor/app';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { PushNotifications } from '@capacitor/push-notifications';
@@ -50,6 +50,8 @@ interface PedidoReal {
   referencia_pago?: string | null;
   creado_en?: string;
   publicado_en?: string | null;
+  iniciado_en?: string | null;
+  completado_en?: string | null;
   motivo_cancelacion?: string | null;
   estado: 'pendiente' | 'postulado' | 'aceptado' | 'entregado_repartidor' | 'completado' | 'cancelado';
   repartidor_lat?: number;
@@ -80,6 +82,14 @@ const medirDistanciaMetros = (
   const deltaLat = (primera.lat - segunda.lat) * 111_320;
   const deltaLng = (primera.lng - segunda.lng) * 111_320 * Math.cos(segunda.lat * Math.PI / 180);
   return Math.hypot(deltaLat, deltaLng);
+};
+
+const etiquetaDuracion = (segundos?: number | null) => {
+  if (segundos === undefined || segundos === null || !Number.isFinite(segundos)) return 'No disponible';
+  const minutosTotales = Math.floor(segundos / 60);
+  const horas = Math.floor(minutosTotales / 60);
+  const minutos = minutosTotales % 60;
+  return horas > 0 ? `${horas} h ${minutos} min` : `${minutos} min`;
 };
 
 interface Postulacion {
@@ -191,6 +201,22 @@ interface MensajeChat {
   remitente_id: number;
   remitente_nombre: string;
   mensaje: string;
+  tipo?: 'texto' | 'imagen' | 'audio';
+  media_mime?: string | null;
+  media_nombre?: string | null;
+  creado_en?: string;
+}
+
+interface ArchivoChatAdmin {
+  pedido_id: number;
+  cliente_nombre: string;
+  repartidor_nombre: string | null;
+  tipo_servicio: string;
+  iniciado_en: string | null;
+  completado_en: string;
+  duracion_segundos: number | null;
+  cantidad_mensajes: number;
+  vence_en: string;
 }
 
 interface UsuarioSesion {
@@ -232,7 +258,7 @@ type RegistroPendiente = {
   mensaje: string;
 };
 
-type MetodoPagoViaje = 'pago_movil' | 'efectivo';
+type MetodoPagoViaje = 'pago_movil';
 
 interface ConfiguracionPago {
   pagoMovil: {
@@ -431,6 +457,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>(accionCorreoInicial ? 'auth' : 'home');
   const historialNavegacionRef = useRef<Tab[]>([]);
   const [serviceType, setServiceType] = useState<TipoServicio>('envios');
+  const [pasoSolicitud, setPasoSolicitud] = useState<'tipo' | 'ruta' | 'pago' | null>(null);
   
   const [darkMode, setDarkMode] = useState<boolean>(() => localStorage.getItem('llevalo_dark_mode') === 'true');
   const [estadoConexion, setEstadoConexion] = useState<'sin-internet' | 'lenta' | null>(
@@ -630,6 +657,14 @@ export default function App() {
   const [perfilPublicoCargando, setPerfilPublicoCargando] = useState(false);
   const [errorPerfilPublico, setErrorPerfilPublico] = useState('');
   const [nuevoMensajeTexto, setNuevoMensajeTexto] = useState('');
+  const [urlsAdjuntosChat, setUrlsAdjuntosChat] = useState<Record<number, string>>({});
+  const [grabandoAudio, setGrabandoAudio] = useState(false);
+  const [errorChat, setErrorChat] = useState('');
+  const inputAdjuntoChatRef = useRef<HTMLInputElement>(null);
+  const grabadoraChatRef = useRef<MediaRecorder | null>(null);
+  const flujoAudioChatRef = useRef<MediaStream | null>(null);
+  const pedidoChatAdjuntoRef = useRef<number | null>(null);
+  const urlsAdjuntosChatRef = useRef(new Map<number, string>());
   const [metodoPagoViaje, setMetodoPagoViaje] = useState<MetodoPagoViaje>('pago_movil');
   const [referenciaPago, setReferenciaPago] = useState('');
   const [configuracionPago, setConfiguracionPago] = useState<ConfiguracionPago | null>(null);
@@ -638,6 +673,7 @@ export default function App() {
   const [pagosPendientesAdmin, setPagosPendientesAdmin] = useState<PedidoReal[]>([]);
   const [postulacionesAdmin, setPostulacionesAdmin] = useState<PostulacionRepartidorAdmin[]>([]);
   const [historialPagosAdmin, setHistorialPagosAdmin] = useState<HistorialPagoAdmin[]>([]);
+  const [archivosChatAdmin, setArchivosChatAdmin] = useState<ArchivoChatAdmin[]>([]);
   const [metricasAdmin, setMetricasAdmin] = useState<MetricasAdmin | null>(null);
   const [actividadAdmin, setActividadAdmin] = useState<ActividadAdmin[]>([]);
   const [cargandoAdmin, setCargandoAdmin] = useState(false);
@@ -646,6 +682,53 @@ export default function App() {
   const [configPagoAdmin, setConfigPagoAdmin] = useState({ banco: '', telefono: '', cedula: '', titular: '' });
   const [horaActual, setHoraActual] = useState(horaInicial);
   const usuarioId = usuario?.id;
+
+  useEffect(() => {
+    if (!usuarioId) return;
+    let descartado = false;
+    const pendientes = mensajesChat.filter(mensaje =>
+      mensaje.tipo !== 'texto'
+      && mensaje.media_mime
+      && !urlsAdjuntosChatRef.current.has(mensaje.id)
+    );
+    pendientes.forEach(mensaje => {
+      void authenticatedFetch(`${API_URL}/api/pedidos/${mensaje.pedido_id}/chat/media/${mensaje.id}`)
+        .then(async response => {
+          if (!response.ok) throw new Error(await mensajeErrorApi(response, 'No se pudo cargar un archivo del chat'));
+          return response.blob();
+        })
+        .then(blob => {
+          const url = URL.createObjectURL(blob);
+          if (descartado) {
+            URL.revokeObjectURL(url);
+            return;
+          }
+          urlsAdjuntosChatRef.current.set(mensaje.id, url);
+          setUrlsAdjuntosChat(current => ({ ...current, [mensaje.id]: url }));
+        })
+        .catch(error => {
+          if (descartado) return;
+          console.error('Error cargando archivo de chat:', error);
+          setErrorChat(error instanceof Error ? error.message : 'No se pudo cargar un archivo del chat.');
+        });
+    });
+    return () => { descartado = true; };
+  }, [mensajesChat, usuarioId]);
+
+  useEffect(() => {
+    urlsAdjuntosChatRef.current.forEach(url => URL.revokeObjectURL(url));
+    urlsAdjuntosChatRef.current.clear();
+  }, [usuarioId]);
+
+  useEffect(() => () => {
+    urlsAdjuntosChatRef.current.forEach(url => URL.revokeObjectURL(url));
+    flujoAudioChatRef.current?.getTracks().forEach(track => track.stop());
+    const recorder = grabadoraChatRef.current;
+    if (recorder?.state === 'recording') {
+      recorder.onstop = null;
+      recorder.stop();
+    }
+  }, []);
 
   useEffect(() => {
     if (!accionCorreo) return;
@@ -952,7 +1035,7 @@ export default function App() {
     }
   };
 
-  const obtenerUbicacionActual = (objetivo: 'origen' | 'destino' | null = null) => {
+  const solicitarPermisoOrientacion = () => {
     if (typeof DeviceOrientationEvent !== 'undefined') {
       const orientationApi = DeviceOrientationEvent as typeof DeviceOrientationEvent & {
         requestPermission?: () => Promise<'granted' | 'denied'>;
@@ -963,6 +1046,10 @@ export default function App() {
         });
       }
     }
+  };
+
+  const obtenerUbicacionActual = (objetivo: 'origen' | 'destino' | null = null) => {
+    solicitarPermisoOrientacion();
     geocodificacionGPSRef.current?.abort();
     objetivoUbicacionRef.current = objetivo;
     setErrorUbicacion('');
@@ -1236,6 +1323,8 @@ export default function App() {
   ]);
 
   const irAPedidos = () => {
+    setPasoSolicitud('tipo');
+    solicitarPermisoOrientacion();
     navegarA('cliente');
     void cargarConfiguracionPago();
     void cargarTarifas();
@@ -1246,26 +1335,30 @@ export default function App() {
     setCargandoAdmin(true);
     setErrorAdmin('');
     try {
-      const [pagosResponse, configResponse, historialResponse, tarifasResponse, postulacionesResponse] = await Promise.all([
+      const [pagosResponse, configResponse, historialResponse, tarifasResponse, postulacionesResponse, archivosChatResponse] = await Promise.all([
         authenticatedFetch(`${API_URL}/api/pagos/admin/pendientes`),
         authenticatedFetch(`${API_URL}/api/pagos/config`),
         authenticatedFetch(`${API_URL}/api/pagos/admin/historial`),
         authenticatedFetch(`${API_URL}/api/pagos/tarifas`),
-        authenticatedFetch(`${API_URL}/api/auth/admin/driver-applications`)
+        authenticatedFetch(`${API_URL}/api/auth/admin/driver-applications`),
+        authenticatedFetch(`${API_URL}/api/pedidos/admin/chat-archives`)
       ]);
       if (!pagosResponse.ok) throw new Error(await mensajeErrorApi(pagosResponse, 'No se pudieron cargar los pagos pendientes'));
       if (!configResponse.ok) throw new Error(await mensajeErrorApi(configResponse, 'No se pudo cargar la configuración de pago'));
       if (!historialResponse.ok) throw new Error(await mensajeErrorApi(historialResponse, 'No se pudo cargar el historial de pagos'));
       if (!tarifasResponse.ok) throw new Error(await mensajeErrorApi(tarifasResponse, 'No se pudieron cargar las tarifas'));
       if (!postulacionesResponse.ok) throw new Error(await mensajeErrorApi(postulacionesResponse, 'No se pudieron cargar las postulaciones'));
+      if (!archivosChatResponse.ok) throw new Error(await mensajeErrorApi(archivosChatResponse, 'No se pudieron cargar los archivos de chat'));
       const pagosData = await pagosResponse.json();
       const configData: ConfiguracionPago = await configResponse.json();
       const historialData = await historialResponse.json();
       const tarifasData: { tarifas: ConfiguracionTarifas; tasas: TasasCambio | null; errorTasas?: string } = await tarifasResponse.json();
       const postulacionesData: PostulacionRepartidorAdmin[] = await postulacionesResponse.json();
+      const archivosChatData: { archivos: ArchivoChatAdmin[] } = await archivosChatResponse.json();
       setPagosPendientesAdmin(Array.isArray(pagosData.pagos) ? pagosData.pagos : []);
       setPostulacionesAdmin(Array.isArray(postulacionesData) ? postulacionesData : []);
       setHistorialPagosAdmin(Array.isArray(historialData.historial) ? historialData.historial : []);
+      setArchivosChatAdmin(Array.isArray(archivosChatData.archivos) ? archivosChatData.archivos : []);
       setConfiguracionPago(configData);
       setConfigPagoAdmin(configData.pagoMovil);
       setConfiguracionTarifas(tarifasData.tarifas);
@@ -1276,6 +1369,26 @@ export default function App() {
       setErrorAdmin(error instanceof Error ? error.message : 'No se pudo cargar el panel de administración.');
     } finally {
       setCargandoAdmin(false);
+    }
+  };
+
+  const descargarArchivoChatAdmin = async (pedidoId: number) => {
+    setErrorAdmin('');
+    try {
+      const response = await authenticatedFetch(`${API_URL}/api/pedidos/admin/chat-archives/${pedidoId}`);
+      if (!response.ok) throw new Error(await mensajeErrorApi(response, 'No se pudo descargar el archivo de chat'));
+      const archivo = await response.blob();
+      const url = URL.createObjectURL(archivo);
+      const enlace = document.createElement('a');
+      enlace.href = url;
+      enlace.download = `chat-pedido-${pedidoId}.json.gz`;
+      document.body.appendChild(enlace);
+      enlace.click();
+      enlace.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setMensajeAdmin(`Archivo del pedido ${pedidoId} descargado.`);
+    } catch (error) {
+      setErrorAdmin(error instanceof Error ? error.message : 'No se pudo descargar el archivo de chat.');
     }
   };
 
@@ -1505,7 +1618,7 @@ export default function App() {
         && configuracionPago.pagoMovil.telefono
         && configuracionPago.pagoMovil.cedula
         && configuracionPago.pagoMovil.titular)) {
-      alert('Pago Móvil todavía no está configurado por Llévalo. Selecciona otro método o inténtalo luego.');
+      alert('Pago Móvil todavía no está configurado por Llévalo. Inténtalo más tarde.');
       return;
     }
     setEnviandoPedido(true);
@@ -1834,20 +1947,137 @@ export default function App() {
 
   const enviarMensaje = async (pedidoId: number) => {
     if (!usuario || !nuevoMensajeTexto.trim()) return;
+    setErrorChat('');
     try {
       const response = await authenticatedFetch(`${API_URL}/api/pedidos/${pedidoId}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ remitente_id: usuario.id, remitente_nombre: usuario.nombre, mensaje: nuevoMensajeTexto })
       });
-      if (!response.ok) throw new Error('No se pudo enviar el mensaje.');
+      if (!response.ok) throw new Error(await mensajeErrorApi(response, 'No se pudo enviar el mensaje.'));
       setNuevoMensajeTexto('');
       await sincronizarDatos();
     } catch (error) {
       console.error('Error al enviar mensaje:', error);
-      alert(error instanceof Error ? error.message : 'No se pudo enviar el mensaje.');
+      setErrorChat(error instanceof Error ? error.message : 'No se pudo enviar el mensaje.');
     }
   };
+
+  const enviarAdjuntoChat = async (
+    pedidoId: number,
+    archivo: Blob,
+    tipo: 'imagen' | 'audio',
+    nombre: string
+  ) => {
+    if (archivo.size === 0) {
+      setErrorChat('El archivo está vacío.');
+      return;
+    }
+    if (archivo.size > 10 * 1024 * 1024) {
+      setErrorChat('Cada imagen o audio puede pesar hasta 10 MB.');
+      return;
+    }
+    setErrorChat('');
+    const parametros = new URLSearchParams({
+      tipo,
+      nombre,
+      caption: nuevoMensajeTexto.trim()
+    });
+    try {
+      const response = await authenticatedFetch(`${API_URL}/api/pedidos/${pedidoId}/chat/media?${parametros}`, {
+        method: 'POST',
+        headers: { 'Content-Type': archivo.type },
+        body: archivo
+      });
+      if (!response.ok) throw new Error(await mensajeErrorApi(response, 'No se pudo enviar el archivo.'));
+      setNuevoMensajeTexto('');
+      await sincronizarDatos();
+    } catch (error) {
+      console.error('Error al enviar archivo de chat:', error);
+      setErrorChat(error instanceof Error ? error.message : 'No se pudo enviar el archivo.');
+    }
+  };
+
+  const alternarGrabacionAudio = async (pedidoId: number) => {
+    const grabadoraActual = grabadoraChatRef.current;
+    if (grabadoraActual?.state === 'recording') {
+      grabadoraActual.stop();
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setErrorChat('Este navegador no permite grabar audio. Actualiza la app o usa el navegador del dispositivo.');
+      return;
+    }
+
+    setErrorChat('');
+    try {
+      const flujo = await navigator.mediaDevices.getUserMedia({ audio: true });
+      flujoAudioChatRef.current = flujo;
+      const formato = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4']
+        .find(tipo => MediaRecorder.isTypeSupported(tipo));
+      const grabadora = formato ? new MediaRecorder(flujo, { mimeType: formato }) : new MediaRecorder(flujo);
+      const fragmentos: Blob[] = [];
+      grabadora.ondataavailable = event => {
+        if (event.data.size > 0) fragmentos.push(event.data);
+      };
+      grabadora.onerror = () => {
+        setErrorChat('No se pudo grabar el audio. Revisa el permiso del micrófono e inténtalo de nuevo.');
+        flujo.getTracks().forEach(track => track.stop());
+        setGrabandoAudio(false);
+      };
+      grabadora.onstop = () => {
+        const audio = new Blob(fragmentos, { type: grabadora.mimeType || 'audio/webm' });
+        flujo.getTracks().forEach(track => track.stop());
+        flujoAudioChatRef.current = null;
+        setGrabandoAudio(false);
+        grabadoraChatRef.current = null;
+        if (audio.size > 0) void enviarAdjuntoChat(pedidoId, audio, 'audio', `audio-${Date.now()}.webm`);
+      };
+      grabadoraChatRef.current = grabadora;
+      grabadora.start();
+      setGrabandoAudio(true);
+    } catch (error) {
+      console.error('No se pudo activar el micrófono para el chat:', error);
+      setErrorChat(error instanceof Error
+        ? `No se pudo activar el micrófono: ${error.message}`
+        : 'No se pudo activar el micrófono. Revisa los permisos del dispositivo.');
+    }
+  };
+
+  const renderChatPedido = (pedido: PedidoReal) => (
+    <section className={`space-y-3 rounded-2xl border p-3 ${darkMode ? 'border-slate-800 bg-slate-950/60' : 'border-slate-200 bg-slate-50'}`} aria-label={`Chat privado del pedido ${pedido.id}`}>
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <h4 className={`text-xs font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Chat privado con {usuario?.rol === 'cliente' ? pedido.repartidor_nombre || 'el repartidor' : pedido.cliente_nombre}</h4>
+          <p className="text-[10px] text-slate-500">Mensajes, imágenes y audios · se conserva 7 días tras finalizar</p>
+        </div>
+      </div>
+      <div className={`max-h-64 space-y-2 overflow-y-auto rounded-xl p-2 ${darkMode ? 'bg-slate-900' : 'bg-white'}`}>
+        {mensajesChat.filter(mensaje => mensaje.pedido_id === pedido.id).map(mensaje => (
+          <article key={mensaje.id} className={`max-w-[90%] rounded-xl p-2 text-xs ${mensaje.remitente_id === usuario?.id ? 'ml-auto bg-[#FF5722] text-white' : darkMode ? 'bg-slate-800 text-slate-100' : 'border border-slate-100 bg-slate-50 text-slate-800'}`}>
+            <p className="text-[9px] font-bold opacity-75">{mensaje.remitente_nombre}</p>
+            {mensaje.tipo === 'imagen' && (urlsAdjuntosChat[mensaje.id]
+              ? <img src={urlsAdjuntosChat[mensaje.id]} alt={mensaje.media_nombre || 'Imagen enviada en el chat'} className="mt-1 max-h-56 rounded-lg object-contain" />
+              : <p className="mt-1 opacity-75">Cargando imagen…</p>)}
+            {mensaje.tipo === 'audio' && (urlsAdjuntosChat[mensaje.id]
+              ? <audio controls preload="metadata" src={urlsAdjuntosChat[mensaje.id]} className="mt-1 max-w-full" />
+              : <p className="mt-1 opacity-75">Cargando audio…</p>)}
+            {mensaje.mensaje && <p className="mt-1 whitespace-pre-wrap break-words">{mensaje.mensaje}</p>}
+            {mensaje.creado_en && <time className="mt-1 block text-[9px] opacity-60">{new Date(mensaje.creado_en).toLocaleString('es-VE')}</time>}
+          </article>
+        ))}
+        {mensajesChat.every(mensaje => mensaje.pedido_id !== pedido.id) && <p className="py-3 text-center text-[10px] text-slate-500">Aún no hay mensajes. Puedes escribirle cuando quieras.</p>}
+      </div>
+      <div className="flex items-center gap-2">
+        <input type="text" value={nuevoMensajeTexto} onChange={event => setNuevoMensajeTexto(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void enviarMensaje(pedido.id); }} maxLength={2000} placeholder="Escribe un mensaje..." className={`min-w-0 flex-1 rounded-xl border px-3 py-2 text-xs ${darkMode ? 'border-slate-700 bg-slate-900 text-white' : 'border-slate-200 bg-white'}`} />
+        <button type="button" aria-label="Adjuntar imagen" onClick={() => { pedidoChatAdjuntoRef.current = pedido.id; inputAdjuntoChatRef.current?.click(); }} className="rounded-xl border border-slate-200 p-2 text-slate-600 dark:border-slate-700 dark:text-slate-200"><ImagePlus size={17} /></button>
+        <button type="button" aria-label={grabandoAudio ? 'Detener grabación de audio' : 'Grabar audio'} onClick={() => void alternarGrabacionAudio(pedido.id)} className={`rounded-xl p-2 text-white ${grabandoAudio ? 'bg-red-600' : 'bg-emerald-600'}`}>{grabandoAudio ? <MicOff size={17} /> : <Mic size={17} />}</button>
+        <button type="button" aria-label="Enviar mensaje" onClick={() => void enviarMensaje(pedido.id)} disabled={!nuevoMensajeTexto.trim()} className="rounded-xl bg-[#FF5722] p-2 text-white disabled:opacity-50"><Send size={17} /></button>
+      </div>
+      {grabandoAudio && <p role="status" className="text-[10px] font-semibold text-red-600">Grabando… pulsa el micrófono de nuevo para enviar el audio.</p>}
+      {errorChat && <p role="alert" className="text-[10px] font-semibold text-red-600">{errorChat}</p>}
+    </section>
+  );
 
   const cambiarEstadoPedido = async (pedidoId: number, nuevoEstado: 'entregado_repartidor' | 'completado' | 'cancelado') => {
     try {
@@ -2211,6 +2441,12 @@ export default function App() {
     ? pedidosReales.find(p => p.repartidor_id === usuario.id && (p.estado === 'aceptado' || p.estado === 'entregado_repartidor'))
     : null;
   const pedidoAsignadoRepartidorId = pedidoAsignadoRepartidor?.id;
+  const pedidosChatCompletados = pedidosReales
+    .filter(pedido => pedido.estado === 'completado'
+      && Boolean(pedido.completado_en)
+      && Date.parse(pedido.completado_en || '') > horaActual - 7 * 24 * 60 * 60 * 1000
+      && (pedido.cliente_id === usuario?.id || pedido.repartidor_id === usuario?.id))
+    .sort((primero, segundo) => Date.parse(segundo.completado_en || '') - Date.parse(primero.completado_en || ''));
   const postulacionesPendientesRepartidor = usuario?.rol === 'repartidor'
     ? postulacionesReales.filter(p => p.repartidor_id === usuario.id && p.estado === 'pendiente')
     : [];
@@ -2493,13 +2729,11 @@ export default function App() {
     }
     return 'Llegaste al punto B. Confirma manualmente la entrega para finalizar.';
   })();
-  const pagoPedidoCompleto = metodoPagoViaje === 'efectivo'
-    || (metodoPagoViaje === 'pago_movil'
-      && Boolean(configuracionPago?.pagoMovil.banco
-        && configuracionPago.pagoMovil.telefono
-        && configuracionPago.pagoMovil.cedula
-        && configuracionPago.pagoMovil.titular)
-      && /^\d{1,100}$/.test(referenciaPago.trim()));
+  const pagoPedidoCompleto = Boolean(configuracionPago?.pagoMovil.banco
+    && configuracionPago.pagoMovil.telefono
+    && configuracionPago.pagoMovil.cedula
+    && configuracionPago.pagoMovil.titular)
+    && /^\d{1,100}$/.test(referenciaPago.trim());
 
   useEffect(() => {
     if (usuario?.rol !== 'repartidor' || !pedidoAsignadoRepartidor || !coordsUsuarioGPS) {
@@ -2731,10 +2965,10 @@ export default function App() {
         )}
         
         <nav className={`hidden md:flex space-x-2 p-1.5 rounded-2xl border ${darkMode ? 'bg-slate-900/80 border-slate-800' : 'bg-orange-50/80 border-orange-100'}`}>
-          <button onClick={() => navegarA('home')} className={`px-5 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${activeTab === 'home' ? 'bg-[#FF5722] text-white shadow-sm' : (darkMode ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900')}`}>{usuario ? 'Mi Panel' : 'Inicio'}</button>
-          {usuario && usuario.rol === 'cliente' && <button onClick={irAPedidos} className={`px-5 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${activeTab === 'cliente' ? 'bg-[#FF5722] text-white shadow-sm' : (darkMode ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900')}`}>Pedir</button>}
-          {usuario && usuario.rol === 'repartidor' && <button onClick={() => navegarA('repartidor')} className={`px-5 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${activeTab === 'repartidor' ? 'bg-[#FF5722] text-white shadow-sm' : (darkMode ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900')}`}>Radar de Trabajos</button>}
-          {usuario?.es_admin && <button onClick={() => { navegarA('admin'); void cargarPanelAdmin(); }} className={`px-5 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${activeTab === 'admin' ? 'bg-[#FF5722] text-white shadow-sm' : (darkMode ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900')}`}>Administración</button>}
+          {usuario?.rol === 'cliente' && <button onClick={irAPedidos} className={`px-5 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${activeTab === 'cliente' ? 'bg-[#FF5722] text-white shadow-sm' : (darkMode ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900')}`}>Pedir</button>}
+          {usuario?.rol === 'repartidor' && <button onClick={() => navegarA('repartidor')} className={`px-5 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${activeTab === 'repartidor' ? 'bg-[#FF5722] text-white shadow-sm' : (darkMode ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900')}`}>Radar</button>}
+          <button onClick={() => navegarA('home')} className={`px-5 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${activeTab === 'home' ? 'bg-[#FF5722] text-white shadow-sm' : (darkMode ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900')}`}>Inicio</button>
+          {usuario && <button onClick={() => navegarA('perfil')} className={`px-5 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${activeTab === 'perfil' ? 'bg-[#FF5722] text-white shadow-sm' : (darkMode ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900')}`}>Perfil</button>}
         </nav>
 
         <div className="flex items-center space-x-2 md:space-x-3">
@@ -2746,20 +2980,6 @@ export default function App() {
                   <span className="whitespace-nowrap">{formatoMoneda(tasasCambio.bolivaresPorDolar)}</span>
                 </span>
               )}
-              <button
-                type="button"
-                aria-label="Abrir perfil"
-                onClick={() => navegarA('perfil')}
-                className={`flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-2xl border-2 shadow-sm transition hover:scale-105 ${darkMode ? 'border-slate-700 bg-slate-800' : 'border-orange-200 bg-orange-50'}`}
-              >
-                {fotoLocal ? (
-                  <img src={fotoLocal} alt="" className="h-full w-full object-cover" />
-                ) : (
-                  <span className="text-xs font-bold text-[#FF5722]">
-                    {usuario.nombre ? usuario.nombre.substring(0, 2).toUpperCase() : 'U'}
-                  </span>
-                )}
-              </button>
             </>
           ) : (
             <button onClick={() => { setErrorAuth(''); setAuthMode('choice'); navegarA('auth'); }} className={`flex items-center space-x-1.5 border px-4 py-2 rounded-2xl transition text-xs md:text-sm font-bold shadow-sm cursor-pointer ${darkMode ? 'bg-slate-900 border-slate-800 text-white hover:bg-slate-800' : 'bg-white hover:bg-orange-50 border-orange-200 text-slate-800'}`}>
@@ -2769,11 +2989,10 @@ export default function App() {
           )}
         </div>
 
-        {usuario && (
-          <nav aria-label="Navegación móvil" className={`mobile-nav flex w-full flex-wrap items-center gap-2 md:hidden ${darkMode ? 'text-slate-200' : 'text-slate-700'}`}>
-            <button type="button" aria-pressed={activeTab === 'home'} onClick={() => navegarA('home')} className={`flex min-w-[5rem] flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold ${activeTab === 'home' ? 'border-orange-200 bg-orange-50 text-[#FF5722]' : 'border-transparent'}`}>
-              <MapPin size={17} /> Inicio
-            </button>
+      </header>
+
+      {usuario && (
+        <nav aria-label="Navegación móvil" className={`mobile-nav flex w-full flex-wrap items-center gap-2 md:hidden ${darkMode ? 'text-slate-200' : 'text-slate-700'}`}>
             {usuario.rol === 'cliente' ? (
               <button type="button" aria-pressed={activeTab === 'cliente'} onClick={irAPedidos} className={`flex min-w-[5rem] flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold ${activeTab === 'cliente' ? 'border-orange-200 bg-orange-50 text-[#FF5722]' : 'border-transparent'}`}>
                 <Package size={17} /> Pedir
@@ -2783,17 +3002,28 @@ export default function App() {
                 <Bike size={17} /> Radar
               </button>
             )}
-            {usuario.es_admin && (
-              <button type="button" aria-pressed={activeTab === 'admin'} onClick={() => { navegarA('admin'); void cargarPanelAdmin(); }} className={`flex min-w-[5rem] flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold ${activeTab === 'admin' ? 'border-orange-200 bg-orange-50 text-[#FF5722]' : 'border-transparent'}`}>
-                <DollarSign size={17} /> Admin
-              </button>
-            )}
+            <button type="button" aria-pressed={activeTab === 'home'} onClick={() => navegarA('home')} className={`flex min-w-[5rem] flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold ${activeTab === 'home' ? 'border-orange-200 bg-orange-50 text-[#FF5722]' : 'border-transparent'}`}>
+              <MapPin size={17} /> Inicio
+            </button>
             <button type="button" aria-pressed={activeTab === 'perfil'} onClick={() => navegarA('perfil')} className={`flex min-w-[5rem] flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold ${activeTab === 'perfil' ? 'border-orange-200 bg-orange-50 text-[#FF5722]' : 'border-transparent'}`}>
               <User size={17} /> Perfil
-            </button>
-          </nav>
-        )}
-      </header>
+              </button>
+        </nav>
+      )}
+
+      <input
+        ref={inputAdjuntoChatRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+        onChange={event => {
+          const archivo = event.target.files?.[0];
+          const pedidoId = pedidoChatAdjuntoRef.current;
+          if (archivo && pedidoId) void enviarAdjuntoChat(pedidoId, archivo, 'imagen', archivo.name);
+          event.target.value = '';
+        }}
+      />
 
       <main className={`app-page flex-1 flex flex-col p-4 md:p-6 max-w-7xl mx-auto w-full ${usuario ? 'app-page-authenticated' : ''}`}>
         {activeTab === 'home' && !usuario && (
@@ -2823,82 +3053,8 @@ export default function App() {
                 <div className={`rounded-3xl overflow-hidden shadow-xl border p-2 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-orange-100 border-orange-200'}`}>
                   <img src="/hero-moto.jpg" alt="Repartidor de Llévalo en moto" className="rounded-2xl object-cover w-full h-[420px]" />
                 </div>
-                <div className="landing-photo-note">
-                  <span className="landing-photo-note-dot" />
-                  Cerca de ti, en Carabobo
-                </div>
               </div>
             </div>
-
-            <section className="mx-auto w-full max-w-6xl space-y-5 pb-10">
-              <div className="max-w-2xl">
-                <p className="text-xs font-black uppercase tracking-[0.18em] text-[#FF5722]">A tu ritmo, desde un solo lugar</p>
-                <h2 className={`mt-2 text-2xl font-black md:text-3xl ${darkMode ? 'text-white' : 'text-slate-900'}`}>Resuelve más con Llévalo</h2>
-              </div>
-              <p className="carousel-swipe-cue md:hidden">
-                Desliza para descubrir <ArrowRight size={14} />
-              </p>
-              <div
-                className="landing-services mobile-service-carousel grid gap-3 md:grid-cols-3"
-                role="region"
-                aria-label="Carrusel de servicios"
-                aria-roledescription="carrusel"
-                tabIndex={0}
-              >
-                {[
-                  {
-                    icon: Package,
-                    title: 'Envíos y mandados',
-                    description: 'Comida, mercado y encargos para tu día a día.',
-                    action: 'Pedir un envío',
-                    destination: 'envios' as const
-                  },
-                  {
-                    icon: CarFront,
-                    title: 'Viajes en la ciudad',
-                    description: 'Solicita un traslado y conoce el estado del servicio.',
-                    action: 'Pedir un viaje',
-                    destination: 'viajes' as const
-                  },
-                  {
-                    icon: Navigation,
-                    title: 'Seguimiento sencillo',
-                    description: 'Consulta el avance de tu solicitud desde la app.',
-                    action: 'Ver mis pedidos',
-                    destination: 'login' as const
-                  }
-                ].map(({ icon: Icon, title, description, action, destination }) => (
-                  <article key={title} className={`landing-service-card rounded-2xl border p-5 transition-colors ${darkMode ? 'border-slate-800 bg-slate-900/80' : 'border-orange-100 bg-white'}`}>
-                    <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-orange-100 text-[#FF5722]"><Icon size={20} /></div>
-                    <h3 className={`mt-4 font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>{title}</h3>
-                    <p className={`mt-2 text-sm leading-relaxed ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>{description}</p>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (destination === 'login') {
-                          setErrorAuth('');
-                          setAuthMode('login');
-                        } else {
-                          setServiceType(destination);
-                          setAuthMode('choice');
-                          setAuthRoleSelection('cliente');
-                        }
-                        navegarA('auth');
-                      }}
-                      className="mt-4 inline-flex items-center gap-2 text-xs font-black text-[#FF5722]"
-                    >
-                      {action} <ArrowRight size={14} />
-                    </button>
-                  </article>
-                ))}
-              </div>
-              <div className={`flex flex-col gap-3 rounded-2xl border p-4 text-sm sm:flex-row sm:items-center sm:justify-between ${darkMode ? 'border-slate-800 bg-slate-900/70 text-slate-300' : 'border-orange-100 bg-white text-slate-600'}`}>
-                <span><strong className={darkMode ? 'text-white' : 'text-slate-900'}>Así de fácil:</strong> crea tu cuenta, indica qué necesitas y sigue el servicio.</span>
-                <button type="button" onClick={() => { setAuthMode('choice'); setAuthRoleSelection('cliente'); navegarA('auth'); }} className="inline-flex shrink-0 items-center gap-2 font-bold text-[#FF5722]">
-                  Crear cuenta <ArrowRight size={16} />
-                </button>
-              </div>
-            </section>
           </>
         )}
 
@@ -3018,6 +3174,23 @@ export default function App() {
                 </>
               )}
             </div>
+            {pedidosChatCompletados.length > 0 && (
+              <section className="space-y-3" aria-labelledby="recent-chat-title">
+                <div>
+                  <h2 id="recent-chat-title" className={`text-lg font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Conversaciones recientes</h2>
+                  <p className="mt-1 text-xs text-slate-500">Los chats finalizados quedan disponibles durante 7 días.</p>
+                </div>
+                {pedidosChatCompletados.map(pedido => (
+                  <details key={pedido.id} className={`rounded-2xl border p-3 ${darkMode ? 'border-slate-800 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+                    <summary className="cursor-pointer text-xs font-bold">
+                      {etiquetaTipoServicio(pedido.tipo_servicio)} · {usuario.rol === 'cliente' ? pedido.repartidor_nombre || 'Repartidor' : pedido.cliente_nombre}
+                      <span className="ml-2 text-[10px] font-medium text-slate-500">{pedido.completado_en ? new Date(pedido.completado_en).toLocaleString('es-VE') : ''}</span>
+                    </summary>
+                    <div className="mt-3">{renderChatPedido(pedido)}</div>
+                  </details>
+                ))}
+              </section>
+            )}
           </section>
         )}
 
@@ -3296,6 +3469,7 @@ export default function App() {
 
         {/* --- VISTA CLIENTE --- */}
         {activeTab === 'cliente' && usuario?.rol === 'cliente' && (
+          <>
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 py-4 items-start">
             <div className="lg:col-span-5 space-y-4">
               <div className={`border p-6 rounded-3xl shadow-sm space-y-4 ${darkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-orange-100'}`}>
@@ -3439,23 +3613,7 @@ export default function App() {
                           </button>
                         )}
 
-                        {pedidoActivoCliente.tipo_servicio !== 'viajes' && (
-                          <>
-                            <div className={`border rounded-2xl p-3 space-y-2 h-44 overflow-y-auto ${darkMode ? 'bg-slate-950 border-slate-800' : 'bg-slate-50 border-slate-200'}`}>
-                              <p className="text-[10px] font-black uppercase text-slate-400 tracking-wider text-center">Chat con Repartidor</p>
-                              {mensajesChat.filter(m => m.pedido_id === pedidoActivoCliente.id).map(m => (
-                                <div key={m.id} className={`text-xs p-2 rounded-xl max-w-[85%] ${m.remitente_id === usuario.id ? 'bg-[#FF5722] text-white ml-auto' : (darkMode ? 'bg-slate-800 text-slate-200' : 'bg-white text-slate-800 border')}`}>
-                                  <p className="text-[9px] font-bold opacity-75">{m.remitente_nombre}</p>
-                                  <p>{m.mensaje}</p>
-                                </div>
-                              ))}
-                            </div>
-                            <div className="flex space-x-2">
-                              <input type="text" value={nuevoMensajeTexto} onChange={e => setNuevoMensajeTexto(e.target.value)} placeholder="Escribe un mensaje..." className={`flex-1 border rounded-xl px-3 py-2 text-xs ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
-                              <button onClick={() => enviarMensaje(pedidoActivoCliente.id)} className="bg-[#FF5722] text-white p-2 rounded-xl cursor-pointer"><Send size={16} /></button>
-                            </div>
-                          </>
-                        )}
+                        {renderChatPedido(pedidoActivoCliente)}
 
                         {pedidoActivoCliente.estado === 'entregado_repartidor' && (
                           <button onClick={() => cambiarEstadoPedido(pedidoActivoCliente.id, 'completado')} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold py-3 rounded-xl transition cursor-pointer shadow-sm">
@@ -3547,7 +3705,157 @@ export default function App() {
                           <p className="text-[10px] text-slate-400">Base: ${tarifaTotal} USD</p>
                         </div>
                       </div>
-                    )}
+                      )}
+
+                      {!pedidoActivoCliente && pasoSolicitud && (
+                        <div className={`fixed inset-0 z-[120] flex flex-col px-3 pb-3 pt-[calc(env(safe-area-inset-top)+12px)] md:px-8 md:pb-6 ${darkMode ? 'bg-slate-950 text-white' : 'bg-[#FDFBF7] text-slate-800'}`} role="dialog" aria-modal="true" aria-labelledby="solicitud-title">
+                          <header className={`mx-auto flex w-full max-w-6xl items-center justify-between gap-3 border-b pb-3 ${darkMode ? 'border-slate-800' : 'border-orange-100'}`}>
+                            <div>
+                              <p className="text-[10px] font-black uppercase tracking-[0.18em] text-[#FF5722]">
+                                {pasoSolicitud === 'tipo' ? 'Paso 1 de 3' : pasoSolicitud === 'ruta' ? 'Paso 2 de 3' : 'Paso 3 de 3'}
+                              </p>
+                              <h2 id="solicitud-title" className="mt-1 text-lg font-black md:text-2xl">
+                                {pasoSolicitud === 'tipo' ? '¿Qué necesitas hoy?' : pasoSolicitud === 'ruta' ? 'Indica la ruta' : 'Confirma tu Pago Móvil'}
+                              </h2>
+                            </div>
+                            <button type="button" aria-label="Volver al inicio" onClick={() => { setPasoSolicitud(null); navegarA('home'); }} className={`rounded-xl border p-2.5 ${darkMode ? 'border-slate-700 text-slate-200' : 'border-slate-200 text-slate-600'}`}>
+                              <ArrowLeft size={18} />
+                            </button>
+                          </header>
+
+                          {pasoSolicitud === 'tipo' && (
+                            <div className="flex flex-1 items-center justify-center py-6">
+                              <div className="w-full max-w-xl space-y-5">
+                                <p className={`text-center text-sm ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>Elige una opción para continuar con tu solicitud.</p>
+                                <div className="grid gap-4 sm:grid-cols-2">
+                                  {([
+                                    { tipo: 'envios' as const, etiqueta: 'Envío', detalle: 'Comida, mercado, paquetes y mandados', Icono: Package },
+                                    { tipo: 'viajes' as const, etiqueta: 'Viaje', detalle: 'Traslado de un punto a otro', Icono: CarFront }
+                                  ]).map(({ tipo, etiqueta, detalle, Icono }) => (
+                                    <button key={tipo} type="button" aria-pressed={serviceType === tipo} onClick={() => setServiceType(tipo)} className={`rounded-3xl border p-6 text-left transition ${serviceType === tipo ? 'border-[#FF5722] bg-orange-50 shadow-lg dark:bg-orange-950/30' : darkMode ? 'border-slate-800 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+                                      <span className={`mb-4 flex h-12 w-12 items-center justify-center rounded-2xl ${serviceType === tipo ? 'bg-[#FF5722] text-white' : 'bg-orange-100 text-[#FF5722]'}`}><Icono size={22} /></span>
+                                      <span className="block text-lg font-black">{etiqueta}</span>
+                                      <span className="mt-1 block text-xs text-slate-500">{detalle}</span>
+                                    </button>
+                                  ))}
+                                </div>
+                                <button type="button" onClick={() => { setPasoSolicitud('ruta'); void cargarConfiguracionPago(); }} className="w-full rounded-2xl bg-[#FF5722] px-5 py-3.5 text-sm font-black text-white shadow-lg transition hover:bg-[#F4511E]">
+                                  Aceptar y elegir direcciones <ArrowRight size={17} className="ml-1 inline" />
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
+                          {pasoSolicitud === 'ruta' && (
+                            <div className="mx-auto flex w-full max-w-6xl min-h-0 flex-1 flex-col gap-3 py-3">
+                              <div className="grid gap-2 sm:grid-cols-2">
+                                <label className="relative block text-[10px] font-bold text-slate-500">
+                                  {serviceType === 'viajes' ? 'Punto de partida' : 'Origen'}
+                                  <input type="text" value={origenInput} onChange={event => buscarDireccionGeocoding(event.target.value, 'origen')} placeholder="Sector, calle o establecimiento" className={`mt-1 w-full rounded-xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-700 bg-slate-900 text-white' : 'border-slate-200 bg-white text-slate-900'}`} />
+                                  {sugerenciasOrigen.length > 0 && (
+                                    <span className={`absolute left-0 right-0 top-full z-40 mt-1 max-h-36 overflow-y-auto rounded-xl border shadow-lg ${darkMode ? 'border-slate-700 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+                                      {sugerenciasOrigen.map((sugerencia, indice) => (
+                                        <button type="button" key={`${sugerencia.display_name}-${indice}`} onClick={() => seleccionarSugerencia(sugerencia, 'origen')} className={`block w-full border-b p-2 text-left text-xs last:border-0 ${darkMode ? 'border-slate-800 text-slate-200 hover:bg-slate-800' : 'border-orange-50 text-slate-700 hover:bg-orange-50'}`}>{sugerencia.display_name}</button>
+                                      ))}
+                                    </span>
+                                  )}
+                                </label>
+                                <label className="relative block text-[10px] font-bold text-slate-500">
+                                  {serviceType === 'viajes' ? 'Destino del viaje' : 'Destino'}
+                                  <input type="text" value={destinoInput} onChange={event => buscarDireccionGeocoding(event.target.value, 'destino')} placeholder="Sector, calle o establecimiento" className={`mt-1 w-full rounded-xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-700 bg-slate-900 text-white' : 'border-slate-200 bg-white text-slate-900'}`} />
+                                  {sugerenciasDestino.length > 0 && (
+                                    <span className={`absolute left-0 right-0 top-full z-40 mt-1 max-h-36 overflow-y-auto rounded-xl border shadow-lg ${darkMode ? 'border-slate-700 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+                                      {sugerenciasDestino.map((sugerencia, indice) => (
+                                        <button type="button" key={`${sugerencia.display_name}-${indice}`} onClick={() => seleccionarSugerencia(sugerencia, 'destino')} className={`block w-full border-b p-2 text-left text-xs last:border-0 ${darkMode ? 'border-slate-800 text-slate-200 hover:bg-slate-800' : 'border-orange-50 text-slate-700 hover:bg-orange-50'}`}>{sugerencia.display_name}</button>
+                                      ))}
+                                    </span>
+                                  )}
+                                </label>
+                              </div>
+
+                              {(errorGeocoding || errorRuta || errorUbicacion) && (
+                                <p role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+                                  {errorRuta || errorGeocoding || errorUbicacion}
+                                </p>
+                              )}
+
+                              <div className="relative min-h-[220px] flex-1 overflow-hidden rounded-2xl border shadow-sm">
+                                <button type="button" onClick={() => obtenerUbicacionActual()} disabled={ubicacionCargando} className={`absolute left-3 top-3 z-20 inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold shadow-md disabled:opacity-60 ${darkMode ? 'border-slate-600 bg-slate-800/95 text-slate-100' : 'border-white/80 bg-white/95 text-slate-800'}`}>
+                                  <Navigation size={15} className={ubicacionCargando ? 'animate-pulse' : 'text-[#FF5722]'} />
+                                  {ubicacionCargando ? 'Buscando...' : 'Mi ubicación'}
+                                </button>
+                                <div className="absolute bottom-3 right-3 z-20 flex gap-2">
+                                  <button type="button" aria-pressed={modoSeleccionMapa === 'origen'} onClick={() => setModoSeleccionMapa('origen')} className={`rounded-xl border px-3 py-2 text-xs font-black shadow-md ${modoSeleccionMapa === 'origen' ? 'bg-emerald-600 text-white' : 'border-emerald-200 bg-white text-emerald-700'}`}>Origen</button>
+                                  <button type="button" aria-pressed={modoSeleccionMapa === 'destino'} onClick={() => setModoSeleccionMapa('destino')} className={`rounded-xl border px-3 py-2 text-xs font-black shadow-md ${modoSeleccionMapa === 'destino' ? 'bg-red-600 text-white' : 'border-red-200 bg-white text-red-700'}`}>Destino</button>
+                                </div>
+                                <React.Suspense fallback={<div className="flex h-full items-center justify-center bg-slate-100 text-xs font-bold text-slate-500">Cargando mapa...</div>}>
+                                  <MapaLibre
+                                    coordsOrigen={coordsOrigen}
+                                    coordsDestino={coordsDestino}
+                                    coordsUsuario={coordsUsuarioGPS}
+                                    rumboUsuario={rumboUsuario}
+                                    modoSeleccion={modoSeleccionMapa}
+                                    onMapClick={manejarClicEnMapa}
+                                    onRutaCalculada={(km, min) => { setDistanciaKm(km); setTiempoEstimadoMin(min); setErrorRuta(''); }}
+                                    onErrorRuta={setErrorRuta}
+                                    mostrarRuta
+                                    mostrarPines
+                                    seguirUsuario
+                                    darkMode={darkMode}
+                                    recentrarUsuario={recentrarMapa}
+                                  />
+                                </React.Suspense>
+                              </div>
+
+                              <div className="flex items-center justify-between gap-3">
+                                <button type="button" onClick={() => setPasoSolicitud('tipo')} className={`rounded-xl border px-4 py-3 text-xs font-bold ${darkMode ? 'border-slate-700 text-slate-200' : 'border-slate-200 text-slate-600'}`}><ArrowLeft size={15} className="mr-1 inline" /> Atrás</button>
+                                <span className="text-right text-[11px] font-semibold text-slate-500">{rutaCompletaLista ? `${distanciaKm} km · ~${tiempoEstimadoMin} min` : 'Selecciona origen y destino en el mapa'}</span>
+                                <button type="button" disabled={!rutaCompletaLista || esperandoNombreDireccion || distanciaKm <= 0 || tiempoEstimadoMin <= 0} onClick={() => { setPasoSolicitud('pago'); void cargarConfiguracionPago(); }} className="rounded-xl bg-[#FF5722] px-4 py-3 text-xs font-black text-white shadow-md disabled:cursor-not-allowed disabled:opacity-50">Continuar <ArrowRight size={15} className="ml-1 inline" /></button>
+                              </div>
+                            </div>
+                          )}
+
+                          {pasoSolicitud === 'pago' && (
+                            <div className="flex flex-1 items-center justify-center overflow-y-auto py-5">
+                              <div className={`w-full max-w-lg space-y-4 rounded-3xl border p-5 shadow-xl md:p-7 ${darkMode ? 'border-slate-800 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+                                <div className="rounded-2xl border border-orange-100 bg-orange-50/70 p-4 dark:border-slate-700 dark:bg-slate-950/70">
+                                  <p className="text-[10px] font-black uppercase tracking-wider text-[#FF5722]">Pago Móvil</p>
+                                  {cargandoConfiguracionPago ? <p className="mt-2 text-xs text-slate-500">Cargando datos de pago…</p> : configuracionPago?.pagoMovil.telefono ? (
+                                    <div className="mt-2 space-y-1 text-xs">
+                                      <p><strong>Banco:</strong> {configuracionPago.pagoMovil.banco}</p>
+                                      <p><strong>Teléfono:</strong> {configuracionPago.pagoMovil.telefono}</p>
+                                      <p><strong>Cédula/RIF:</strong> {configuracionPago.pagoMovil.cedula}</p>
+                                      <p><strong>Titular:</strong> {configuracionPago.pagoMovil.titular}</p>
+                                    </div>
+                                  ) : <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">Pago Móvil aún no está configurado. No se puede enviar la solicitud por ahora.</p>}
+                                </div>
+
+                                <div className={`grid grid-cols-2 gap-3 rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-950' : 'border-slate-100 bg-slate-50'}`}>
+                                  <div><p className="text-[10px] font-bold text-slate-500">Distancia</p><p className="mt-1 text-sm font-black">{distanciaKm} km · ~{tiempoEstimadoMin} min</p></div>
+                                  <div className="text-right"><p className="text-[10px] font-bold text-slate-500">Total</p><p className="mt-1 text-sm font-black text-[#FF5722]">${tarifaUsd.toFixed(2)} USD</p><p className="text-xs font-bold">{tarifaEnBolivares || 'Tasa BCV no disponible'}</p></div>
+                                </div>
+
+                                {errorTarifas && <p role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">{errorTarifas}</p>}
+                                {tasasCambio?.desactualizada && <p role="status" className="text-[10px] text-amber-700 dark:text-amber-300">La tasa BCV mostrada corresponde al último valor disponible.</p>}
+
+                                <label className="block text-xs font-bold">
+                                  Número de comprobante
+                                  <input type="text" inputMode="numeric" pattern="[0-9]*" maxLength={100} value={referenciaPago} onChange={event => setReferenciaPago(event.target.value.replace(/[^0-9]/g, ''))} placeholder="Referencia numérica de la operación" className={`mt-1 w-full rounded-xl border px-3 py-3 ${darkMode ? 'border-slate-700 bg-slate-950 text-white' : 'border-slate-200 bg-white'}`} />
+                                </label>
+                                <p className="text-[11px] leading-relaxed text-slate-500">Un administrador verificará la referencia. El servicio se publicará para los repartidores solo después de confirmar el pago.</p>
+                                {errorPago && <p role="alert" className="text-xs font-semibold text-red-600">{errorPago}</p>}
+
+                                <div className="flex gap-3">
+                                  <button type="button" onClick={() => setPasoSolicitud('ruta')} className={`flex-1 rounded-xl border px-4 py-3 text-xs font-bold ${darkMode ? 'border-slate-700 text-slate-200' : 'border-slate-200 text-slate-600'}`}><ArrowLeft size={15} className="mr-1 inline" /> Volver al mapa</button>
+                                  <button type="button" disabled={!rutaCompletaLista || !pagoPedidoCompleto || enviandoPedido || cargandoTarifas || !configuracionTarifas || !tasasCambio || cargandoConfiguracionPago || !configuracionPago?.pagoMovil.telefono} onClick={() => void handleCrearPedido()} className="flex-1 rounded-xl bg-[#FF5722] px-4 py-3 text-xs font-black text-white shadow-md disabled:cursor-not-allowed disabled:opacity-50">
+                                    {enviandoPedido ? 'Enviando…' : 'Enviar a revisión'}
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     {errorTarifas && (
                       <p role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
                         {errorTarifas}
@@ -3566,8 +3874,7 @@ export default function App() {
                         </div>
                         <div className="grid gap-2 sm:grid-cols-2">
                           {([
-                            ['pago_movil', 'Pago Móvil'],
-                            ['efectivo', 'Efectivo']
+                            ['pago_movil', 'Pago Móvil']
                           ] as const).map(([metodo, etiqueta]) => (
                             <button key={metodo} type="button" aria-pressed={metodoPagoViaje === metodo} onClick={() => setMetodoPagoViaje(metodo)} className={`rounded-xl border px-3 py-2.5 text-left text-xs font-bold transition ${metodoPagoViaje === metodo ? 'border-[#FF5722] bg-orange-50 text-[#D84315] dark:bg-orange-950/30 dark:text-orange-300' : 'border-slate-200 text-slate-600 dark:border-slate-800 dark:text-slate-300'}`}>
                               {etiqueta}
@@ -3587,18 +3894,10 @@ export default function App() {
                                 <p className="pt-1 text-[10px] text-amber-700 dark:text-amber-400">Realiza el pago por el monto cotizado y escribe la referencia. Un administrador la verificará antes de ofrecer el pedido en el radar.</p>
                               </div>
                             ) : !cargandoConfiguracionPago && (
-                              <p className="text-amber-700 dark:text-amber-400">Pago Móvil aún no está configurado. Puedes elegir efectivo.</p>
+                              <p className="text-amber-700 dark:text-amber-400">Pago Móvil aún no está configurado. Inténtalo más tarde.</p>
                             )}
                             <input type="text" inputMode="numeric" pattern="[0-9]*" maxLength={100} value={referenciaPago} onChange={e => setReferenciaPago(e.target.value.replace(/[^0-9]/g, ''))} placeholder="Referencia numérica de la operación" className={`w-full rounded-xl border px-3 py-2 ${darkMode ? 'border-slate-800 bg-slate-950 text-white' : 'border-slate-200 bg-white'}`} />
                           </div>
-                        )}
-
-                        {metodoPagoViaje === 'efectivo' && (
-                          <p className="rounded-xl bg-amber-50 p-3 text-[11px] leading-relaxed text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
-                            {serviceType === 'viajes'
-                              ? 'Paga al conductor en el punto de partida. El conductor confirmará que recibió el efectivo antes de iniciar el viaje.'
-                              : 'Paga al repartidor al retirar el envío en el punto de origen. El repartidor confirmará que recibió el efectivo.'}
-                          </p>
                         )}
 
                         {errorPago && <p role="alert" className="text-[10px] font-semibold text-red-600">{errorPago}</p>}
@@ -3612,6 +3911,7 @@ export default function App() {
               </div>
             </div>
 
+            {(!pasoSolicitud || pedidoActivoCliente) && (
             <div className="relative lg:col-span-7 h-[min(60dvh,520px)] min-h-[300px] lg:h-[calc(100dvh-140px)] rounded-3xl overflow-hidden border shadow-sm sticky top-20">
               <button type="button" onClick={() => obtenerUbicacionActual()} disabled={ubicacionCargando} className={`absolute left-3 top-3 z-20 inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold shadow-md disabled:opacity-60 ${darkMode ? 'border-slate-600 bg-slate-800/95 text-slate-100' : 'border-white/80 bg-white/95 text-slate-800'}`}>
                 <Navigation size={15} className={ubicacionCargando ? 'animate-pulse' : 'text-[#FF5722]'} />
@@ -3644,7 +3944,9 @@ export default function App() {
                 />
               </React.Suspense>
             </div>
+            )}
           </div>
+          </>
         )}
 
         {/* --- VISTA REPARTIDOR --- */}
@@ -3816,6 +4118,7 @@ export default function App() {
                         Completar Entrega en Punto B
                       </button>
                     )}
+                    {renderChatPedido(pedidoAsignadoRepartidor)}
                   </div>
                 ) : (
                   <div className="space-y-4">
@@ -3971,6 +4274,18 @@ export default function App() {
                   </div>
                 </div>
               </div>
+
+              {usuario.es_admin && (
+                <div className={`flex flex-col gap-3 border-b p-5 sm:flex-row sm:items-center sm:justify-between md:px-8 ${darkMode ? 'border-slate-800' : 'border-slate-100'}`}>
+                  <div>
+                    <h3 className="text-sm font-black">Herramientas de administración</h3>
+                    <p className="mt-1 text-xs text-slate-500">Revisa pagos, actividad y archivos de chat.</p>
+                  </div>
+                  <button type="button" onClick={() => { navegarA('admin'); void cargarPanelAdmin(); }} className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#FF5722] px-4 py-3 text-xs font-black text-white shadow-sm transition hover:bg-[#F4511E]">
+                    <Activity size={16} /> Abrir administración
+                  </button>
+                </div>
+              )}
 
               {resumenCalificaciones && (
                 <section className={`border-b p-5 md:px-8 ${darkMode ? 'border-slate-800' : 'border-slate-100'}`} aria-labelledby="rating-history-title">
@@ -4154,6 +4469,34 @@ export default function App() {
 
             {errorAdmin && <p role="alert" className={`rounded-xl border p-3 text-xs font-semibold ${darkMode ? 'border-red-900 bg-red-950/30 text-red-300' : 'border-red-200 bg-red-50 text-red-700'}`}>{errorAdmin}</p>}
             {mensajeAdmin && <p role="status" className={`rounded-xl border p-3 text-xs font-semibold ${darkMode ? 'border-emerald-900 bg-emerald-950/30 text-emerald-300' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>{mensajeAdmin}</p>}
+
+            <AdminAccordion
+              title="Archivos de chat y evidencia"
+              description="Las conversaciones se ocultan a sus participantes a los 7 días y se conservan aquí durante 15 días desde el cierre."
+              darkMode={darkMode}
+              badge={<span className="rounded-full bg-orange-50 px-2.5 py-1 text-[10px] font-bold text-[#FF5722]">{archivosChatAdmin.length}</span>}
+            >
+              {archivosChatAdmin.length === 0 ? (
+                <p className="py-4 text-center text-xs text-slate-500">No hay archivos de chat disponibles.</p>
+              ) : (
+                <div className="space-y-3">
+                  {archivosChatAdmin.map(archivo => (
+                    <article key={archivo.pedido_id} className={`flex flex-col gap-3 rounded-2xl border p-4 sm:flex-row sm:items-center sm:justify-between ${darkMode ? 'border-slate-700 bg-slate-950/70' : 'border-slate-200 bg-white'}`}>
+                      <div className="space-y-1 text-xs">
+                        <h3 className="font-black">Pedido #{archivo.pedido_id} · {etiquetaTipoServicio(archivo.tipo_servicio)}</h3>
+                        <p><strong>Cliente:</strong> {archivo.cliente_nombre} · <strong>Repartidor:</strong> {archivo.repartidor_nombre || 'No asignado'}</p>
+                        <p><strong>Inició:</strong> {archivo.iniciado_en ? new Date(archivo.iniciado_en).toLocaleString('es-VE') : 'No registrada'} · <strong>Finalizó:</strong> {new Date(archivo.completado_en).toLocaleString('es-VE')}</p>
+                        <p><strong>Duración:</strong> {etiquetaDuracion(archivo.duracion_segundos)} · <strong>Mensajes:</strong> {archivo.cantidad_mensajes}</p>
+                        <p className="text-[10px] text-slate-500">Disponible hasta {new Date(archivo.vence_en).toLocaleString('es-VE')}</p>
+                      </div>
+                      <button type="button" onClick={() => void descargarArchivoChatAdmin(archivo.pedido_id)} className="shrink-0 rounded-xl bg-[#FF5722] px-4 py-2.5 text-xs font-black text-white shadow-sm transition hover:bg-[#F4511E]">
+                        Descargar .json.gz
+                      </button>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </AdminAccordion>
 
             <AdminAccordion
               title="Postulaciones de repartidores"

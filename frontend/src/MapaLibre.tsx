@@ -106,10 +106,18 @@ export default function MapaLibre({
   const lastDirectionsAtRef = useRef(0);
   const interactivoRef = useRef(interactivo);
   const coordsUsuarioRef = useRef(coordsUsuario);
+  const seguirUsuarioRef = useRef(seguirUsuario);
+  const seguimientoActivoRef = useRef(seguirUsuario);
+  const ubicacionBaseSeguimientoRef = useRef(coordsUsuario);
+  const rumboUsuarioRef = useRef(rumboUsuario);
 
   useEffect(() => {
     coordsUsuarioRef.current = coordsUsuario;
   }, [coordsUsuario]);
+
+  useEffect(() => {
+    rumboUsuarioRef.current = rumboUsuario;
+  }, [rumboUsuario]);
 
   useEffect(() => {
     onRutaCalculadaRef.current = onRutaCalculada;
@@ -124,10 +132,18 @@ export default function MapaLibre({
   }, [interactivo]);
 
   useEffect(() => {
+    seguirUsuarioRef.current = seguirUsuario;
+    seguimientoActivoRef.current = seguirUsuario;
+    if (seguirUsuario) ubicacionBaseSeguimientoRef.current = coordsUsuarioRef.current;
+  }, [seguirUsuario]);
+
+  useEffect(() => {
     if (!recentrarUsuario) return;
     const map = mapInstance.current;
     const ubicacion = coordsUsuarioRef.current;
     if (map && ubicacion) {
+      seguimientoActivoRef.current = true;
+      ubicacionBaseSeguimientoRef.current = ubicacion;
       map.flyTo({ center: [ubicacion.lng, ubicacion.lat], zoom: 15, duration: 800 });
     }
   }, [recentrarUsuario]);
@@ -176,6 +192,19 @@ export default function MapaLibre({
           if (onMapClickRef.current) onMapClickRef.current(e.lngLat.lat, e.lngLat.lng);
         });
       }
+      mapInstance.current.on('dragstart', () => {
+        if (!seguirUsuarioRef.current) return;
+        seguimientoActivoRef.current = false;
+        ubicacionBaseSeguimientoRef.current = coordsUsuarioRef.current;
+      });
+      mapInstance.current.on('rotate', () => {
+        const arrow = markerUsuarioRef.current?.getElement().querySelector<HTMLElement>('.map-user-heading');
+        const heading = rumboUsuarioRef.current;
+        const currentMap = mapInstance.current;
+        if (arrow && heading !== null && currentMap) {
+          arrow.style.transform = `rotate(${heading - currentMap.getBearing()}deg)`;
+        }
+      });
     }
 
     const map = mapInstance.current;
@@ -190,7 +219,7 @@ export default function MapaLibre({
       }
       const arrow = markerUsuarioRef.current.getElement().querySelector<HTMLElement>('.map-user-heading');
       if (arrow) {
-        arrow.style.transform = `rotate(${rumboUsuario ?? 0}deg)`;
+        arrow.style.transform = `rotate(${(rumboUsuario ?? 0) - map.getBearing()}deg)`;
         arrow.style.opacity = rumboUsuario === null ? '0.65' : '1';
       }
       markerUsuarioRef.current.setLngLat([coordsUsuario.lng, coordsUsuario.lat]).addTo(map);
@@ -331,9 +360,21 @@ export default function MapaLibre({
     const map = mapInstance.current;
     if (!map) return;
     const centro = new maplibregl.LngLat(longitudUsuario, latitudUsuario);
+    const ubicacionBase = ubicacionBaseSeguimientoRef.current;
+    if (!seguimientoActivoRef.current && ubicacionBase) {
+      if (new maplibregl.LngLat(ubicacionBase.lng, ubicacionBase.lat).distanceTo(centro) < 30) return;
+      seguimientoActivoRef.current = true;
+    }
     if (map.getCenter().distanceTo(centro) < 4) return;
+    ubicacionBaseSeguimientoRef.current = { lat: latitudUsuario, lng: longitudUsuario };
     map.easeTo({ center: centro, duration: 450, essential: true });
   }, [latitudUsuario, longitudUsuario, seguirUsuario]);
+
+  useEffect(() => {
+    const map = mapInstance.current;
+    if (!map || !seguirUsuario || !seguimientoActivoRef.current || rumboUsuario === null) return;
+    map.rotateTo(rumboUsuario, { duration: 180 });
+  }, [rumboUsuario, seguirUsuario]);
 
   useEffect(() => {
     const coordinates = routeCoordinatesRef.current;
