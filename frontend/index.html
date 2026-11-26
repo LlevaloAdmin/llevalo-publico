@@ -34,17 +34,22 @@
         76% { opacity:.4; transform:translate(-50%,-50%) scale(1) rotate(-140deg) }
         100% { opacity:0; transform:translate(-50%,-50%) scale(1.1) rotate(-220deg) }
       }
+      @keyframes startup-tagline-enter {
+        0%,35% { opacity:0; transform:translateY(8px) }
+        58%,78% { opacity:.85; transform:translateY(0) }
+        100% { opacity:0; transform:translateY(-4px) }
+      }
       .startup-intro {
         position:fixed; z-index:10000; inset:0; display:grid; place-items:center;
         overflow:hidden; isolation:isolate; background:#fdfbf7; color:#0f172a;
         pointer-events:none; opacity:1; transition:opacity 220ms ease
       }
-      .startup-intro-dark { background:#0b1120; color:#f8fafc }
+      .startup-intro-dark { background:#17212b; color:#f8fafc }
       .startup-intro-hidden { opacity:0 }
       .startup-intro:before {
         position:absolute; top:50%; left:50%; width:min(86vw,460px); aspect-ratio:1;
         border-radius:50%; background:radial-gradient(circle,rgb(255 87 34 / 18%),rgb(255 87 34 / 5%) 42%,transparent 70%);
-        content:""; animation:startup-glow 3s cubic-bezier(.2,.75,.25,1) both
+        content:""; animation:startup-glow 2.7s cubic-bezier(.2,.75,.25,1) both
       }
       .startup-orbit {
         position:absolute; top:50%; left:50%; aspect-ratio:1; border:1px solid rgb(255 87 34 / 24%);
@@ -56,39 +61,64 @@
       }
       .startup-orbit-one {
         width:min(84vw,440px); border-top-color:#ff5722; border-left-color:transparent;
-        animation:startup-orbit-one 3s cubic-bezier(.2,.75,.25,1) both
+        animation:startup-orbit-one 2.7s cubic-bezier(.2,.75,.25,1) both
       }
       .startup-orbit-two {
         width:min(68vw,360px); border-style:dashed; border-color:rgb(255 87 34 / 32%);
-        animation:startup-orbit-two 3s cubic-bezier(.2,.75,.25,1) both
+        animation:startup-orbit-two 2.7s cubic-bezier(.2,.75,.25,1) both
       }
       .startup-wordmark {
         position:relative; z-index:1; display:inline-flex; width:100vw; align-items:center;
         justify-content:center; white-space:nowrap; font-family:system-ui,-apple-system,"Segoe UI",sans-serif;
         font-size:clamp(3.75rem,21vw,7.5rem); font-weight:900; letter-spacing:-.075em;
         line-height:1; opacity:0; will-change:transform,opacity;
-        animation:startup-wordmark-enter 3s cubic-bezier(.2,.75,.25,1) both
+        animation:startup-wordmark-enter 2.7s cubic-bezier(.2,.75,.25,1) both
       }
+      .startup-initial-wrap { position:relative; display:inline-block }
+      .startup-santa-hat {
+        position:absolute; top:-.3em; left:.02em; z-index:2; width:.58em; height:.48em;
+        transform:rotate(-24deg); transform-origin:center bottom
+      }
+      .startup-santa-hat:before {
+        position:absolute; right:.01em; bottom:.12em; left:.04em; height:.38em;
+        border-radius:.2em .22em .03em .03em; background:linear-gradient(135deg,#ef4444,#b91c1c);
+        clip-path:polygon(0 100%,12% 56%,58% 0,100% 76%,86% 100%); content:""
+      }
+      .startup-santa-hat-brim,.startup-santa-hat-pom {
+        position:absolute; z-index:1; border-radius:50%; background:#fff;
+        box-shadow:0 1px 3px rgb(15 23 42 / 20%)
+      }
+      .startup-santa-hat-brim {
+        bottom:.08em; left:0; width:.58em; height:.14em; border-radius:999px
+      }
+      .startup-santa-hat-pom { top:0; right:0; width:.15em; height:.15em }
       .startup-initial { color:#ff5722 }
       .startup-wordmark-rest { display:inline-block }
+      .startup-tagline {
+        position:absolute; top:calc(50% + clamp(3rem,12vw,5.5rem)); color:#68766f;
+        font-size:clamp(.72rem,2.8vw,.95rem); font-weight:800; letter-spacing:.12em;
+        text-transform:uppercase; opacity:0;
+        animation:startup-tagline-enter 2.7s cubic-bezier(.2,.75,.25,1) both
+      }
       @media(prefers-reduced-motion:reduce) {
         .startup-intro { transition:none }
         .startup-intro:before { animation:none; opacity:0 }
         .startup-orbit { display:none }
         .startup-wordmark { animation:none; opacity:1; transform:none }
+        .startup-tagline { animation:none; opacity:0 }
       }
     </style>
     
     <!-- Título y SEO -->
     <title>Llévalo | Delivery y Mandados en San Diego, Carabobo</title>
     <meta name="application-name" content="Llévalo" />
-    <meta name="description" content="Llévalo: servicio de delivery rápido, comida, mercado, mandados y viajes en San Diego, Carabobo. Conoce a tu repartidor verificado antes de aceptar." />
+    <meta name="description" content="Llévalo te ayuda a resolver comida, mercado, mandados y viajes por Carabobo. Pide en pocos pasos y sigue tu servicio desde el teléfono." />
     <meta name="keywords" content="delivery San Diego Carabobo, mandados Valencia, encomiendas San Diego, Llévalo delivery, comida a domicilio San Diego" />
     
     <!-- Open Graph con nombre del sitio explícito -->
     <meta property="og:site_name" content="Llévalo" />
     <meta property="og:title" content="Llévalo | Delivery y Mandados en San Diego, Carabobo" />
-    <meta property="og:description" content="Lo que necesites, llévalo ya. Comida, mercado y viajes con repartidores verificados en San Diego." />
+    <meta property="og:description" content="La vuelta de hoy, más fácil. Comida, mercado, mandados y viajes por Carabobo con Llévalo." />
     <meta property="og:url" content="https://llevalo.vercel.app/" />
     <meta property="og:image" content="https://llevalo.vercel.app/logo.svg" />
     <meta property="og:type" content="website" />
@@ -127,7 +157,7 @@
         splash.className = localStorage.getItem('llevalo_dark_mode') === 'true' ? 'startup-intro startup-intro-dark' : 'startup-intro';
         splash.setAttribute('role', 'status');
         splash.setAttribute('aria-label', 'Iniciando Llévalo');
-        splash.innerHTML = '<span class="startup-orbit startup-orbit-one" aria-hidden="true"></span><span class="startup-orbit startup-orbit-two" aria-hidden="true"></span><div class="startup-wordmark" aria-hidden="true"><span class="startup-initial">L</span><span class="startup-wordmark-rest">lévalo</span></div>';
+        splash.innerHTML = '<span class="startup-orbit startup-orbit-one" aria-hidden="true"></span><span class="startup-orbit startup-orbit-two" aria-hidden="true"></span><div class="startup-wordmark" aria-hidden="true"><span class="startup-initial-wrap"><span class="startup-initial">L</span><span class="startup-santa-hat"><span class="startup-santa-hat-pom"></span><span class="startup-santa-hat-brim"></span></span></span><span class="startup-wordmark-rest">lévalo</span></div><span class="startup-tagline" aria-hidden="true">Hecho para resolver</span>';
         document.body.appendChild(splash);
       }
     </script>

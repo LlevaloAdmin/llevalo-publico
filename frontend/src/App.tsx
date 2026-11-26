@@ -2716,16 +2716,16 @@ export default function App() {
   }, [coordsUsuarioGPS, usuario?.rol, pedidoAsignadoRepartidorId]);
 
   return (
-    <div className={`app-shell flex flex-col font-sans transition-colors duration-300 ${darkMode ? 'dark bg-slate-950 text-slate-100' : 'bg-[#FDFBF7] text-slate-800'}`}>
-      <header className={`border-b backdrop-blur sticky top-0 z-50 px-4 md:px-10 py-3 flex flex-wrap justify-between items-center gap-y-2 shadow-sm transition-colors ${darkMode ? 'bg-slate-950/90 border-slate-800' : 'bg-[#FDFBF7]/90 border-orange-100'}`}>
+    <div className={`app-shell flex flex-col font-sans transition-colors duration-300 ${usuario ? 'app-shell-authenticated' : ''} ${darkMode ? 'dark bg-slate-950 text-slate-100' : 'bg-[#FDFBF7] text-slate-800'}`}>
+      <header className={`app-header border-b backdrop-blur sticky top-0 z-50 px-4 md:px-10 py-3 flex flex-wrap justify-between items-center gap-y-2 shadow-sm transition-colors ${darkMode ? 'bg-slate-950/90 border-slate-800' : 'bg-[#FDFBF7]/90 border-orange-100'}`}>
         {usuario ? (
           <div className="flex items-center space-x-3" aria-label="Llévalo">
-            <div className="bg-[#FF5722] text-white w-9 h-9 rounded-2xl font-black text-lg flex items-center justify-center shadow-md">L</div>
+            <div className="brand-mark" aria-hidden="true"><span>L</span><span className="brand-santa-hat"><i /><b /></span></div>
             <span className={`text-xl md:text-2xl font-black tracking-tight ${darkMode ? 'text-white' : 'text-slate-900'}`}>Llévalo</span>
           </div>
         ) : (
           <button type="button" onClick={() => navegarA('home')} className="flex items-center space-x-3" aria-label="Volver al inicio">
-            <div className="bg-[#FF5722] text-white w-9 h-9 rounded-2xl font-black text-lg flex items-center justify-center shadow-md">L</div>
+            <div className="brand-mark" aria-hidden="true"><span>L</span><span className="brand-santa-hat"><i /><b /></span></div>
             <span className={`text-xl md:text-2xl font-black tracking-tight ${darkMode ? 'text-white' : 'text-slate-900'}`}>Llévalo</span>
           </button>
         )}
@@ -2770,7 +2770,7 @@ export default function App() {
         </div>
 
         {usuario && (
-          <nav aria-label="Navegación móvil" className={`flex w-full flex-wrap items-center gap-2 md:hidden ${darkMode ? 'text-slate-200' : 'text-slate-700'}`}>
+          <nav aria-label="Navegación móvil" className={`mobile-nav flex w-full flex-wrap items-center gap-2 md:hidden ${darkMode ? 'text-slate-200' : 'text-slate-700'}`}>
             <button type="button" aria-pressed={activeTab === 'home'} onClick={() => navegarA('home')} className={`flex min-w-[5rem] flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold ${activeTab === 'home' ? 'border-orange-200 bg-orange-50 text-[#FF5722]' : 'border-transparent'}`}>
               <MapPin size={17} /> Inicio
             </button>
@@ -2795,20 +2795,20 @@ export default function App() {
         )}
       </header>
 
-      <main className="app-page flex-1 flex flex-col p-4 md:p-6 max-w-7xl mx-auto w-full">
+      <main className={`app-page flex-1 flex flex-col p-4 md:p-6 max-w-7xl mx-auto w-full ${usuario ? 'app-page-authenticated' : ''}`}>
         {activeTab === 'home' && !usuario && (
           <>
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center py-8 lg:py-14">
-              <div className="space-y-6">
+            <div className="landing-hero grid grid-cols-1 lg:grid-cols-2 gap-12 items-center py-8 lg:py-14">
+              <div className="landing-copy space-y-6">
                 <div className={`inline-flex items-center space-x-2 px-4 py-1.5 rounded-full text-xs font-bold uppercase border ${darkMode ? 'bg-orange-950/60 border-orange-900 text-orange-300' : 'bg-orange-100 border-orange-200 text-[#FF5722]'}`}>
                   <MapPin size={14} className="text-[#FF5722]" />
                   <span>Carabobo, Venezuela 🇻🇪</span>
                 </div>
                 <h1 className={`text-4xl lg:text-7xl font-black tracking-tight leading-[1.08] ${darkMode ? 'text-white' : 'text-slate-900'}`}>
-                  Lo que necesites, <span className="text-[#FF5722]">llévalo ya.</span>
+                  La vuelta de hoy, <span className="text-[#FF5722]">más fácil.</span>
                 </h1>
                 <p className={`text-base lg:text-lg leading-relaxed max-w-xl ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>
-                  Envíos y viajes en San Diego. Conoce quién realizará el servicio y sigue cada solicitud desde la app.
+                  Comida, mercado, mandados o viajes por Carabobo. Pide en pocos pasos y sigue tu servicio desde el teléfono.
                 </p>
 
                 <div className="pt-2">
@@ -2819,9 +2819,13 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="relative">
+              <div className="landing-photo relative">
                 <div className={`rounded-3xl overflow-hidden shadow-xl border p-2 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-orange-100 border-orange-200'}`}>
                   <img src="/hero-moto.jpg" alt="Repartidor de Llévalo en moto" className="rounded-2xl object-cover w-full h-[420px]" />
+                </div>
+                <div className="landing-photo-note">
+                  <span className="landing-photo-note-dot" />
+                  Cerca de ti, en Carabobo
                 </div>
               </div>
             </div>
@@ -2831,16 +2835,60 @@ export default function App() {
                 <p className="text-xs font-black uppercase tracking-[0.18em] text-[#FF5722]">A tu ritmo, desde un solo lugar</p>
                 <h2 className={`mt-2 text-2xl font-black md:text-3xl ${darkMode ? 'text-white' : 'text-slate-900'}`}>Resuelve más con Llévalo</h2>
               </div>
-              <div className="grid gap-3 md:grid-cols-3">
+              <p className="carousel-swipe-cue md:hidden">
+                Desliza para descubrir <ArrowRight size={14} />
+              </p>
+              <div
+                className="landing-services mobile-service-carousel grid gap-3 md:grid-cols-3"
+                role="region"
+                aria-label="Carrusel de servicios"
+                aria-roledescription="carrusel"
+                tabIndex={0}
+              >
                 {[
-                  { icon: Package, title: 'Envíos y mandados', description: 'Comida, mercado y encargos para tu día a día.' },
-                  { icon: CarFront, title: 'Viajes en la ciudad', description: 'Solicita un traslado y conoce el estado del servicio.' },
-                  { icon: Navigation, title: 'Seguimiento sencillo', description: 'Consulta el avance de tu solicitud desde la app.' }
-                ].map(({ icon: Icon, title, description }) => (
-                  <article key={title} className={`rounded-2xl border p-5 transition-colors ${darkMode ? 'border-slate-800 bg-slate-900/80' : 'border-orange-100 bg-white'}`}>
+                  {
+                    icon: Package,
+                    title: 'Envíos y mandados',
+                    description: 'Comida, mercado y encargos para tu día a día.',
+                    action: 'Pedir un envío',
+                    destination: 'envios' as const
+                  },
+                  {
+                    icon: CarFront,
+                    title: 'Viajes en la ciudad',
+                    description: 'Solicita un traslado y conoce el estado del servicio.',
+                    action: 'Pedir un viaje',
+                    destination: 'viajes' as const
+                  },
+                  {
+                    icon: Navigation,
+                    title: 'Seguimiento sencillo',
+                    description: 'Consulta el avance de tu solicitud desde la app.',
+                    action: 'Ver mis pedidos',
+                    destination: 'login' as const
+                  }
+                ].map(({ icon: Icon, title, description, action, destination }) => (
+                  <article key={title} className={`landing-service-card rounded-2xl border p-5 transition-colors ${darkMode ? 'border-slate-800 bg-slate-900/80' : 'border-orange-100 bg-white'}`}>
                     <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-orange-100 text-[#FF5722]"><Icon size={20} /></div>
                     <h3 className={`mt-4 font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>{title}</h3>
                     <p className={`mt-2 text-sm leading-relaxed ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>{description}</p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (destination === 'login') {
+                          setErrorAuth('');
+                          setAuthMode('login');
+                        } else {
+                          setServiceType(destination);
+                          setAuthMode('choice');
+                          setAuthRoleSelection('cliente');
+                        }
+                        navegarA('auth');
+                      }}
+                      className="mt-4 inline-flex items-center gap-2 text-xs font-black text-[#FF5722]"
+                    >
+                      {action} <ArrowRight size={14} />
+                    </button>
                   </article>
                 ))}
               </div>
@@ -2856,7 +2904,7 @@ export default function App() {
 
         {activeTab === 'home' && usuario && (
           <section className="w-full max-w-5xl mx-auto py-6 md:py-12 space-y-6">
-            <div className={`rounded-3xl p-6 md:p-10 border shadow-sm ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-orange-100'}`}>
+            <div className={`dashboard-welcome rounded-3xl p-6 md:p-10 border shadow-sm ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-orange-100'}`}>
               <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-6">
                 <div className="space-y-3">
                   <h1 className={`text-3xl md:text-5xl font-black tracking-tight ${darkMode ? 'text-white' : 'text-slate-900'}`}>
@@ -2877,14 +2925,14 @@ export default function App() {
             </div>
 
             {usuario.rol === 'cliente' ? (
-              <div className="grid gap-4 md:grid-cols-3">
-                <button onClick={() => { setServiceType('envios'); irAPedidos(); }} className={`rounded-3xl border p-6 text-left transition hover:-translate-y-0.5 ${darkMode ? 'bg-slate-900 border-slate-800 hover:border-orange-700' : 'bg-white border-orange-100 hover:border-orange-300'}`}>
+              <div className="dashboard-service-carousel mobile-service-carousel grid gap-4 md:grid-cols-3" role="region" aria-label="Accesos rápidos del cliente" aria-roledescription="carrusel" tabIndex={0}>
+                <button onClick={() => { setServiceType('envios'); irAPedidos(); }} className={`dashboard-action-card rounded-3xl border p-6 text-left transition hover:-translate-y-0.5 ${darkMode ? 'bg-slate-900 border-slate-800 hover:border-orange-700' : 'bg-white border-orange-100 hover:border-orange-300'}`}>
                   <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-orange-100 text-[#FF5722]"><Package size={20} /></div>
                   <h2 className="font-black">Pedir un envío</h2>
                   <p className="mt-2 text-xs text-slate-500">Comida, mercado, mandados y más.</p>
                   <span className="mt-4 inline-flex items-center gap-1 text-xs font-bold text-[#FF5722]">Continuar <ArrowRight size={14} /></span>
                 </button>
-                <button onClick={() => { setServiceType('viajes'); irAPedidos(); }} className={`rounded-3xl border p-6 text-left transition hover:-translate-y-0.5 ${darkMode ? 'bg-slate-900 border-slate-800 hover:border-orange-700' : 'bg-white border-orange-100 hover:border-orange-300'}`}>
+                <button onClick={() => { setServiceType('viajes'); irAPedidos(); }} className={`dashboard-action-card rounded-3xl border p-6 text-left transition hover:-translate-y-0.5 ${darkMode ? 'bg-slate-900 border-slate-800 hover:border-orange-700' : 'bg-white border-orange-100 hover:border-orange-300'}`}>
                   <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-700"><CarFront size={20} /></div>
                   <h2 className="font-black">Pedir un viaje</h2>
                   <p className="mt-2 text-xs text-slate-500">Indica tu origen y destino para ver el costo.</p>
@@ -2906,7 +2954,7 @@ export default function App() {
                 </div>
               </div>
             ) : (
-              <div className="grid gap-4 md:grid-cols-3">
+              <div className="dashboard-service-carousel mobile-service-carousel grid gap-4 md:grid-cols-3" role="region" aria-label="Accesos rápidos del repartidor" aria-roledescription="carrusel" tabIndex={0}>
                 <div className={`rounded-3xl border p-6 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-orange-100'}`}>
                   <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-700"><Bike size={20} /></div>
                   <h2 className="font-black">{pedidoAsignadoRepartidor ? 'Entrega en curso' : 'Trabaja con Llévalo'}</h2>
@@ -3255,7 +3303,8 @@ export default function App() {
                   <h3 className={`text-lg font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Nuevo Pedido</h3>
                 </div>
 
-                <div className="grid grid-cols-1 min-[400px]:grid-cols-2 gap-3">
+                <p className="carousel-swipe-cue md:hidden">Desliza para cambiar de servicio <ArrowRight size={14} /></p>
+                <div className="service-type-carousel mobile-service-carousel grid grid-cols-1 min-[400px]:grid-cols-2 gap-3" role="region" aria-label="Elige el tipo de servicio" aria-roledescription="carrusel" tabIndex={0}>
                   <button type="button" onClick={() => { setServiceType('envios'); void cargarConfiguracionPago(); }} className={`rounded-2xl border p-4 text-left transition cursor-pointer ${serviceType === 'envios' ? 'border-[#FF5722] bg-orange-50 shadow-sm dark:bg-orange-950/30' : 'border-slate-200 bg-white hover:border-orange-200 dark:border-slate-800 dark:bg-slate-950'}`}>
                     <span className={`mb-3 flex h-10 w-10 items-center justify-center rounded-xl ${serviceType === 'envios' ? 'bg-[#FF5722] text-white' : 'bg-orange-100 text-[#FF5722]'}`}><Package size={19} /></span>
                     <span className={`block text-sm font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Envíos</span>

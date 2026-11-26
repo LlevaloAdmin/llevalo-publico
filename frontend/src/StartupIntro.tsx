@@ -5,14 +5,8 @@ interface StartupIntroProps {
   children: ReactNode;
 }
 
-const STARTUP_DURATION_MS = 3000;
+const STARTUP_DURATION_MS = 2700;
 const FADE_DURATION_MS = 220;
-
-const esTemporadaNavidena = () => {
-  const fecha = new Date();
-  const mes = fecha.getMonth();
-  return mes === 10 || mes === 11 || (mes === 0 && fecha.getDate() <= 6);
-};
 
 export function StartupIntro({ enabled, children }: StartupIntroProps) {
   useEffect(() => {
@@ -27,10 +21,7 @@ export function StartupIntro({ enabled, children }: StartupIntroProps) {
       splash.className = 'startup-intro';
       splash.setAttribute('role', 'status');
       splash.setAttribute('aria-label', 'Iniciando Llévalo');
-      const gorrito = esTemporadaNavidena()
-        ? '<span class="startup-santa-hat" aria-hidden="true"><span class="startup-santa-hat-pom"></span><span class="startup-santa-hat-brim"></span></span>'
-        : '';
-      splash.innerHTML = `<span class="startup-orbit startup-orbit-one" aria-hidden="true"></span><span class="startup-orbit startup-orbit-two" aria-hidden="true"></span><div class="startup-wordmark" aria-hidden="true">${gorrito}<span class="startup-initial">L</span><span class="startup-wordmark-rest">lévalo</span></div>`;
+      splash.innerHTML = '<span class="startup-orbit startup-orbit-one" aria-hidden="true"></span><span class="startup-orbit startup-orbit-two" aria-hidden="true"></span><div class="startup-wordmark" aria-hidden="true"><span class="startup-initial-wrap"><span class="startup-initial">L</span><span class="startup-santa-hat"><span class="startup-santa-hat-pom"></span><span class="startup-santa-hat-brim"></span></span></span><span class="startup-wordmark-rest">lévalo</span></div><span class="startup-tagline" aria-hidden="true">Hecho para resolver</span>';
       document.body.appendChild(splash);
     }
 
