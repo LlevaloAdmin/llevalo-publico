@@ -69,7 +69,7 @@ const etiquetaTipoServicio = (tipo: string) => {
 const etiquetaMetodoPago = (metodo?: string) => {
   if (metodo === 'pago_movil') return 'Pago Móvil';
   if (metodo === 'efectivo') return 'Efectivo';
-  if (metodo === 'saldo_corporativo') return 'Saldo corporativo';
+  if (metodo === 'saldo_corporativo') return 'Saldo anterior (pedido histórico)';
   return 'Sin método de pago';
 };
 
@@ -88,7 +88,7 @@ interface Postulacion {
   repartidor_id: number;
   repartidor_nombre: string;
   vehiculo: string;
-  placa: string;
+  placa?: string;
   vehiculo_foto?: string;
   calificacion: number;
   estado: 'pendiente' | 'aceptado' | 'rechazado';
@@ -100,7 +100,6 @@ interface PerfilPublico {
   rol: 'cliente' | 'repartidor';
   foto: string;
   vehiculo: string;
-  vehiculo_foto: string;
   promedio: number;
   cantidad: number;
   rango: string;
@@ -117,7 +116,6 @@ interface ResumenCalificaciones {
     contraparte_nombre: string;
     contraparte_foto?: string;
     contraparte_vehiculo?: string;
-    contraparte_vehiculo_foto?: string;
     mis_estrellas: number;
   }>;
 }
@@ -208,9 +206,33 @@ interface UsuarioSesion {
   calificacion?: number;
   rol: 'cliente' | 'repartidor';
   es_admin?: boolean;
+  correo_verificado?: boolean;
+  telefono_verificado?: boolean;
 }
 
-type MetodoPagoViaje = 'pago_movil' | 'efectivo' | 'saldo_corporativo';
+interface PostulacionRepartidorAdmin {
+  id: number;
+  nombre: string;
+  email: string;
+  telefono: string;
+  cedula: string;
+  vehiculo: string;
+  placa: string;
+  estado: 'pendiente_revision' | 'aprobada';
+  correo_verificado: boolean;
+  telefono_verificado: boolean;
+  creado_en: string;
+}
+
+type AccionCorreo = { tipo: 'verificar' | 'activar-repartidor'; token: string };
+type RegistroPendiente = {
+  email: string;
+  tipo: 'cliente' | 'repartidor';
+  etapa: 'correo' | 'revision';
+  mensaje: string;
+};
+
+type MetodoPagoViaje = 'pago_movil' | 'efectivo';
 
 interface ConfiguracionPago {
   pagoMovil: {
@@ -219,7 +241,6 @@ interface ConfiguracionPago {
     cedula: string;
     titular: string;
   };
-  saldoCorporativo: number;
 }
 
 interface HistorialPagoAdmin {
@@ -400,7 +421,14 @@ function AdminAccordion({ title, description, darkMode, badge, children }: Admin
 
 export default function App() {
   type Tab = 'home' | 'cliente' | 'repartidor' | 'perfil' | 'auth' | 'admin';
-  const [activeTab, setActiveTab] = useState<Tab>('home');
+  const accionCorreoInicial: AccionCorreo | null = (() => {
+    if (typeof window === 'undefined') return null;
+    const parametros = new URLSearchParams(window.location.hash.slice(1));
+    const tipo = parametros.get('accionCorreo');
+    const token = parametros.get('tokenCorreo');
+    return token && (tipo === 'verificar' || tipo === 'activar-repartidor') ? { tipo, token } : null;
+  })();
+  const [activeTab, setActiveTab] = useState<Tab>(accionCorreoInicial ? 'auth' : 'home');
   const historialNavegacionRef = useRef<Tab[]>([]);
   const [serviceType, setServiceType] = useState<TipoServicio>('envios');
   
@@ -429,9 +457,14 @@ export default function App() {
       return null;
     }
   });
-  const [authMode, setAuthMode] = useState<'choice' | 'login' | 'register'>('choice');
+  const [authMode, setAuthMode] = useState<'choice' | 'login' | 'register' | 'pending' | 'action'>(accionCorreoInicial ? 'action' : 'choice');
   const [authRoleSelection, setAuthRoleSelection] = useState<'cliente' | 'repartidor'>('cliente');
   const [errorAuth, setErrorAuth] = useState('');
+  const [mensajeAuth, setMensajeAuth] = useState('');
+  const [registroPendiente, setRegistroPendiente] = useState<RegistroPendiente | null>(null);
+  const [accionCorreo, setAccionCorreo] = useState<AccionCorreo | null>(accionCorreoInicial);
+  const [codigoCorreo, setCodigoCorreo] = useState('');
+  const [confirmarPassword, setConfirmarPassword] = useState('');
   const [guardandoPerfil, setGuardandoPerfil] = useState(false);
   const [errorPerfil, setErrorPerfil] = useState('');
 
@@ -472,6 +505,9 @@ export default function App() {
   const [email, setEmail] = useState('');
   const [telefono, setTelefono] = useState('');
   const [cedulaNumero, setCedulaNumero] = useState(() => usuario?.cedula?.replace(/^[VvEe]-/, '') || '');
+  const [tipoCedula, setTipoCedula] = useState<'V' | 'E'>(() =>
+    usuario?.cedula?.toUpperCase().startsWith('E-') ? 'E' : 'V'
+  );
   const [fotoLocal, setFotoLocal] = useState(() => usuario?.foto || '');
   const inputFotoPerfilRef = useRef<HTMLInputElement>(null);
   const fotoVehiculoLocal = usuario?.vehiculo_foto || '';
@@ -600,6 +636,7 @@ export default function App() {
   const [cargandoConfiguracionPago, setCargandoConfiguracionPago] = useState(false);
   const [errorPago, setErrorPago] = useState('');
   const [pagosPendientesAdmin, setPagosPendientesAdmin] = useState<PedidoReal[]>([]);
+  const [postulacionesAdmin, setPostulacionesAdmin] = useState<PostulacionRepartidorAdmin[]>([]);
   const [historialPagosAdmin, setHistorialPagosAdmin] = useState<HistorialPagoAdmin[]>([]);
   const [metricasAdmin, setMetricasAdmin] = useState<MetricasAdmin | null>(null);
   const [actividadAdmin, setActividadAdmin] = useState<ActividadAdmin[]>([]);
@@ -607,12 +644,13 @@ export default function App() {
   const [errorAdmin, setErrorAdmin] = useState('');
   const [mensajeAdmin, setMensajeAdmin] = useState('');
   const [configPagoAdmin, setConfigPagoAdmin] = useState({ banco: '', telefono: '', cedula: '', titular: '' });
-  const [emailRecargaSaldo, setEmailRecargaSaldo] = useState('');
-  const [montoRecargaSaldo, setMontoRecargaSaldo] = useState('');
-  const [notaRecargaSaldo, setNotaRecargaSaldo] = useState('');
-
   const [horaActual, setHoraActual] = useState(horaInicial);
   const usuarioId = usuario?.id;
+
+  useEffect(() => {
+    if (!accionCorreo) return;
+    window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}`);
+  }, [accionCorreo]);
 
   const navegarA = (tab: Tab) => {
     if (tab === activeTab) return;
@@ -1208,21 +1246,25 @@ export default function App() {
     setCargandoAdmin(true);
     setErrorAdmin('');
     try {
-      const [pagosResponse, configResponse, historialResponse, tarifasResponse] = await Promise.all([
+      const [pagosResponse, configResponse, historialResponse, tarifasResponse, postulacionesResponse] = await Promise.all([
         authenticatedFetch(`${API_URL}/api/pagos/admin/pendientes`),
         authenticatedFetch(`${API_URL}/api/pagos/config`),
         authenticatedFetch(`${API_URL}/api/pagos/admin/historial`),
-        authenticatedFetch(`${API_URL}/api/pagos/tarifas`)
+        authenticatedFetch(`${API_URL}/api/pagos/tarifas`),
+        authenticatedFetch(`${API_URL}/api/auth/admin/driver-applications`)
       ]);
       if (!pagosResponse.ok) throw new Error(await mensajeErrorApi(pagosResponse, 'No se pudieron cargar los pagos pendientes'));
       if (!configResponse.ok) throw new Error(await mensajeErrorApi(configResponse, 'No se pudo cargar la configuración de pago'));
       if (!historialResponse.ok) throw new Error(await mensajeErrorApi(historialResponse, 'No se pudo cargar el historial de pagos'));
       if (!tarifasResponse.ok) throw new Error(await mensajeErrorApi(tarifasResponse, 'No se pudieron cargar las tarifas'));
+      if (!postulacionesResponse.ok) throw new Error(await mensajeErrorApi(postulacionesResponse, 'No se pudieron cargar las postulaciones'));
       const pagosData = await pagosResponse.json();
       const configData: ConfiguracionPago = await configResponse.json();
       const historialData = await historialResponse.json();
       const tarifasData: { tarifas: ConfiguracionTarifas; tasas: TasasCambio | null; errorTasas?: string } = await tarifasResponse.json();
+      const postulacionesData: PostulacionRepartidorAdmin[] = await postulacionesResponse.json();
       setPagosPendientesAdmin(Array.isArray(pagosData.pagos) ? pagosData.pagos : []);
+      setPostulacionesAdmin(Array.isArray(postulacionesData) ? postulacionesData : []);
       setHistorialPagosAdmin(Array.isArray(historialData.historial) ? historialData.historial : []);
       setConfiguracionPago(configData);
       setConfigPagoAdmin(configData.pagoMovil);
@@ -1234,6 +1276,63 @@ export default function App() {
       setErrorAdmin(error instanceof Error ? error.message : 'No se pudo cargar el panel de administración.');
     } finally {
       setCargandoAdmin(false);
+    }
+  };
+
+  const aprobarPostulacionRepartidor = async (postulacion: PostulacionRepartidorAdmin) => {
+    const confirmado = window.confirm(
+      `¿Confirmas que entrevistaste presencialmente a ${postulacion.nombre}, comprobaste su teléfono y revisaste su cédula y documentos originales? Solo entonces envía la aprobación.`
+    );
+    if (!confirmado) return;
+    setErrorAdmin('');
+    setMensajeAdmin('');
+    try {
+      const response = await authenticatedFetch(`${API_URL}/api/auth/admin/driver-applications/${postulacion.id}/approve`, {
+        method: 'POST'
+      });
+      if (!response.ok) throw new Error(await mensajeErrorApi(response, 'No se pudo aprobar la postulación'));
+      const data = await response.json();
+      setMensajeAdmin(data.mensaje || 'Postulación aprobada.');
+      await cargarPanelAdmin();
+    } catch (error) {
+      await cargarPanelAdmin();
+      setErrorAdmin(error instanceof Error ? error.message : 'No se pudo aprobar la postulación.');
+    }
+  };
+
+  const rechazarPostulacionRepartidor = async (postulacion: PostulacionRepartidorAdmin) => {
+    const motivo = window.prompt('Motivo interno opcional para el rechazo:');
+    if (motivo === null) return;
+    setErrorAdmin('');
+    setMensajeAdmin('');
+    try {
+      const response = await authenticatedFetch(`${API_URL}/api/auth/admin/driver-applications/${postulacion.id}/reject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ motivo })
+      });
+      if (!response.ok) throw new Error(await mensajeErrorApi(response, 'No se pudo rechazar la postulación'));
+      const data = await response.json();
+      setMensajeAdmin(data.mensaje || 'Postulación rechazada.');
+      await cargarPanelAdmin();
+    } catch (error) {
+      await cargarPanelAdmin();
+      setErrorAdmin(error instanceof Error ? error.message : 'No se pudo rechazar la postulación.');
+    }
+  };
+
+  const reenviarInvitacionRepartidor = async (postulacion: PostulacionRepartidorAdmin) => {
+    setErrorAdmin('');
+    setMensajeAdmin('');
+    try {
+      const response = await authenticatedFetch(`${API_URL}/api/auth/admin/driver-applications/${postulacion.id}/resend-invitation`, {
+        method: 'POST'
+      });
+      if (!response.ok) throw new Error(await mensajeErrorApi(response, 'No se pudo reenviar la invitación'));
+      const data = await response.json();
+      setMensajeAdmin(data.mensaje || 'Invitación reenviada.');
+    } catch (error) {
+      setErrorAdmin(error instanceof Error ? error.message : 'No se pudo reenviar la invitación.');
     }
   };
 
@@ -1381,27 +1480,6 @@ export default function App() {
     }
   };
 
-  const recargarSaldoCorporativo = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!window.confirm(`¿Confirmas que verificaste el abono de $${Number(montoRecargaSaldo).toFixed(2)} USD para ${emailRecargaSaldo.trim()}?`)) return;
-    try {
-      const response = await authenticatedFetch(`${API_URL}/api/pagos/admin/saldo`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: emailRecargaSaldo, monto: montoRecargaSaldo, nota: notaRecargaSaldo })
-      });
-      if (!response.ok) throw new Error(await mensajeErrorApi(response, 'No se pudo recargar el saldo'));
-      const data = await response.json();
-      setEmailRecargaSaldo('');
-      setMontoRecargaSaldo('');
-      setNotaRecargaSaldo('');
-      setErrorAdmin('');
-      setMensajeAdmin(`Saldo acreditado. Nuevo saldo base: $${Number(data.saldoCorporativo).toFixed(2)}.`);
-    } catch (error) {
-      setErrorAdmin(error instanceof Error ? error.message : 'No se pudo recargar el saldo.');
-    }
-  };
-
   const handleCrearPedido = async () => {
     if (!usuario) return;
     if (!configuracionTarifas) {
@@ -1430,11 +1508,6 @@ export default function App() {
       alert('Pago Móvil todavía no está configurado por Llévalo. Selecciona otro método o inténtalo luego.');
       return;
     }
-    if (metodoPagoViaje === 'saldo_corporativo'
-      && (configuracionPago?.saldoCorporativo || 0) < Number(tarifaTotal)) {
-      alert('Tu saldo corporativo no es suficiente para este pedido.');
-      return;
-    }
     setEnviandoPedido(true);
 
     try {
@@ -1444,7 +1517,6 @@ export default function App() {
         body: JSON.stringify({
           cliente_id: usuario.id,
           cliente_nombre: usuario.nombre,
-          cliente_cedula: usuario.cedula || 'V-00000000',
           cliente_foto: fotoLocal || usuario.foto || '',
           tipo_servicio: serviceType,
           descripcion: serviceType === 'viajes' ? 'Servicio de viaje' : 'Servicio de envíos',
@@ -1493,13 +1565,7 @@ export default function App() {
     if (!usuario || usuario.rol !== 'repartidor') return false;
     try {
       const res = await authenticatedFetch(`${API_URL}/api/pedidos/${pedidoId}/postular`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          repartidor_id: usuario.id, repartidor_nombre: usuario.nombre,
-          vehiculo: usuario.vehiculo || 'Moto Suzuki GN', placa: usuario.placa || 'ABC-123',
-          vehiculo_foto: fotoVehiculoLocal || usuario.vehiculo_foto || '', calificacion: usuario.calificacion || 4.9
-        })
+        method: 'POST'
       });
       if (!res.ok) throw new Error(await mensajeErrorApi(res, 'No se pudo enviar la postulación'));
       await sincronizarDatos();
@@ -1759,10 +1825,7 @@ export default function App() {
       const res = await authenticatedFetch(`${API_URL}/api/pedidos/${pedidoId}/aceptar-postulacion`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          repartidor_id: post.repartidor_id, repartidor_nombre: post.repartidor_nombre,
-          vehiculo: post.vehiculo, placa: post.placa, vehiculo_foto: post.vehiculo_foto || '', calificacion: post.calificacion || 4.9
-        })
+        body: JSON.stringify({ repartidor_id: post.repartidor_id })
       });
       if (!res.ok) throw new Error(await mensajeErrorApi(res, 'No se pudo aceptar la postulación'));
       await sincronizarDatos();
@@ -1804,57 +1867,211 @@ export default function App() {
     }
   };
 
-  const handleAuthSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (authMode === 'register' && !passwordCompleta) {
-      alert('Por favor cumple con todos los requisitos de seguridad para la contraseña.');
-      return;
-    }
-    if (authMode === 'register' && !/^\d{5,10}$/.test(cedulaNumero.trim())) {
-      setErrorAuth('Ingresa una cédula válida de 5 a 10 dígitos.');
-      return;
-    }
-    if (errorPlaca) {
-      alert('Por favor corrige los errores en la placa antes de continuar.');
+  const guardarSesionAutenticada = (data: { token: string; usuario: UsuarioSesion }) => {
+    localStorage.setItem('llevalo_token', data.token);
+    localStorage.setItem('llevalo_usuario', JSON.stringify(data.usuario));
+    setUsuario(data.usuario);
+    setCedulaNumero(data.usuario.cedula?.replace(/^[VvEe]-/, '') || '');
+    setTipoCedula(data.usuario.cedula?.toUpperCase().startsWith('E-') ? 'E' : 'V');
+    setFotoLocal(data.usuario.foto || '');
+    setTipoVehiculo(data.usuario.vehiculo || 'Moto Suzuki GN 125');
+    setPlacaVehiculo(data.usuario.placa || '');
+    setRegistroPendiente(null);
+    setAccionCorreo(null);
+    historialNavegacionRef.current = [];
+    setActiveTab('home');
+  };
+
+  const reenviarVerificacionCorreo = async () => {
+    if (registroPendiente && registroPendiente.etapa !== 'correo') return;
+    const correo = registroPendiente?.email || email.trim();
+    if (!correo) {
+      setErrorAuth('Escribe el correo al que enviamos el código.');
       return;
     }
     setErrorAuth('');
+    setMensajeAuth('');
+    try {
+      assertApiConfigured();
+      const response = await fetch(`${API_URL}/api/auth/email-verification/resend`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: correo,
+          ...(registroPendiente ? { tipo: registroPendiente.tipo } : {})
+        })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'No se pudo reenviar el correo.');
+      setCodigoCorreo('');
+      setMensajeAuth(data.mensaje || 'Si hay una verificación pendiente, recibirás un nuevo código.');
+    } catch (error) {
+      setErrorAuth(error instanceof Error ? error.message : 'No se pudo reenviar el correo.');
+    }
+  };
 
-    const cedulaCompleta = `V-${cedulaNumero.trim()}`;
+  const verificarCodigoCorreo = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!registroPendiente || registroPendiente.etapa !== 'correo') return;
+    setErrorAuth('');
+    setMensajeAuth('');
+    try {
+      assertApiConfigured();
+      const response = await fetch(`${API_URL}/api/auth/verify-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: registroPendiente.email,
+          tipo: registroPendiente.tipo,
+          codigo: codigoCorreo
+        })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'No se pudo verificar el código.');
 
-    const payload = authMode === 'login' 
-      ? { email, password }
-      : { 
-          nombre, email, telefono, 
-          cedula: cedulaCompleta, foto: fotoLocal,
-          vehiculo: tipoVehiculo, placa: placaVehiculo || 'ABC-123', 
-          vehiculo_foto: fotoVehiculoLocal, calificacion: 4.9,
-          password, rol: authRoleSelection 
-        };
+      setCodigoCorreo('');
+      setMensajeAuth(data.mensaje || 'Correo confirmado.');
+      if (data.tipo === 'repartidor') {
+        setRegistroPendiente({
+          email: '',
+          tipo: 'repartidor',
+          etapa: 'revision',
+          mensaje: data.mensaje || 'Tu postulación está lista para revisión del administrador.'
+        });
+        setAuthMode('pending');
+      } else {
+        setRegistroPendiente(null);
+        setAuthMode('login');
+      }
+    } catch (error) {
+      setErrorAuth(error instanceof Error ? error.message : 'No se pudo verificar el código.');
+    }
+  };
 
-    const endpoint = authMode === 'login' ? '/api/auth/login' : '/api/auth/register';
+  const ejecutarAccionCorreo = async (event?: React.FormEvent) => {
+    event?.preventDefault();
+    if (!accionCorreo) return;
+    setErrorAuth('');
+    setMensajeAuth('');
+
+    if (accionCorreo.tipo === 'activar-repartidor' && password !== confirmarPassword) {
+      setErrorAuth('Las contraseñas no coinciden.');
+      return;
+    }
+    if (accionCorreo.tipo === 'activar-repartidor' && !passwordCompleta) {
+      setErrorAuth('Completa todos los requisitos de seguridad de la contraseña.');
+      return;
+    }
 
     try {
       assertApiConfigured();
-      const res = await fetch(`${API_URL}${endpoint}`, {
+      const endpoint = accionCorreo.tipo === 'verificar'
+        ? '/api/auth/verify-email'
+        : '/api/auth/driver-applications/activate';
+      const response = await fetch(`${API_URL}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(accionCorreo.tipo === 'verificar'
+          ? { token: accionCorreo.token }
+          : { token: accionCorreo.token, password })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'No se pudo completar esta acción.');
+
+      if (accionCorreo.tipo === 'activar-repartidor') {
+        if (typeof data.token !== 'string' || !data.usuario) {
+          throw new Error('La activación no devolvió una sesión válida. Contacta al administrador.');
+        }
+        guardarSesionAutenticada({ token: data.token, usuario: data.usuario as UsuarioSesion });
+        return;
+      }
+
+      setAccionCorreo(null);
+      setPassword('');
+      setConfirmarPassword('');
+      setMensajeAuth(data.mensaje || 'Correo confirmado.');
+      if (data.tipo === 'repartidor') {
+        setRegistroPendiente({
+          email: '',
+          tipo: 'repartidor',
+          etapa: 'revision',
+          mensaje: data.mensaje || 'Tu postulación está lista para revisión del administrador.'
+        });
+        setAuthMode('pending');
+      } else {
+        setAuthMode('login');
+      }
+    } catch (error) {
+      setErrorAuth(error instanceof Error ? error.message : 'No se pudo completar esta acción.');
+    }
+  };
+
+  const handleAuthSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const esRegistro = authMode === 'register';
+    const esPostulacion = esRegistro && authRoleSelection === 'repartidor';
+    if (esRegistro && !esPostulacion && !passwordCompleta) {
+      setErrorAuth('Completa todos los requisitos de seguridad de la contraseña.');
+      return;
+    }
+    if (esRegistro && !/^\d{5,10}$/.test(cedulaNumero.trim())) {
+      setErrorAuth('Ingresa una cédula válida de 5 a 10 dígitos.');
+      return;
+    }
+    if (esPostulacion && (errorPlaca || !placaVehiculo.trim())) {
+      setErrorAuth(errorPlaca || 'Ingresa la placa del vehículo.');
+      return;
+    }
+    setErrorAuth('');
+    setMensajeAuth('');
+
+    const payload = !esRegistro
+      ? { email, password }
+      : esPostulacion
+        ? {
+            nombre,
+            email,
+            telefono,
+            cedula: `${tipoCedula}-${cedulaNumero.trim()}`,
+            vehiculo: tipoVehiculo,
+            placa: placaVehiculo.trim().toUpperCase()
+          }
+        : { nombre, email, telefono, cedula: `${tipoCedula}-${cedulaNumero.trim()}`, password, rol: 'cliente' };
+    const endpoint = !esRegistro
+      ? '/api/auth/login'
+      : esPostulacion
+        ? '/api/auth/driver-applications'
+        : '/api/auth/register';
+
+    try {
+      assertApiConfigured();
+      const response = await fetch(`${API_URL}${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Error en autenticación');
-
-      localStorage.setItem('llevalo_token', data.token);
-      localStorage.setItem('llevalo_usuario', JSON.stringify(data.usuario));
-      setUsuario(data.usuario);
-      setCedulaNumero(data.usuario.cedula?.replace(/^[VvEe]-/, '') || '');
-      setFotoLocal(data.usuario.foto || '');
-      setTipoVehiculo(data.usuario.vehiculo || 'Moto Suzuki GN 125');
-      setPlacaVehiculo(data.usuario.placa || '');
-      historialNavegacionRef.current = [];
-      setActiveTab('home');
-    } catch (err: any) {
-      setErrorAuth(err.message);
+      const data = await response.json();
+      if (data.verificacion_pendiente === true) {
+        setCodigoCorreo('');
+        setRegistroPendiente({
+          email: typeof data.email === 'string' ? data.email : email.trim(),
+          tipo: data.tipo === 'repartidor' ? 'repartidor' : 'cliente',
+          etapa: 'correo',
+          mensaje: data.error || data.mensaje || 'Confirma tu correo para continuar.'
+        });
+        setAuthMode('pending');
+        setPassword('');
+        setMensajeAuth('');
+        setErrorAuth('');
+        return;
+      }
+      if (!response.ok) throw new Error(data.error || 'Error en autenticación');
+      if (typeof data.token !== 'string' || !data.usuario) {
+        throw new Error('El servidor no devolvió una sesión válida.');
+      }
+      guardarSesionAutenticada({ token: data.token, usuario: data.usuario as UsuarioSesion });
+    } catch (error) {
+      setErrorAuth(error instanceof Error ? error.message : 'Error en autenticación.');
     }
   };
 
@@ -2282,9 +2499,7 @@ export default function App() {
         && configuracionPago.pagoMovil.telefono
         && configuracionPago.pagoMovil.cedula
         && configuracionPago.pagoMovil.titular)
-      && /^\d{1,100}$/.test(referenciaPago.trim()))
-    || (metodoPagoViaje === 'saldo_corporativo'
-      && (configuracionPago?.saldoCorporativo || 0) >= Number(tarifaTotal));
+      && /^\d{1,100}$/.test(referenciaPago.trim()));
 
   useEffect(() => {
     if (usuario?.rol !== 'repartidor' || !pedidoAsignadoRepartidor || !coordsUsuarioGPS) {
@@ -2763,17 +2978,43 @@ export default function App() {
             <div className={`border p-6 md:p-8 rounded-3xl shadow-sm space-y-6 ${darkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-orange-100'}`}>
               <button
                 type="button"
-                onClick={() => authMode === 'choice' ? navegarA('home') : setAuthMode('choice')}
+                onClick={() => {
+                  if (authMode === 'choice') navegarA('home');
+                  else {
+                    if (authMode === 'action') {
+                      setAccionCorreo(null);
+                      setPassword('');
+                      setConfirmarPassword('');
+                    }
+                    setAuthMode('choice');
+                    setErrorAuth('');
+                    setMensajeAuth('');
+                  }
+                }}
                 className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-bold ${darkMode ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-600 hover:bg-orange-50'}`}
               >
                 <ArrowLeft size={15} /> {authMode === 'choice' ? 'Volver al inicio' : 'Volver a opciones'}
               </button>
               <div className="text-center space-y-1">
                 <h2 className={`text-2xl font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>
-                  {authMode === 'choice' ? 'Bienvenido a Llévalo' : authMode === 'login' ? '¡Bienvenido de nuevo!' : 'Crea tu cuenta'}
+                  {authMode === 'choice'
+                    ? 'Bienvenido a Llévalo'
+                    : authMode === 'login'
+                      ? '¡Bienvenido de nuevo!'
+                      : authMode === 'register'
+                        ? authRoleSelection === 'repartidor' ? 'Postúlate como repartidor' : 'Crea tu cuenta'
+                        : authMode === 'pending'
+                          ? 'Revisa tu correo'
+                          : accionCorreo?.tipo === 'activar-repartidor' ? 'Activa tu cuenta' : 'Confirma tu correo'}
                 </h2>
                 <p className={`text-xs ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
-                  {authMode === 'choice' ? 'Elige cómo quieres continuar' : 'Accede a Llévalo en Carabobo'}
+                  {authMode === 'choice'
+                    ? 'Elige cómo quieres continuar'
+                    : authMode === 'pending'
+                      ? registroPendiente?.etapa === 'revision' ? 'Tu postulación fue recibida para revisión presencial' : 'Necesitamos confirmar tu dirección de correo'
+                      : authMode === 'action'
+                        ? 'Este enlace es personal y de un solo uso'
+                        : 'Accede a Llévalo en Carabobo'}
                 </p>
               </div>
 
@@ -2796,6 +3037,91 @@ export default function App() {
                     <span className="mt-1 block text-xs text-slate-500">Regístrate como cliente o repartidor</span>
                   </button>
                 </div>
+              ) : authMode === 'pending' ? (
+                <div className="space-y-4">
+                  {registroPendiente?.etapa === 'correo' ? (
+                    <form onSubmit={verificarCodigoCorreo} className="space-y-4">
+                      <p className={`rounded-2xl border p-4 text-sm leading-relaxed ${darkMode ? 'border-slate-700 bg-slate-950 text-slate-200' : 'border-orange-100 bg-orange-50 text-slate-700'}`}>
+                        {registroPendiente.mensaje}
+                        {registroPendiente.email && <strong className="mt-2 block break-all">{registroPendiente.email}</strong>}
+                      </p>
+                      <p className="text-xs text-slate-500">Revisa también la carpeta de spam. El código vence en 10 minutos.</p>
+                      <label className="block text-xs font-bold">
+                        Código de verificación
+                        <input
+                          type="text"
+                          required
+                          inputMode="numeric"
+                          autoComplete="one-time-code"
+                          pattern="[0-9]{6}"
+                          maxLength={6}
+                          value={codigoCorreo}
+                          onChange={event => setCodigoCorreo(event.target.value.replace(/\D/g, '').slice(0, 6))}
+                          placeholder="123456"
+                          className={`mt-1 w-full rounded-xl border px-4 py-3 text-center text-lg font-bold tracking-[0.5em] ${darkMode ? 'border-slate-800 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50'}`}
+                        />
+                      </label>
+                      {errorAuth && <div role="alert" className={`rounded-xl border p-3 text-xs font-bold ${darkMode ? 'border-red-900 bg-red-950/30 text-red-300' : 'border-red-200 bg-red-50 text-red-700'}`}>{errorAuth}</div>}
+                      {mensajeAuth && <p role="status" className="rounded-xl bg-emerald-50 p-3 text-xs font-semibold text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300">{mensajeAuth}</p>}
+                      <button type="submit" disabled={codigoCorreo.length !== 6} className={`w-full rounded-xl px-4 py-3 text-sm font-bold text-white transition ${codigoCorreo.length === 6 ? 'bg-[#FF5722] hover:bg-[#F4511E]' : 'cursor-not-allowed bg-slate-400'}`}>
+                        Verificar correo
+                      </button>
+                      <button type="button" onClick={() => void reenviarVerificacionCorreo()} className={`w-full rounded-xl border px-4 py-3 text-xs font-bold ${darkMode ? 'border-slate-700 text-slate-200 hover:bg-slate-800' : 'border-orange-200 text-[#D84315] hover:bg-orange-50'}`}>
+                        Reenviar código
+                      </button>
+                    </form>
+                  ) : (
+                    <p role="status" className={`rounded-2xl border p-4 text-sm leading-relaxed ${darkMode ? 'border-slate-700 bg-slate-950 text-slate-200' : 'border-emerald-200 bg-emerald-50 text-emerald-900'}`}>
+                      {registroPendiente?.mensaje}
+                      <span className="mt-2 block text-xs">Llévalo revisará la postulación y confirmará personalmente la identidad y los datos del vehículo antes de aprobarla.</span>
+                    </p>
+                  )}
+                  {registroPendiente?.etapa === 'revision' && (
+                    <button type="button" onClick={() => setAuthMode('login')} className={`w-full rounded-xl border px-4 py-3 text-sm font-bold transition ${darkMode ? 'border-slate-700 text-slate-200 hover:bg-slate-800' : 'border-orange-200 text-[#D84315] hover:bg-orange-50'}`}>
+                      Ir a iniciar sesión
+                    </button>
+                  )}
+                </div>
+              ) : authMode === 'action' ? (
+                <div className="space-y-4">
+                  {errorAuth && <div role="alert" className={`rounded-xl border p-3 text-xs font-bold ${darkMode ? 'border-red-900 bg-red-950/30 text-red-300' : 'border-red-200 bg-red-50 text-red-700'}`}>{errorAuth}</div>}
+                  {mensajeAuth && <p role="status" className="rounded-xl bg-emerald-50 p-3 text-xs font-semibold text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300">{mensajeAuth}</p>}
+                  {accionCorreo?.tipo === 'verificar' ? (
+                    <div className="space-y-4">
+                      <p className={`rounded-2xl border p-4 text-sm ${darkMode ? 'border-slate-700 bg-slate-950 text-slate-200' : 'border-orange-100 bg-orange-50 text-slate-700'}`}>
+                        Este enlace de verificación anterior todavía puede usarse para confirmar tu correo.
+                      </p>
+                      <label className="block text-xs font-bold">
+                        Correo electrónico
+                        <input type="email" required value={email} onChange={event => setEmail(event.target.value)} className={`mt-1 w-full rounded-xl border px-4 py-2.5 text-sm ${darkMode ? 'border-slate-800 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50'}`} />
+                      </label>
+                      <button type="button" onClick={() => void ejecutarAccionCorreo()} className="w-full rounded-xl bg-[#FF5722] px-4 py-3 text-sm font-bold text-white transition hover:bg-[#F4511E]">
+                        Confirmar correo
+                      </button>
+                      <button type="button" onClick={() => void reenviarVerificacionCorreo()} className={`w-full rounded-xl border px-4 py-3 text-xs font-bold ${darkMode ? 'border-slate-700 text-slate-200 hover:bg-slate-800' : 'border-orange-200 text-[#D84315] hover:bg-orange-50'}`}>
+                        Solicitar un código nuevo
+                      </button>
+                    </div>
+                  ) : (
+                    <form onSubmit={ejecutarAccionCorreo} className="space-y-3">
+                      <p className={`rounded-2xl border p-4 text-xs leading-relaxed ${darkMode ? 'border-slate-700 bg-slate-950 text-slate-300' : 'border-orange-100 bg-orange-50 text-slate-600'}`}>
+                        Tu postulación fue aprobada. Crea una contraseña para activar la cuenta de repartidor.
+                      </p>
+                      <label className="block text-xs font-bold">
+                        Nueva contraseña
+                        <input type="password" required minLength={8} maxLength={128} value={password} onChange={event => setPassword(event.target.value)} className={`mt-1 w-full rounded-xl border px-4 py-2.5 text-sm ${darkMode ? 'border-slate-800 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50'}`} />
+                      </label>
+                      <label className="block text-xs font-bold">
+                        Confirmar contraseña
+                        <input type="password" required minLength={8} maxLength={128} value={confirmarPassword} onChange={event => setConfirmarPassword(event.target.value)} className={`mt-1 w-full rounded-xl border px-4 py-2.5 text-sm ${darkMode ? 'border-slate-800 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50'}`} />
+                      </label>
+                      <p className="text-[11px] text-slate-500">Usa al menos 8 caracteres, mayúscula, minúscula, número y símbolo.</p>
+                      <button type="submit" disabled={!passwordCompleta || password !== confirmarPassword} className={`w-full rounded-xl px-4 py-3 text-sm font-bold text-white ${passwordCompleta && password === confirmarPassword ? 'bg-[#FF5722] hover:bg-[#F4511E]' : 'cursor-not-allowed bg-slate-400'}`}>
+                        Crear cuenta y entrar
+                      </button>
+                    </form>
+                  )}
+                </div>
               ) : (
                 <>
               {authMode === 'register' && (
@@ -2806,6 +3132,7 @@ export default function App() {
               )}
 
               {errorAuth && <div role="alert" className={`rounded-xl border p-3 text-xs font-bold ${darkMode ? 'border-red-900 bg-red-950/30 text-red-300' : 'border-red-200 bg-red-50 text-red-700'}`}>{errorAuth}</div>}
+              {mensajeAuth && <p role="status" className="rounded-xl bg-emerald-50 p-3 text-xs font-semibold text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300">{mensajeAuth}</p>}
 
               <form onSubmit={handleAuthSubmit} className="space-y-3.5">
                 {authMode === 'register' && (
@@ -2817,16 +3144,39 @@ export default function App() {
                     <div>
                       <label className={`text-xs font-bold ${darkMode ? 'text-slate-300' : 'text-slate-700'}`}>Teléfono</label>
                       <input type="text" required value={telefono} onChange={e => setTelefono(e.target.value)} placeholder="Ej. 04121234567" className={`w-full border rounded-xl px-4 py-2 text-sm mt-1 ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
+                      <p className="mt-1 text-[10px] text-slate-500">El teléfono se guardará como no verificado; por ahora no enviamos SMS.</p>
                     </div>
                     <div>
                       <label className={`text-xs font-bold ${darkMode ? 'text-slate-300' : 'text-slate-700'}`}>Cédula de Identidad</label>
                       <div className="flex mt-1">
-                        <span className={`inline-flex items-center px-3 rounded-l-xl border border-r-0 text-xs font-bold ${darkMode ? 'bg-slate-800 border-slate-700 text-slate-300' : 'bg-orange-100 border-orange-200 text-[#FF5722]'}`}>
-                          V-
-                        </span>
+                        <select
+                          aria-label="Tipo de documento"
+                          value={tipoCedula}
+                          onChange={event => setTipoCedula(event.target.value === 'E' ? 'E' : 'V')}
+                          className={`rounded-l-xl border border-r-0 px-3 text-xs font-bold ${darkMode ? 'bg-slate-800 border-slate-700 text-slate-300' : 'bg-orange-100 border-orange-200 text-[#FF5722]'}`}
+                        >
+                          <option value="V">V</option>
+                          <option value="E">E</option>
+                        </select>
                         <input type="text" required inputMode="numeric" minLength={5} value={cedulaNumero} onChange={e => setCedulaNumero(e.target.value.replace(/\D/g, ''))} placeholder="28123456" maxLength={10} className={`w-full border rounded-r-xl px-4 py-2 text-sm ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
                       </div>
                     </div>
+                    {authRoleSelection === 'repartidor' && (
+                      <>
+                        <label className="block text-xs font-bold">
+                          Tipo/modelo de vehículo
+                          <input type="text" required maxLength={100} value={tipoVehiculo} onChange={event => setTipoVehiculo(event.target.value)} className={`mt-1 w-full rounded-xl border px-4 py-2 text-sm ${darkMode ? 'border-slate-800 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50'}`} />
+                        </label>
+                        <label className="block text-xs font-bold">
+                          Placa del vehículo
+                          <input type="text" required maxLength={12} value={placaVehiculo} onChange={event => validarPlacaFormato(event.target.value)} placeholder="AB123CD" className={`mt-1 w-full rounded-xl border px-4 py-2 text-sm uppercase ${darkMode ? 'border-slate-800 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50'}`} />
+                          {errorPlaca && <span className="mt-1 block text-[10px] font-semibold text-red-500">{errorPlaca}</span>}
+                        </label>
+                        <p className={`rounded-xl border p-3 text-[11px] leading-relaxed ${darkMode ? 'border-slate-700 bg-slate-950 text-slate-400' : 'border-orange-100 bg-orange-50 text-slate-600'}`}>
+                          Esto es una postulación, no una cuenta activa. No subas documentos aquí: se revisarán presencialmente. Solo podrás trabajar después de la aprobación administrativa.
+                        </p>
+                      </>
+                    )}
                   </>
                 )}
 
@@ -2835,7 +3185,7 @@ export default function App() {
                   <input type="email" required value={email} onChange={e => setEmail(e.target.value)} placeholder="tu@correo.com" className={`w-full border rounded-xl px-4 py-2 text-sm mt-1 ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
                 </div>
 
-                <div>
+                {(authMode === 'login' || (authMode === 'register' && authRoleSelection === 'cliente')) && <div>
                   <label className={`text-xs font-bold ${darkMode ? 'text-slate-300' : 'text-slate-700'}`}>Contraseña</label>
                   <div className="relative mt-1">
                     <input type={mostrarPassword ? 'text' : 'password'} required value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" className={`w-full border rounded-xl px-4 py-2 text-sm pr-12 ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
@@ -2844,7 +3194,7 @@ export default function App() {
                     </button>
                   </div>
                   
-                  {authMode === 'register' && (
+                  {authMode === 'register' && authRoleSelection === 'cliente' && (
                     <div className="mt-2.5 p-2.5 rounded-xl border space-y-1.5 text-[11px] bg-slate-50 dark:bg-slate-950 border-slate-200 dark:border-slate-800">
                       <p className="font-bold text-slate-500 mb-1">Requisitos de seguridad:</p>
                       <div className={`flex items-center space-x-1.5 ${tieneMinLength ? 'text-emerald-600 dark:text-emerald-400 font-bold' : 'text-slate-400'}`}>
@@ -2869,10 +3219,10 @@ export default function App() {
                       </div>
                     </div>
                   )}
-                </div>
+                </div>}
 
-                <button type="submit" disabled={authMode === 'register' && !passwordCompleta} className={`w-full font-bold py-3 rounded-2xl transition shadow-md cursor-pointer mt-2 ${authMode === 'register' && !passwordCompleta ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-[#FF5722] hover:bg-[#F4511E] text-white'}`}>
-                  {authMode === 'login' ? 'Iniciar Sesión' : 'Registrarse'}
+                <button type="submit" disabled={authMode === 'register' && authRoleSelection === 'cliente' && !passwordCompleta} className={`w-full font-bold py-3 rounded-2xl transition shadow-md cursor-pointer mt-2 ${authMode === 'register' && authRoleSelection === 'cliente' && !passwordCompleta ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-[#FF5722] hover:bg-[#F4511E] text-white'}`}>
+                  {authMode === 'login' ? 'Iniciar Sesión' : authRoleSelection === 'repartidor' ? 'Enviar postulación' : 'Crear cuenta'}
                 </button>
               </form>
 
@@ -2979,7 +3329,7 @@ export default function App() {
                               </div>
                               <div>
                                 <p className={`text-xs font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>{post.repartidor_nombre}</p>
-                                <p className="text-[10px] text-slate-500">{post.vehiculo} · Placa: {post.placa}</p>
+                                <p className="text-[10px] text-slate-500">{post.vehiculo}</p>
                                 <div className="flex items-center space-x-1 text-[10px] text-amber-500 font-bold">
                                   <Star size={11} fill="currentColor" />
                                   <span>{post.calificacion}</span>
@@ -3012,7 +3362,7 @@ export default function App() {
                             )}
                             <div>
                               <p className={`text-xs font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>{pedidoActivoCliente.repartidor_nombre}</p>
-                              <p className="text-[10px] text-slate-500">{pedidoActivoCliente.repartidor_vehiculo} · Placa: {pedidoActivoCliente.repartidor_placa}</p>
+                              <p className="text-[10px] text-slate-500">{pedidoActivoCliente.repartidor_vehiculo}</p>
                               <p className="text-[10px] font-bold text-emerald-600 flex items-center space-x-1 mt-0.5">
                                 <Navigation size={11} className="animate-pulse" />
                                 <span>{pedidoActivoCliente.tipo_servicio === 'viajes' ? 'Conductor en camino a tu ubicación' : 'Repartidor en camino a retirar'}</span>
@@ -3165,11 +3515,10 @@ export default function App() {
                           <h4 className={`text-sm font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Método de pago</h4>
                           <p className="mt-1 text-[10px] text-slate-500">Selecciona cómo pagarás {serviceType === 'viajes' ? 'el viaje' : 'el envío'}.</p>
                         </div>
-                        <div className="grid gap-2 sm:grid-cols-3">
+                        <div className="grid gap-2 sm:grid-cols-2">
                           {([
                             ['pago_movil', 'Pago Móvil'],
-                            ['efectivo', 'Efectivo'],
-                            ['saldo_corporativo', 'Saldo corporativo']
+                            ['efectivo', 'Efectivo']
                           ] as const).map(([metodo, etiqueta]) => (
                             <button key={metodo} type="button" aria-pressed={metodoPagoViaje === metodo} onClick={() => setMetodoPagoViaje(metodo)} className={`rounded-xl border px-3 py-2.5 text-left text-xs font-bold transition ${metodoPagoViaje === metodo ? 'border-[#FF5722] bg-orange-50 text-[#D84315] dark:bg-orange-950/30 dark:text-orange-300' : 'border-slate-200 text-slate-600 dark:border-slate-800 dark:text-slate-300'}`}>
                               {etiqueta}
@@ -3189,7 +3538,7 @@ export default function App() {
                                 <p className="pt-1 text-[10px] text-amber-700 dark:text-amber-400">Realiza el pago por el monto cotizado y escribe la referencia. Un administrador la verificará antes de ofrecer el pedido en el radar.</p>
                               </div>
                             ) : !cargandoConfiguracionPago && (
-                              <p className="text-amber-700 dark:text-amber-400">Pago Móvil aún no está configurado. Puedes elegir efectivo o saldo corporativo.</p>
+                              <p className="text-amber-700 dark:text-amber-400">Pago Móvil aún no está configurado. Puedes elegir efectivo.</p>
                             )}
                             <input type="text" inputMode="numeric" pattern="[0-9]*" maxLength={100} value={referenciaPago} onChange={e => setReferenciaPago(e.target.value.replace(/[^0-9]/g, ''))} placeholder="Referencia numérica de la operación" className={`w-full rounded-xl border px-3 py-2 ${darkMode ? 'border-slate-800 bg-slate-950 text-white' : 'border-slate-200 bg-white'}`} />
                           </div>
@@ -3203,18 +3552,11 @@ export default function App() {
                           </p>
                         )}
 
-                        {metodoPagoViaje === 'saldo_corporativo' && (
-                          <p className={`rounded-xl p-3 text-[11px] ${darkMode ? 'bg-slate-900 text-slate-300' : 'bg-slate-50 text-slate-600'}`}>
-                            Saldo disponible: <strong>${(configuracionPago?.saldoCorporativo || 0).toFixed(2)}</strong>
-                            <span className="mt-1 block">Se descontará al solicitar y se devolverá si cancelas antes de que un repartidor acepte.</span>
-                            {(configuracionPago?.saldoCorporativo || 0) < Number(tarifaTotal) && <span className="mt-1 block font-semibold text-amber-700 dark:text-amber-400">Solicita una recarga al administrador de tu cuenta.</span>}
-                          </p>
-                        )}
                         {errorPago && <p role="alert" className="text-[10px] font-semibold text-red-600">{errorPago}</p>}
                       </div>
 
                     <button disabled={!rutaCompletaLista || esperandoNombreDireccion || distanciaKm <= 0 || tiempoEstimadoMin <= 0 || !pagoPedidoCompleto || enviandoPedido || cargandoTarifas || !configuracionTarifas || (metodoPagoViaje === 'pago_movil' && !tasasCambio)} onClick={handleCrearPedido} className={`w-full py-3 rounded-xl font-bold text-xs transition cursor-pointer shadow-md ${!rutaCompletaLista || esperandoNombreDireccion || distanciaKm <= 0 || tiempoEstimadoMin <= 0 || !pagoPedidoCompleto || enviandoPedido || cargandoTarifas || !configuracionTarifas || (metodoPagoViaje === 'pago_movil' && !tasasCambio) ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-[#FF5722] hover:bg-[#F4511E] text-white'}`}>
-                      {cargandoTarifas ? 'Actualizando tarifas…' : enviandoPedido ? 'Procesando…' : metodoPagoViaje === 'saldo_corporativo' ? 'Pagar con saldo y solicitar' : serviceType === 'viajes' ? 'Solicitar viaje' : 'Publicar envío en radar'}
+                      {cargandoTarifas ? 'Actualizando tarifas…' : enviandoPedido ? 'Procesando…' : serviceType === 'viajes' ? 'Solicitar viaje' : 'Publicar envío en radar'}
                     </button>
                   </div>
                 )}
@@ -3765,6 +4107,53 @@ export default function App() {
             {mensajeAdmin && <p role="status" className={`rounded-xl border p-3 text-xs font-semibold ${darkMode ? 'border-emerald-900 bg-emerald-950/30 text-emerald-300' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>{mensajeAdmin}</p>}
 
             <AdminAccordion
+              title="Postulaciones de repartidores"
+              description="Datos personales visibles solo en administración; revisa originales en persona."
+              darkMode={darkMode}
+              badge={<span className="rounded-full bg-orange-50 px-2.5 py-1 text-[10px] font-bold text-[#FF5722]">{postulacionesAdmin.length}</span>}
+            >
+              <div className="space-y-3">
+                <p className={`rounded-xl border p-3 text-[11px] leading-relaxed ${darkMode ? 'border-slate-700 bg-slate-950 text-slate-400' : 'border-amber-200 bg-amber-50 text-amber-900'}`}>
+                  El correo sí está confirmado. El teléfono y la identidad no tienen verificación digital: comprueba cédula, persona, vehículo y documentos originales durante la entrevista. Esta etapa todavía no recibe ni almacena fotos de documentos.
+                </p>
+                {postulacionesAdmin.length === 0 ? (
+                  <p className="py-4 text-center text-xs text-slate-500">No hay postulaciones pendientes de revisión ni activación.</p>
+                ) : postulacionesAdmin.map(postulacion => (
+                  <article key={postulacion.id} className={`rounded-2xl border p-4 ${darkMode ? 'border-slate-700 bg-slate-950/70' : 'border-slate-200 bg-white'}`}>
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="space-y-1 text-xs">
+                        <h3 className={`font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>{postulacion.nombre}</h3>
+                        <p className="break-all text-slate-500">{postulacion.email}</p>
+                        <p><strong>Teléfono:</strong> {postulacion.telefono} <span className={postulacion.telefono_verificado ? 'text-emerald-600' : 'text-amber-600'}>({postulacion.telefono_verificado ? 'comprobado presencialmente' : 'pendiente de comprobación'})</span></p>
+                        <p><strong>Cédula:</strong> {postulacion.cedula}</p>
+                        <p><strong>Vehículo:</strong> {postulacion.vehiculo} · <strong>Placa:</strong> {postulacion.placa}</p>
+                        <p className="text-[10px] text-slate-500">
+                          Correo confirmado · {postulacion.estado === 'aprobada' ? 'Esperando que cree su contraseña' : `Postuló ${new Date(postulacion.creado_en).toLocaleString('es-VE')}`}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 flex-wrap gap-2">
+                        {postulacion.estado === 'pendiente_revision' ? (
+                          <>
+                            <button type="button" onClick={() => void aprobarPostulacionRepartidor(postulacion)} className="rounded-xl bg-emerald-600 px-3 py-2 text-[11px] font-bold text-white transition hover:bg-emerald-700">
+                              Aprobar tras entrevista
+                            </button>
+                            <button type="button" onClick={() => void rechazarPostulacionRepartidor(postulacion)} className="rounded-xl border border-red-200 px-3 py-2 text-[11px] font-bold text-red-700 transition hover:bg-red-50 dark:border-red-900 dark:text-red-300 dark:hover:bg-red-950/30">
+                              Rechazar
+                            </button>
+                          </>
+                        ) : (
+                          <button type="button" onClick={() => void reenviarInvitacionRepartidor(postulacion)} className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-[11px] font-bold text-[#FF5722] transition hover:bg-orange-100">
+                            Reenviar activación
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </AdminAccordion>
+
+            <AdminAccordion
               title="Buscar pedido"
               description="Por código numérico, fecha/hora o datos del pedido."
               darkMode={darkMode}
@@ -4047,7 +4436,7 @@ export default function App() {
 
             <AdminAccordion
               title="Pagos y configuración"
-              description="Revisar pagos, editar Pago Móvil y acreditar saldo."
+              description="Revisar pagos y editar los datos de Pago Móvil."
               darkMode={darkMode}
               badge={pagosPendientesAdmin.length > 0 ? <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-bold text-amber-800">{pagosPendientesAdmin.length} pendientes</span> : undefined}
             >
@@ -4115,17 +4504,6 @@ export default function App() {
                   <button type="submit" className="w-full rounded-xl bg-[#FF5722] py-3 text-xs font-bold text-white">Guardar datos de Pago Móvil</button>
                 </form>
 
-                <form onSubmit={recargarSaldoCorporativo} className={`space-y-4 rounded-3xl border p-5 shadow-sm ${darkMode ? 'border-slate-800 bg-slate-900 text-white' : 'border-orange-100 bg-white'}`}>
-                  <div>
-                    <h3 className="text-base font-black">Acreditar saldo al cliente</h3>
-                    <p className="mt-1 text-xs text-slate-500">Registra en la cuenta el abono que ya verificaste fuera de la app. El saldo sirve para pagar pedidos y queda en el historial.</p>
-                  </div>
-                  <input type="email" required value={emailRecargaSaldo} onChange={event => setEmailRecargaSaldo(event.target.value)} placeholder="cliente@empresa.com" className={`w-full rounded-xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-800 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50'}`} />
-                  <input type="number" required min="0.01" max="10000" step="0.01" value={montoRecargaSaldo} onChange={event => setMontoRecargaSaldo(event.target.value)} placeholder="Monto base en USD" className={`w-full rounded-xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-800 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50'}`} />
-                  <input type="text" required maxLength={250} value={notaRecargaSaldo} onChange={event => setNotaRecargaSaldo(event.target.value)} placeholder="Referencia del abono verificado" className={`w-full rounded-xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-800 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50'}`} />
-                  <p className="text-[10px] text-slate-500">Este proceso no cobra dinero: acredita manualmente el saldo luego de confirmar la recepción del pago.</p>
-                  <button type="submit" className="w-full rounded-xl bg-[#FF5722] py-3 text-xs font-bold text-white">Acreditar saldo</button>
-                </form>
               </div>
             </div>
             </AdminAccordion>
@@ -4198,7 +4576,6 @@ export default function App() {
                 {perfilPublico.rol === 'repartidor' && (
                   <div className="space-y-2 text-xs">
                     <p><strong>Vehículo:</strong> {perfilPublico.vehiculo || 'No registrado'}</p>
-                    {perfilPublico.vehiculo_foto && <img src={perfilPublico.vehiculo_foto} alt="Vehículo del repartidor" className="max-h-44 w-full rounded-2xl object-cover" />}
                   </div>
                 )}
               </>

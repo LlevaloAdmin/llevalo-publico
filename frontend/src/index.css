@@ -306,7 +306,6 @@ body {
   position: relative;
   z-index: 1;
   display: inline-flex;
-  width: 100vw;
   align-items: center;
   justify-content: center;
   white-space: nowrap;
@@ -318,6 +317,52 @@ body {
   opacity: 0;
   will-change: transform, opacity;
   animation: startup-wordmark-enter 3000ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
+}
+
+.startup-santa-hat {
+  position: absolute;
+  top: -0.3em;
+  left: 0.02em;
+  z-index: 2;
+  width: 0.58em;
+  height: 0.48em;
+  transform: rotate(-24deg);
+  transform-origin: center bottom;
+}
+
+.startup-santa-hat::before {
+  position: absolute;
+  right: 0.01em;
+  bottom: 0.12em;
+  left: 0.04em;
+  height: 0.38em;
+  border-radius: 0.2em 0.22em 0.03em 0.03em;
+  background: linear-gradient(135deg, #ef4444, #b91c1c);
+  clip-path: polygon(0 100%, 12% 56%, 58% 0, 100% 76%, 86% 100%);
+  content: '';
+}
+
+.startup-santa-hat-brim {
+  position: absolute;
+  bottom: 0.08em;
+  left: 0;
+  width: 0.58em;
+  height: 0.14em;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(15 23 42 / 20%);
+}
+
+.startup-santa-hat-pom {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 1;
+  width: 0.15em;
+  height: 0.15em;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(15 23 42 / 20%);
 }
 
 .startup-initial {

@@ -41,9 +41,6 @@ router.get('/config', async (req, res) => {
     try {
         await asegurarTablasPago();
         const config = await db_1.pool.query('SELECT banco, telefono, cedula, titular FROM configuracion_pago_movil WHERE id = 1');
-        const saldo = authUser.rol === 'cliente'
-            ? await db_1.pool.query('SELECT saldo FROM saldos_corporativos WHERE cliente_id = $1', [authUser.id])
-            : { rows: [] };
         const datos = config.rows[0] || {};
         res.json({
             pagoMovil: {
@@ -51,8 +48,7 @@ router.get('/config', async (req, res) => {
                 telefono: datos.telefono || '',
                 cedula: datos.cedula || '',
                 titular: datos.titular || ''
-            },
-            saldoCorporativo: Number(saldo.rows[0]?.saldo || 0)
+            }
         });
     }
     catch (error) {
@@ -242,57 +238,6 @@ router.put('/admin/pedidos/:id', auth_1.requireAdmin, rateLimits_1.adminActionRa
             console.error('Error al revertir la revisión del pago:', rollbackError);
         }
         res.status(500).json({ error: 'No se pudo revisar el pago.' });
-    }
-    finally {
-        client?.release();
-    }
-});
-router.post('/admin/saldo', auth_1.requireAdmin, rateLimits_1.adminActionRateLimit, async (req, res) => {
-    const adminId = req.authUser?.id;
-    if (!adminId)
-        return res.status(401).json({ error: 'Sesión inválida.' });
-    const email = req.body?.email;
-    const monto = Number(req.body?.monto);
-    const nota = typeof req.body?.nota === 'string' ? req.body.nota.trim() : '';
-    if (typeof email !== 'string' || email.length > 254
-        || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
-        || !Number.isFinite(monto) || monto <= 0 || monto > 10000
-        || !nota || nota.length > 250) {
-        return res.status(400).json({ error: 'Indica un cliente, un monto válido y la referencia del abono verificado.' });
-    }
-    let client = null;
-    try {
-        await asegurarTablasPago();
-        client = await db_1.pool.connect();
-        await client.query('BEGIN');
-        const cliente = await client.query(`SELECT id FROM usuarios WHERE lower(email) = $1 AND rol = 'cliente'`, [email.trim().toLowerCase()]);
-        if (cliente.rows.length === 0) {
-            await client.query('ROLLBACK');
-            return res.status(404).json({ error: 'No se encontró una cuenta de cliente con ese correo.' });
-        }
-        const clienteId = cliente.rows[0].id;
-        const saldo = await client.query(`INSERT INTO saldos_corporativos (cliente_id, saldo)
-       VALUES ($1, $2)
-       ON CONFLICT (cliente_id) DO UPDATE
-         SET saldo = saldos_corporativos.saldo + EXCLUDED.saldo
-       RETURNING saldo`, [clienteId, monto]);
-        await client.query(`INSERT INTO movimientos_saldo
-       (cliente_id, monto, saldo_resultante, tipo, administrador_id, nota)
-       VALUES ($1, $2, $3, 'recarga', $4, $5)`, [clienteId, monto, saldo.rows[0].saldo, adminId, nota]);
-        await (0, activity_1.registrarActividad)(client, adminId, 'admin', 'saldo_acreditado', `Acreditó $${monto.toFixed(2)} de saldo corporativo a ${email.trim().toLowerCase()}. ${nota || 'Sin referencia adicional.'}`);
-        await client.query('COMMIT');
-        res.json({ saldoCorporativo: Number(saldo.rows[0].saldo) });
-    }
-    catch (error) {
-        console.error('Error al recargar saldo corporativo:', error);
-        try {
-            if (client)
-                await client.query('ROLLBACK');
-        }
-        catch (rollbackError) {
-            console.error('Error al revertir la recarga de saldo:', rollbackError);
-        }
-        res.status(500).json({ error: 'No se pudo recargar el saldo corporativo.' });
     }
     finally {
         client?.release();

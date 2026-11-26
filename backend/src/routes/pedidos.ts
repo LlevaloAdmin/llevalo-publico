@@ -8,6 +8,7 @@ import { estadoPagoAlCancelar, referenciaPagoValida, solicitudExpirada } from '.
 import { registrarActividad } from '../utils/activity';
 import { codigoPedido } from '../utils/orderCode';
 import { desfaseHorarioValido, fechaIsoValida, horaPedidoValida } from '../utils/orderSearch';
+import { sanitizarPedidoParaUsuario } from '../utils/orderPrivacy';
 import { notifyDriverOfUpdate, notifyDriversOfNewOrder } from '../utils/pushNotifications';
 
 const router = Router();
@@ -99,23 +100,6 @@ const initTables = async () => {
       ALTER TABLE postulaciones ADD COLUMN IF NOT EXISTS placa VARCHAR(30);
       ALTER TABLE postulaciones ADD COLUMN IF NOT EXISTS vehiculo_foto TEXT;
       ALTER TABLE postulaciones ADD COLUMN IF NOT EXISTS calificacion NUMERIC(3,2) DEFAULT 5.0;
-
-      CREATE TABLE IF NOT EXISTS saldos_corporativos (
-        cliente_id INTEGER PRIMARY KEY REFERENCES usuarios(id) ON DELETE CASCADE,
-        saldo NUMERIC(10, 2) NOT NULL DEFAULT 0 CHECK (saldo >= 0)
-      );
-
-      CREATE TABLE IF NOT EXISTS movimientos_saldo (
-        id SERIAL PRIMARY KEY,
-        cliente_id INTEGER NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
-        monto NUMERIC(10, 2) NOT NULL,
-        saldo_resultante NUMERIC(10, 2) NOT NULL,
-        tipo VARCHAR(20) NOT NULL,
-        pedido_id INTEGER REFERENCES pedidos(id) ON DELETE SET NULL,
-        administrador_id INTEGER REFERENCES usuarios(id),
-        nota VARCHAR(250),
-        creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
 
       CREATE TABLE IF NOT EXISTS historial_pagos (
         id SERIAL PRIMARY KEY,
@@ -303,7 +287,7 @@ const expirarPedidoSiCorresponde = async (client: PoolClient, id: number): Promi
   }
 
   const detalle = pedido.metodo_pago === 'saldo_corporativo' && nuevoEstadoPago === 'reembolsado'
-    ? 'No hubo postulaciones en 60 segundos; el saldo corporativo se restituyó automáticamente.'
+    ? 'No hubo postulaciones en 60 segundos; el saldo anterior quedó registrado para conciliación manual.'
     : pedido.metodo_pago === 'pago_movil' && nuevoEstadoPago === 'reembolso_pendiente'
       ? 'No hubo postulaciones en 60 segundos; el pago móvil quedó pendiente de verificación para reembolso.'
       : 'No hubo postulaciones en 60 segundos y el pedido se canceló automáticamente.';
@@ -368,7 +352,7 @@ router.post('/', requireRole('cliente'), async (req: Request, res: Response): Pr
   if (!authUser) return res.status(401).json({ error: 'Sesión inválida.' });
 
   const {
-    cliente_cedula, cliente_foto, tipo_servicio, descripcion,
+    cliente_foto, tipo_servicio, descripcion,
     origen_texto, origen_lat, origen_lon,
     destino_texto, destino_lat, destino_lon, distancia_km, tiempo_min, tarifa,
     metodo_pago, referencia_pago
@@ -382,7 +366,7 @@ router.post('/', requireRole('cliente'), async (req: Request, res: Response): Pr
   const tiempo = Number(tiempo_min);
   const montoSolicitado = Number(tarifa);
   const serviciosPermitidos = ['envios', 'viajes', 'comida', 'mercado', 'mandados'];
-  const metodosPagoPermitidos = ['pago_movil', 'efectivo', 'saldo_corporativo'];
+  const metodosPagoPermitidos = ['pago_movil', 'efectivo'];
   const metodoPago = metodo_pago;
   const referenciaPago = typeof referencia_pago === 'string' ? referencia_pago.trim() : '';
   let tarifas;
@@ -411,9 +395,7 @@ router.post('/', requireRole('cliente'), async (req: Request, res: Response): Pr
     return res.status(400).json({ error: 'Los datos del pedido o de la ruta no son válidos.' });
   }
 
-  const estadoPago = metodoPago === 'no_aplica' ? 'no_aplica'
-    : metodoPago === 'saldo_corporativo' ? 'pagado'
-      : 'pendiente';
+  const estadoPago = 'pendiente';
   let client: PoolClient | null = null;
   try {
     await tablasPedidosListas;
@@ -439,17 +421,6 @@ router.post('/', requireRole('cliente'), async (req: Request, res: Response): Pr
       }
     }
 
-    if (metodoPago === 'saldo_corporativo') {
-      const saldo = await client.query(
-        'SELECT saldo FROM saldos_corporativos WHERE cliente_id = $1 FOR UPDATE',
-        [authUser.id]
-      );
-      if (saldo.rows.length === 0 || Number(saldo.rows[0].saldo) < montoCalculado) {
-        await client.query('ROLLBACK');
-        return res.status(409).json({ error: 'Tu saldo corporativo no es suficiente para este pedido.' });
-      }
-    }
-
     const result = await client.query(
       `INSERT INTO pedidos
       (cliente_id, cliente_nombre, cliente_cedula, cliente_foto, tipo_servicio, descripcion, origen_texto, origen_lat, origen_lon, destino_texto, destino_lat, destino_lon, distancia_km, tiempo_min, tarifa, metodo_pago, estado_pago, referencia_pago, pago_confirmado_por, pago_confirmado_en, estado, publicado_en)
@@ -460,42 +431,25 @@ router.post('/', requireRole('cliente'), async (req: Request, res: Response): Pr
       RETURNING *`,
       [
         authUser.id, cliente.rows[0].nombre,
-        typeof cliente_cedula === 'string' ? cliente_cedula.slice(0, 30) : 'V-00000000',
+        null,
         typeof cliente_foto === 'string' ? cliente_foto : '',
         tipo_servicio, descripcion.trim(), origen_texto.trim(), origenLat, origenLon,
         destino_texto.trim(), destinoLat, destinoLon, distancia, tiempo, montoCalculado,
         metodoPago, estadoPago, referenciaPago || null,
-        estadoPago === 'pagado' ? authUser.id : null, estadoPago === 'pagado'
+        null, false
       ]
     );
 
-    if (metodoPago === 'saldo_corporativo') {
-      const saldo = await client.query(
-        `UPDATE saldos_corporativos SET saldo = saldo - $1
-         WHERE cliente_id = $2
-         RETURNING saldo`,
-        [montoCalculado, authUser.id]
-      );
-      await client.query(
-        `INSERT INTO movimientos_saldo
-         (cliente_id, monto, saldo_resultante, tipo, pedido_id, nota)
-         VALUES ($1, $2, $3, 'pedido', $4, $5)`,
-        [authUser.id, -montoCalculado, saldo.rows[0].saldo, result.rows[0].id, `Pago de pedido ${result.rows[0].id}`]
-      );
-    }
-
-    if (metodoPago === 'pago_movil' || metodoPago === 'saldo_corporativo') {
+    if (metodoPago === 'pago_movil') {
       await client.query(
         `INSERT INTO historial_pagos
          (pedido_id, actor_id, actor_rol, accion, metodo_pago, estado_pago, monto, referencia_pago, detalle)
          VALUES ($1, $2, 'cliente', $3, $4, $5, $6, $7, $8)`,
         [
           result.rows[0].id, authUser.id,
-          metodoPago === 'pago_movil' ? 'referencia_enviada' : 'pago_con_saldo',
+          'referencia_enviada',
           metodoPago, estadoPago, montoCalculado, referenciaPago || null,
-          metodoPago === 'pago_movil'
-            ? 'El cliente envió una referencia para revisión.'
-            : 'El monto se debitó del saldo corporativo.'
+          'El cliente envió una referencia para revisión.'
         ]
       );
     }
@@ -515,7 +469,7 @@ router.post('/', requireRole('cliente'), async (req: Request, res: Response): Pr
         console.error('No se pudo notificar a los repartidores sobre el nuevo pedido:', error);
       });
     }
-    res.status(201).json({ mensaje: 'Pedido publicado', pedido: pedidoCreado });
+    res.status(201).json({ mensaje: 'Pedido publicado', pedido: sanitizarPedidoParaUsuario(pedidoCreado) });
   } catch (error) {
     console.error('Error al crear pedido:', error);
     try {
@@ -560,7 +514,9 @@ router.get('/', async (req: Request, res: Response): Promise<any> => {
 
     const postulacionesRes = authUser.rol === 'cliente'
       ? await pool.query(
-        `SELECT po.* FROM postulaciones po
+        `SELECT po.id, po.pedido_id, po.repartidor_id, po.repartidor_nombre,
+                po.vehiculo, po.calificacion, po.estado
+         FROM postulaciones po
          JOIN pedidos pe ON pe.id = po.pedido_id
          WHERE pe.cliente_id = $1`,
         [authUser.id]
@@ -582,7 +538,8 @@ router.get('/', async (req: Request, res: Response): Promise<any> => {
          ORDER BY cm.creado_en ASC`,
         [authUser.id]
       );
-    res.json({ pedidos: pedidosRes.rows, postulaciones: postulacionesRes.rows, mensajes: chatRes.rows });
+    const pedidos = pedidosRes.rows.map(sanitizarPedidoParaUsuario);
+    res.json({ pedidos, postulaciones: postulacionesRes.rows, mensajes: chatRes.rows });
   } catch (error) {
     console.error('Error al consultar pedidos:', error);
     res.status(500).json({ error: 'Error al consultar' });
@@ -594,13 +551,6 @@ router.post('/:id/postular', requireRole('repartidor'), async (req: Request, res
   const id = getOrderId(req.params.id);
   if (!authUser) return res.status(401).json({ error: 'Sesión inválida.' });
   if (!id) return res.status(400).json({ error: 'Pedido inválido.' });
-
-  const { vehiculo, placa, vehiculo_foto } = req.body ?? {};
-  if ((vehiculo !== undefined && (typeof vehiculo !== 'string' || vehiculo.length > 100))
-    || (placa !== undefined && (typeof placa !== 'string' || placa.length > 30))
-    || (vehiculo_foto !== undefined && (typeof vehiculo_foto !== 'string' || vehiculo_foto.length > 1_000_000))) {
-    return res.status(400).json({ error: 'Los datos del vehículo no son válidos.' });
-  }
 
   const client = await pool.connect();
   try {
@@ -633,12 +583,19 @@ router.post('/:id/postular', requireRole('repartidor'), async (req: Request, res
     }
 
     const repartidor = await client.query(
-      'SELECT nombre FROM usuarios WHERE id = $1 AND (rol = $2 OR es_admin = TRUE)',
+      `SELECT nombre, vehiculo, placa, vehiculo_foto, calificacion
+       FROM usuarios
+       WHERE id = $1 AND (rol = $2 OR es_admin = TRUE)
+         AND correo_verificado = TRUE`,
       [authUser.id, 'repartidor']
     );
     if (repartidor.rows.length === 0) {
       await client.query('ROLLBACK');
       return res.status(401).json({ error: 'La cuenta de repartidor ya no está disponible.' });
+    }
+    if (!repartidor.rows[0].vehiculo || !repartidor.rows[0].placa) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'Completa el tipo de vehículo y la placa en tu perfil antes de postularte.' });
     }
 
     const existe = await client.query(
@@ -653,7 +610,11 @@ router.post('/:id/postular', requireRole('repartidor'), async (req: Request, res
     const nueva = await client.query(
       `INSERT INTO postulaciones (pedido_id, repartidor_id, repartidor_nombre, vehiculo, placa, vehiculo_foto, calificacion, estado)
        VALUES ($1, $2, $3, $4, $5, $6, $7, 'pendiente') RETURNING *`,
-      [id, authUser.id, repartidor.rows[0].nombre, vehiculo || 'Moto', placa || 'ABC-123', vehiculo_foto || '', 5.0]
+      [
+        id, authUser.id, repartidor.rows[0].nombre, repartidor.rows[0].vehiculo,
+        repartidor.rows[0].placa, repartidor.rows[0].vehiculo_foto || '',
+        repartidor.rows[0].calificacion || 5.0
+      ]
     );
 
     await client.query("UPDATE pedidos SET estado = 'postulado' WHERE id = $1 AND estado = 'pendiente'", [id]);
@@ -787,6 +748,7 @@ router.put('/:id/aceptar-postulacion', requireRole('cliente'), async (req: Reque
        WHERE id = $7 AND cliente_id = $8 RETURNING *`,
       [elegido.repartidor_id, elegido.repartidor_nombre, elegido.vehiculo, elegido.placa, elegido.vehiculo_foto, elegido.calificacion, id, authUser.id]
     );
+    const pedidoPublico = sanitizarPedidoParaUsuario(pedidoActualizado.rows[0]);
     await registrarActividad(
       client,
       authUser.id,
@@ -805,7 +767,7 @@ router.put('/:id/aceptar-postulacion', requireRole('cliente'), async (req: Reque
     ).catch(error => {
       console.error('No se pudo notificar al repartidor seleccionado:', error);
     });
-    res.json({ mensaje: 'Repartidor seleccionado', pedido: pedidoActualizado.rows[0] });
+    res.json({ mensaje: 'Repartidor seleccionado', pedido: pedidoPublico });
   } catch (error) {
     console.error('Error al aceptar postulación:', error);
     try {
@@ -947,7 +909,7 @@ router.put('/:id/estado', async (req: Request, res: Response): Promise<any> => {
             cancelado.rows[0].metodo_pago, cancelado.rows[0].estado_pago,
             cancelado.rows[0].tarifa, cancelado.rows[0].referencia_pago,
             cancelado.rows[0].estado_pago === 'reembolsado'
-              ? 'El monto fue devuelto al saldo corporativo al cancelar el pedido.'
+              ? 'El saldo anterior quedó registrado para conciliación manual al cancelar el pedido.'
               : 'El cliente canceló el pedido y solicitó verificar el pago para procesar el reembolso.'
           ]
         );
@@ -965,9 +927,9 @@ router.put('/:id/estado', async (req: Request, res: Response): Promise<any> => {
       const mensaje = estadoPagoFinal === 'reembolso_pendiente'
         ? 'Pedido cancelado. El administrador debe verificar el pago y procesar el reembolso.'
         : estadoPagoFinal === 'reembolsado'
-          ? 'Pedido cancelado. El monto fue devuelto a tu saldo corporativo.'
+          ? 'Pedido cancelado. El saldo de este pedido anterior quedó registrado para conciliación manual.'
           : 'Pedido cancelado.';
-      return res.json({ mensaje, pedido: cancelado.rows[0] });
+      return res.json({ mensaje, pedido: sanitizarPedidoParaUsuario(cancelado.rows[0]) });
     } catch (error) {
       console.error('Error al cancelar pedido:', error);
       try {
@@ -1036,7 +998,7 @@ router.put('/:id/estado', async (req: Request, res: Response): Promise<any> => {
             nuevoEstadoPago === 'reembolsado' ? 'saldo_reembolsado' : 'reembolso_solicitado',
             pedido.metodo_pago, nuevoEstadoPago, pedido.tarifa, pedido.referencia_pago,
             nuevoEstadoPago === 'reembolsado'
-              ? 'El saldo se devolvió porque el repartidor canceló antes de iniciar el servicio.'
+              ? 'El saldo de este pedido anterior quedó registrado para conciliación manual tras la cancelación.'
               : 'El repartidor canceló antes de iniciar; el pago móvil quedó pendiente de reembolso.'
           ]
         );
@@ -1050,7 +1012,10 @@ router.put('/:id/estado', async (req: Request, res: Response): Promise<any> => {
         id
       );
       await client.query('COMMIT');
-      return res.json({ mensaje: 'Trabajo cancelado. El cliente puede crear una nueva solicitud.', pedido: cancelado.rows[0] });
+      return res.json({
+        mensaje: 'Trabajo cancelado. El cliente puede crear una nueva solicitud.',
+        pedido: sanitizarPedidoParaUsuario(cancelado.rows[0])
+      });
     } catch (error) {
       console.error('Error al cancelar el trabajo como repartidor:', error);
       try {
@@ -1127,7 +1092,7 @@ router.put('/:id/estado', async (req: Request, res: Response): Promise<any> => {
         id
       );
       await client.query('COMMIT');
-      return res.json({ mensaje: 'Estado actualizado', pedido: update.rows[0] });
+      return res.json({ mensaje: 'Estado actualizado', pedido: sanitizarPedidoParaUsuario(update.rows[0]) });
     } catch (error) {
       console.error('Error al iniciar el viaje:', error);
       try {
@@ -1166,7 +1131,7 @@ router.put('/:id/estado', async (req: Request, res: Response): Promise<any> => {
         id
       );
       await client.query('COMMIT');
-      return res.json({ mensaje: 'Estado actualizado', pedido });
+      return res.json({ mensaje: 'Estado actualizado', pedido: sanitizarPedidoParaUsuario(pedido) });
     } catch (error) {
       console.error('Error al actualizar estado:', error);
       try {

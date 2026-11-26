@@ -24,6 +24,15 @@ export const registroRateLimit = rateLimit({
   message: { error: 'Se alcanzó el límite de registros. Inténtalo más tarde.' }
 });
 
+export const emisionCorreoRateLimit = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: false,
+  message: { error: 'Se alcanzó el límite de envíos de correo. Inténtalo más tarde.' }
+});
+
 export const adminActionRateLimit = rateLimit({
   windowMs: 60 * 1000,
   limit: 30,

@@ -60,7 +60,6 @@ router.get('/summary', async (req: Request, res: Response): Promise<any> => {
         `SELECT p.id AS pedido_id, p.tipo_servicio, p.creado_en,
                 u.id AS contraparte_id, u.nombre AS contraparte_nombre,
                 u.foto AS contraparte_foto, u.vehiculo AS contraparte_vehiculo,
-                u.vehiculo_foto AS contraparte_vehiculo_foto,
                 COALESCE(mi.estrellas, 0)::integer AS mis_estrellas,
                 COUNT(*) OVER()::integer AS total_pedidos
          FROM pedidos p
@@ -101,7 +100,7 @@ router.get('/profile/:id', async (req: Request, res: Response): Promise<any> => 
   try {
     await ensureReviewsTable();
     const result = await pool.query(
-      `SELECT u.id, u.nombre, u.rol, u.foto, u.vehiculo, u.vehiculo_foto,
+      `SELECT u.id, u.nombre, u.rol, u.foto, u.vehiculo,
               COALESCE(AVG(e.estrellas), 0)::numeric(3,2) AS promedio,
               COUNT(e.id)::integer AS cantidad
        FROM usuarios u
@@ -147,7 +146,6 @@ router.get('/profile/:id', async (req: Request, res: Response): Promise<any> => 
         rol: profile.rol,
         foto: profile.foto || '',
         vehiculo: profile.vehiculo || '',
-        vehiculo_foto: profile.vehiculo_foto || '',
         promedio,
         cantidad,
         rango: rankForRating(promedio, cantidad)
