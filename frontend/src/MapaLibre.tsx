@@ -415,12 +415,6 @@ export default function MapaLibre({
 
   return (
     <div className={`w-full h-full rounded-3xl overflow-hidden relative ${darkMode ? 'maplibre-dark-theme' : ''} ${mini ? 'shadow-inner' : 'shadow-md border border-orange-100 dark:border-slate-800'}`}>
-      {modoSeleccion && !mini && (
-        <div className="absolute top-4 left-4 z-10 bg-slate-900/90 text-white px-4 py-2 rounded-2xl text-xs font-bold shadow-lg flex items-center space-x-2 backdrop-blur">
-          <span className={`w-3 h-3 rounded-full animate-ping ${modoSeleccion === 'origen' ? 'bg-emerald-400' : 'bg-red-400'}`}></span>
-          <span>Haz clic en el mapa para fijar el {modoSeleccion === 'origen' ? 'Origen (Verde)' : 'Destino (Rojo)'}</span>
-        </div>
-      )}
       <div ref={mapContainer} style={{ width: '100%', height: '100%' }} />
     </div>
   );

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Activity, Bike, MapPin, ArrowLeft, ArrowRight, Camera, ImagePlus, Mic, MicOff, User, Eye, EyeOff, Clock, Send, Power, Star, Moon, Sun, DollarSign, XCircle, Navigation, CheckCircle2, Circle, Package, CarFront, LogOut, Users, UserRound, ChevronDown, Bell, BellOff } from 'lucide-react';
+import { Activity, Bike, MapPin, ArrowLeft, ArrowRight, Camera, ImagePlus, Mic, MicOff, User, Eye, EyeOff, Clock, Send, Power, Star, Moon, Sun, DollarSign, XCircle, Navigation, CheckCircle2, Circle, Package, ShoppingBag, CarFront, LogOut, Users, UserRound, ChevronDown, Bell, BellOff } from 'lucide-react';
 import { App as CapacitorApp } from '@capacitor/app';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { PushNotifications } from '@capacitor/push-notifications';
@@ -2447,6 +2447,12 @@ export default function App() {
       && Date.parse(pedido.completado_en || '') > horaActual - 7 * 24 * 60 * 60 * 1000
       && (pedido.cliente_id === usuario?.id || pedido.repartidor_id === usuario?.id))
     .sort((primero, segundo) => Date.parse(segundo.completado_en || '') - Date.parse(primero.completado_en || ''));
+  const pedidosHistorialCliente = usuario?.rol === 'cliente'
+    ? pedidosReales
+      .filter(pedido => pedido.cliente_id === usuario.id
+        && pedido.estado !== 'cancelado')
+      .sort((primero, segundo) => Date.parse(segundo.creado_en || '') - Date.parse(primero.creado_en || ''))
+    : [];
   const postulacionesPendientesRepartidor = usuario?.rol === 'repartidor'
     ? postulacionesReales.filter(p => p.repartidor_id === usuario.id && p.estado === 'pendiente')
     : [];
@@ -2954,12 +2960,12 @@ export default function App() {
       <header className={`app-header border-b backdrop-blur sticky top-0 z-50 px-4 md:px-10 py-3 flex flex-wrap justify-between items-center gap-y-2 shadow-sm transition-colors ${darkMode ? 'bg-slate-950/90 border-slate-800' : 'bg-[#FDFBF7]/90 border-orange-100'}`}>
         {usuario ? (
           <div className="flex items-center space-x-3" aria-label="Llévalo">
-            <div className="brand-mark" aria-hidden="true"><span>L</span><span className="brand-santa-hat"><i /><b /></span></div>
+            <div className="brand-mark" aria-hidden="true"><span>L</span></div>
             <span className={`text-xl md:text-2xl font-black tracking-tight ${darkMode ? 'text-white' : 'text-slate-900'}`}>Llévalo</span>
           </div>
         ) : (
           <button type="button" onClick={() => navegarA('home')} className="flex items-center space-x-3" aria-label="Volver al inicio">
-            <div className="brand-mark" aria-hidden="true"><span>L</span><span className="brand-santa-hat"><i /><b /></span></div>
+            <div className="brand-mark" aria-hidden="true"><span>L</span></div>
             <span className={`text-xl md:text-2xl font-black tracking-tight ${darkMode ? 'text-white' : 'text-slate-900'}`}>Llévalo</span>
           </button>
         )}
@@ -2975,11 +2981,16 @@ export default function App() {
           {usuario ? (
             <>
               {tasasCambio && (
-                <span title="Equivalente del dólar según la tasa BCV" className={`inline-flex items-center gap-1.5 rounded-xl border px-2.5 py-2 text-[10px] font-bold leading-tight sm:px-3.5 sm:text-xs ${darkMode ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-orange-100 bg-white text-slate-700'}`}>
+                <span title="Equivalente del dólar según la tasa BCV" className={`inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-xs font-bold leading-tight sm:px-4 sm:text-sm ${darkMode ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-orange-100 bg-white text-slate-700'}`}>
                   <span className="whitespace-nowrap text-slate-500 dark:text-slate-400">Dólar BCV</span>
-                  <span className="whitespace-nowrap">{formatoMoneda(tasasCambio.bolivaresPorDolar)}</span>
+                  <span className="whitespace-nowrap text-sm font-black sm:text-base">{formatoMoneda(tasasCambio.bolivaresPorDolar)}</span>
                 </span>
               )}
+              <button type="button" onClick={() => navegarA('perfil')} aria-label="Abrir mi perfil" className={`flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full border-2 shadow-sm transition hover:scale-105 ${darkMode ? 'border-slate-700 bg-slate-800' : 'border-white bg-orange-100'}`}>
+                {usuario.foto
+                  ? <img src={usuario.foto} alt="" className="h-full w-full object-cover" />
+                  : <span className="text-sm font-black text-[#FF5722]">{usuario.nombre.slice(0, 1).toUpperCase()}</span>}
+              </button>
             </>
           ) : (
             <button onClick={() => { setErrorAuth(''); setAuthMode('choice'); navegarA('auth'); }} className={`flex items-center space-x-1.5 border px-4 py-2 rounded-2xl transition text-xs md:text-sm font-bold shadow-sm cursor-pointer ${darkMode ? 'bg-slate-900 border-slate-800 text-white hover:bg-slate-800' : 'bg-white hover:bg-orange-50 border-orange-200 text-slate-800'}`}>
@@ -3035,10 +3046,10 @@ export default function App() {
                   <span>Carabobo, Venezuela 🇻🇪</span>
                 </div>
                 <h1 className={`text-4xl lg:text-7xl font-black tracking-tight leading-[1.08] ${darkMode ? 'text-white' : 'text-slate-900'}`}>
-                  La vuelta de hoy, <span className="text-[#FF5722]">más fácil.</span>
+                  Lo que necesites, <span className="text-[#FF5722]">Llévalo ya.</span>
                 </h1>
                 <p className={`text-base lg:text-lg leading-relaxed max-w-xl ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>
-                  Comida, mercado, mandados o viajes por Carabobo. Pide en pocos pasos y sigue tu servicio desde el teléfono.
+                  Comida, compras, encomiendas o viajes por Carabobo. Resuelve desde un solo lugar y sigue tu servicio desde el teléfono.
                 </p>
 
                 <div className="pt-2">
@@ -3055,6 +3066,97 @@ export default function App() {
                 </div>
               </div>
             </div>
+
+            <section className="landing-content-section" aria-labelledby="landing-services-title">
+              <div className="mb-4">
+                <p className="text-[11px] font-black uppercase tracking-[0.16em] text-[#FF5722]">Una app para resolver</p>
+                <h2 id="landing-services-title" className={`mt-1 text-2xl font-black tracking-tight md:text-3xl ${darkMode ? 'text-white' : 'text-slate-900'}`}>Lo que necesitas, en camino.</h2>
+                <p className="mt-1 text-sm text-slate-500">Servicios locales sencillos, desde el teléfono.</p>
+              </div>
+              <div className="horizontal-story-carousel landing-carousel" role="region" aria-label="Servicios de Llévalo" aria-roledescription="carrusel" tabIndex={0}>
+                <article className={`landing-info-card ${darkMode ? 'border-slate-800 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+                  <span className="landing-info-icon bg-orange-100 text-[#FF5722]"><Package size={22} /></span>
+                  <span className="landing-info-kicker">Encomiendas</span>
+                  <h3>Paquetes de hasta 15 kg</h3>
+                  <p>Envía documentos, compras o ese paquete que necesitas hacer llegar.</p>
+                </article>
+                <article className={`landing-info-card ${darkMode ? 'border-slate-800 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+                  <span className="landing-info-icon bg-emerald-100 text-emerald-700"><ShoppingBag size={22} /></span>
+                  <span className="landing-info-kicker">Compras</span>
+                  <h3>Comida y mercado</h3>
+                  <p>Pide lo que te hace falta y recíbelo sin salir de casa.</p>
+                </article>
+                <article className={`landing-info-card ${darkMode ? 'border-slate-800 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+                  <span className="landing-info-icon bg-amber-100 text-amber-700"><Clock size={22} /></span>
+                  <span className="landing-info-kicker">Mandados</span>
+                  <h3>Pequeñas vueltas, resueltas</h3>
+                  <p>Coordina una entrega o un mandado cotidiano en pocos pasos.</p>
+                </article>
+                <article className={`landing-info-card ${darkMode ? 'border-slate-800 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+                  <span className="landing-info-icon bg-sky-100 text-sky-700"><CarFront size={22} /></span>
+                  <span className="landing-info-kicker">Viajes</span>
+                  <h3>Muévete por Carabobo</h3>
+                  <p>Indica desde dónde sales y a dónde vas para solicitar tu traslado.</p>
+                </article>
+              </div>
+            </section>
+
+            <section className="landing-content-section" aria-labelledby="landing-benefits-title">
+              <div className="mb-4">
+                <p className="text-[11px] font-black uppercase tracking-[0.16em] text-emerald-600">Hecho para darte tranquilidad</p>
+                <h2 id="landing-benefits-title" className={`mt-1 text-2xl font-black tracking-tight md:text-3xl ${darkMode ? 'text-white' : 'text-slate-900'}`}>Tú sabes qué está pasando.</h2>
+              </div>
+              <div className="horizontal-story-carousel landing-carousel" role="region" aria-label="Ventajas de Llévalo" aria-roledescription="carrusel" tabIndex={0}>
+                <article className={`landing-info-card ${darkMode ? 'border-slate-800 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+                  <span className="landing-info-icon bg-emerald-100 text-emerald-700"><MapPin size={22} /></span>
+                  <span className="landing-info-kicker">Seguimiento</span>
+                  <h3>Tu servicio a la vista</h3>
+                  <p>Consulta el estado y revisa el recorrido en el mapa.</p>
+                </article>
+                <article className={`landing-info-card ${darkMode ? 'border-slate-800 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+                  <span className="landing-info-icon bg-orange-100 text-[#FF5722]"><DollarSign size={22} /></span>
+                  <span className="landing-info-kicker">Precio claro</span>
+                  <h3>Conoce el costo antes</h3>
+                  <p>Revisa distancia y total en dólares y bolívares antes de enviar.</p>
+                </article>
+                <article className={`landing-info-card ${darkMode ? 'border-slate-800 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+                  <span className="landing-info-icon bg-amber-100 text-amber-700"><CheckCircle2 size={22} /></span>
+                  <span className="landing-info-kicker">Pago Móvil</span>
+                  <h3>Verificación antes de publicar</h3>
+                  <p>La referencia se revisa antes de ofrecer el servicio a repartidores.</p>
+                </article>
+                <article className={`landing-info-card ${darkMode ? 'border-slate-800 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+                  <span className="landing-info-icon bg-violet-100 text-violet-700"><Users size={22} /></span>
+                  <span className="landing-info-kicker">Comunicación</span>
+                  <h3>Habla con tu repartidor</h3>
+                  <p>Usa el chat privado para coordinar los detalles del servicio.</p>
+                </article>
+              </div>
+            </section>
+
+            <section className="landing-content-section" aria-labelledby="landing-steps-title">
+              <div className="mb-4">
+                <p className="text-[11px] font-black uppercase tracking-[0.16em] text-[#FF5722]">Sin complicaciones</p>
+                <h2 id="landing-steps-title" className={`mt-1 text-2xl font-black tracking-tight md:text-3xl ${darkMode ? 'text-white' : 'text-slate-900'}`}>Pedir es así de fácil.</h2>
+              </div>
+              <div className="horizontal-story-carousel landing-carousel" role="region" aria-label="Cómo pedir con Llévalo" aria-roledescription="carrusel" tabIndex={0}>
+                <article className={`landing-info-card ${darkMode ? 'border-slate-800 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+                  <span className="landing-step-number">01</span>
+                  <h3>Elige tu servicio</h3>
+                  <p>Selecciona si necesitas un envío o un viaje.</p>
+                </article>
+                <article className={`landing-info-card ${darkMode ? 'border-slate-800 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+                  <span className="landing-step-number">02</span>
+                  <h3>Marca la ruta</h3>
+                  <p>Indica origen y destino, y revisa distancia y precio.</p>
+                </article>
+                <article className={`landing-info-card ${darkMode ? 'border-slate-800 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+                  <span className="landing-step-number">03</span>
+                  <h3>Confirma y sigue</h3>
+                  <p>Envía tu referencia de Pago Móvil y mantente al tanto del servicio.</p>
+                </article>
+              </div>
+            </section>
           </>
         )}
 
@@ -3081,7 +3183,7 @@ export default function App() {
             </div>
 
             {usuario.rol === 'cliente' ? (
-              <div className="dashboard-service-carousel mobile-service-carousel grid gap-4 md:grid-cols-3" role="region" aria-label="Accesos rápidos del cliente" aria-roledescription="carrusel" tabIndex={0}>
+              <div className="dashboard-service-carousel mobile-service-carousel grid gap-4 md:grid-cols-2" role="region" aria-label="Accesos rápidos del cliente" aria-roledescription="carrusel" tabIndex={0}>
                 <button onClick={() => { setServiceType('envios'); irAPedidos(); }} className={`dashboard-action-card rounded-3xl border p-6 text-left transition hover:-translate-y-0.5 ${darkMode ? 'bg-slate-900 border-slate-800 hover:border-orange-700' : 'bg-white border-orange-100 hover:border-orange-300'}`}>
                   <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-orange-100 text-[#FF5722]"><Package size={20} /></div>
                   <h2 className="font-black">Pedir un envío</h2>
@@ -3094,20 +3196,6 @@ export default function App() {
                   <p className="mt-2 text-xs text-slate-500">Indica tu origen y destino para ver el costo.</p>
                   <span className="mt-4 inline-flex items-center gap-1 text-xs font-bold text-[#FF5722]">Continuar <ArrowRight size={14} /></span>
                 </button>
-                <div className={`rounded-3xl border p-6 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-orange-100'}`}>
-                  <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-700"><Clock size={20} /></div>
-                  <h2 className="font-black">Tu servicio</h2>
-                  <p className="mt-2 text-xs text-slate-500">
-                    {pedidoActivoCliente
-                      ? `Pedido ${pedidoActivoCliente.estado}: ${pedidoActivoCliente.descripcion}`
-                      : pedidoExpiradoReciente
-                        ? pedidoExpiradoReciente.motivo_cancelacion === 'sin_repartidor'
-                          ? 'Tu solicitud se canceló automáticamente porque ningún repartidor se postuló en 60 segundos. Puedes crear una nueva.'
-                          : 'El repartidor canceló esta solicitud antes de iniciar el servicio. Puedes crear una nueva.'
-                        : 'Todavía no tienes pedidos activos. Cuando hagas uno, su estado aparecerá aquí.'}
-                  </p>
-                  {pedidoActivoCliente && <button onClick={irAPedidos} className="mt-4 text-xs font-bold text-[#FF5722] hover:underline">Ver pedido y seguimiento</button>}
-                </div>
               </div>
             ) : (
               <div className="dashboard-service-carousel mobile-service-carousel grid gap-4 md:grid-cols-3" role="region" aria-label="Accesos rápidos del repartidor" aria-roledescription="carrusel" tabIndex={0}>
@@ -3135,45 +3223,101 @@ export default function App() {
               </div>
             )}
 
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="horizontal-story-carousel dashboard-feature-carousel" role="region" aria-label="Ventajas de tu cuenta" aria-roledescription="carrusel" tabIndex={0}>
               {usuario.rol === 'cliente' ? (
                 <>
-                  <article className={`rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-900/70' : 'border-orange-100 bg-white'}`}>
-                    <Package size={18} className="text-[#FF5722]" />
-                    <h3 className="mt-3 text-sm font-bold">Envíos y viajes</h3>
-                    <p className="mt-1 text-xs text-slate-500">Comida, mercado, mandados o traslados en un solo lugar.</p>
+                  <article className={`landing-info-card ${darkMode ? 'border-slate-800 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+                    <span className="landing-info-icon bg-orange-100 text-[#FF5722]"><Package size={20} /></span>
+                    <h3>Envíos y viajes</h3>
+                    <p>Comida, mercado, mandados o traslados en un solo lugar.</p>
                   </article>
-                  <article className={`rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-900/70' : 'border-orange-100 bg-white'}`}>
-                    <MapPin size={18} className="text-emerald-500" />
-                    <h3 className="mt-3 text-sm font-bold">Seguimiento claro</h3>
-                    <p className="mt-1 text-xs text-slate-500">Revisa el estado de tu solicitud y el recorrido del repartidor.</p>
+                  <article className={`landing-info-card ${darkMode ? 'border-slate-800 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+                    <span className="landing-info-icon bg-emerald-100 text-emerald-700"><MapPin size={20} /></span>
+                    <h3>Seguimiento claro</h3>
+                    <p>Revisa el estado de tu solicitud y el recorrido del repartidor.</p>
                   </article>
-                  <article className={`rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-900/70' : 'border-orange-100 bg-white'}`}>
-                    <DollarSign size={18} className="text-amber-500" />
-                    <h3 className="mt-3 text-sm font-bold">Pagos transparentes</h3>
-                    <p className="mt-1 text-xs text-slate-500">Consulta el método elegido y el estado del pago en cada pedido.</p>
+                  <article className={`landing-info-card ${darkMode ? 'border-slate-800 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+                    <span className="landing-info-icon bg-amber-100 text-amber-700"><DollarSign size={20} /></span>
+                    <h3>Pagos transparentes</h3>
+                    <p>Consulta el monto y el estado de pago de cada solicitud.</p>
                   </article>
                 </>
               ) : (
                 <>
-                  <article className={`rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-900/70' : 'border-orange-100 bg-white'}`}>
-                    <Package size={18} className="text-[#FF5722]" />
-                    <h3 className="mt-3 text-sm font-bold">Trabajos cerca</h3>
-                    <p className="mt-1 text-xs text-slate-500">Explora solicitudes disponibles y elige las que te convengan.</p>
+                  <article className={`landing-info-card ${darkMode ? 'border-slate-800 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+                    <span className="landing-info-icon bg-orange-100 text-[#FF5722]"><Package size={20} /></span>
+                    <h3>Trabajos cerca</h3>
+                    <p>Explora solicitudes disponibles y elige las que te convengan.</p>
                   </article>
-                  <article className={`rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-900/70' : 'border-orange-100 bg-white'}`}>
-                    <MapPin size={18} className="text-emerald-500" />
-                    <h3 className="mt-3 text-sm font-bold">Ruta guiada</h3>
-                    <p className="mt-1 text-xs text-slate-500">Usa el mapa para llegar al origen y al destino del servicio.</p>
+                  <article className={`landing-info-card ${darkMode ? 'border-slate-800 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+                    <span className="landing-info-icon bg-emerald-100 text-emerald-700"><MapPin size={20} /></span>
+                    <h3>Ruta guiada</h3>
+                    <p>Usa el mapa para llegar al origen y al destino del servicio.</p>
                   </article>
-                  <article className={`rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-900/70' : 'border-orange-100 bg-white'}`}>
-                    <Clock size={18} className="text-amber-500" />
-                    <h3 className="mt-3 text-sm font-bold">Tu ritmo</h3>
-                    <p className="mt-1 text-xs text-slate-500">Controla tu disponibilidad y las postulaciones desde el radar.</p>
+                  <article className={`landing-info-card ${darkMode ? 'border-slate-800 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+                    <span className="landing-info-icon bg-amber-100 text-amber-700"><Clock size={20} /></span>
+                    <h3>Tu ritmo</h3>
+                    <p>Controla tu disponibilidad y tus postulaciones desde el radar.</p>
                   </article>
                 </>
               )}
             </div>
+            {usuario.rol === 'cliente' && (
+              <section className="space-y-4" aria-labelledby="service-history-title">
+                <div>
+                  <p className="text-[11px] font-black uppercase tracking-[0.16em] text-[#FF5722]">Actividad de tu cuenta</p>
+                  <h2 id="service-history-title" className={`mt-1 text-xl font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Historial de servicios</h2>
+                </div>
+                {!pedidoActivoCliente && pedidoExpiradoReciente && (
+                  <p role="status" className={`rounded-2xl border p-4 text-xs ${darkMode ? 'border-amber-900 bg-amber-950/30 text-amber-200' : 'border-amber-200 bg-amber-50 text-amber-900'}`}>
+                    {pedidoExpiradoReciente.motivo_cancelacion === 'sin_repartidor'
+                      ? 'Tu solicitud anterior se canceló porque ningún repartidor se postuló en 60 segundos.'
+                      : 'El repartidor canceló la solicitud antes de iniciar el servicio.'}
+                  </p>
+                )}
+                {pedidosHistorialCliente.length === 0 ? (
+                  <p className={`rounded-3xl border p-5 text-sm text-slate-500 ${darkMode ? 'border-slate-800 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+                    Tus servicios activos y completados aparecerán aquí.
+                  </p>
+                ) : (
+                  <div className="space-y-3">
+                    {pedidosHistorialCliente.map(pedido => {
+                      const estaActivo = pedido.estado !== 'completado';
+                      const etiquetaEstado = pedido.estado === 'completado'
+                        ? 'Completado'
+                        : pedido.estado === 'pendiente'
+                          ? 'Esperando repartidor'
+                          : pedido.estado === 'postulado'
+                            ? 'Repartidor interesado'
+                            : pedido.estado === 'entregado_repartidor'
+                              ? 'En destino'
+                              : 'En curso';
+                      return (
+                        <article key={pedido.id} className={`rounded-3xl border p-4 shadow-sm sm:p-5 ${darkMode ? 'border-slate-800 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div className="flex min-w-0 items-start gap-3">
+                              <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl ${pedido.tipo_servicio === 'viajes' ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-[#FF5722]'}`}>
+                                {pedido.tipo_servicio === 'viajes' ? <CarFront size={19} /> : <Package size={19} />}
+                              </span>
+                              <div className="min-w-0">
+                                <h3 className="text-sm font-black">{etiquetaTipoServicio(pedido.tipo_servicio)} · {codigoPedido(pedido.id)}</h3>
+                                <p className="mt-1 break-words text-xs text-slate-500">{pedido.origen_texto} <ArrowRight size={12} className="mx-1 inline" /> {pedido.destino_texto}</p>
+                                <p className="mt-1 text-[10px] text-slate-400">{pedido.creado_en ? new Date(pedido.creado_en).toLocaleString('es-VE') : ''}</p>
+                              </div>
+                            </div>
+                            <div className="flex shrink-0 flex-col items-start gap-2 sm:items-end">
+                              <span className={`rounded-full px-3 py-1 text-[10px] font-black ${estaActivo ? 'bg-orange-100 text-[#D84315] dark:bg-orange-950/50 dark:text-orange-300' : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300'}`}>{etiquetaEstado}</span>
+                              <span className="text-sm font-black">{mostrarMontoPedido(pedido.tarifa)}</span>
+                            </div>
+                          </div>
+                          {estaActivo && <button type="button" onClick={irAPedidos} className="mt-3 rounded-2xl border border-orange-200 px-4 py-2 text-xs font-bold text-[#FF5722] transition hover:bg-orange-50 dark:border-orange-900 dark:hover:bg-orange-950/30">Ver servicio activo</button>}
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+            )}
             {pedidosChatCompletados.length > 0 && (
               <section className="space-y-3" aria-labelledby="recent-chat-title">
                 <div>
@@ -3718,14 +3862,14 @@ export default function App() {
                                 {pasoSolicitud === 'tipo' ? '¿Qué necesitas hoy?' : pasoSolicitud === 'ruta' ? 'Indica la ruta' : 'Confirma tu Pago Móvil'}
                               </h2>
                             </div>
-                            <button type="button" aria-label="Volver al inicio" onClick={() => { setPasoSolicitud(null); navegarA('home'); }} className={`rounded-xl border p-2.5 ${darkMode ? 'border-slate-700 text-slate-200' : 'border-slate-200 text-slate-600'}`}>
+                            <button type="button" aria-label="Volver al inicio" onClick={() => { setPasoSolicitud(null); navegarA('home'); }} className={`rounded-2xl border p-2.5 ${darkMode ? 'border-slate-700 text-slate-200' : 'border-slate-200 text-slate-600'}`}>
                               <ArrowLeft size={18} />
                             </button>
                           </header>
 
                           {pasoSolicitud === 'tipo' && (
                             <div className="flex flex-1 items-center justify-center py-6">
-                              <div className="w-full max-w-xl space-y-5">
+                              <div className={`w-full max-w-xl space-y-5 rounded-3xl border p-5 shadow-sm md:p-7 ${darkMode ? 'border-slate-800 bg-slate-900' : 'border-orange-100 bg-white'}`}>
                                 <p className={`text-center text-sm ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>Elige una opción para continuar con tu solicitud.</p>
                                 <div className="grid gap-4 sm:grid-cols-2">
                                   {([
@@ -3747,13 +3891,13 @@ export default function App() {
                           )}
 
                           {pasoSolicitud === 'ruta' && (
-                            <div className="mx-auto flex w-full max-w-6xl min-h-0 flex-1 flex-col gap-3 py-3">
+                            <div className={`mx-auto flex w-full max-w-6xl min-h-0 flex-1 flex-col gap-3 rounded-3xl border p-3 shadow-sm md:gap-4 md:p-5 ${darkMode ? 'border-slate-800 bg-slate-900' : 'border-orange-100 bg-white'}`}>
                               <div className="grid gap-2 sm:grid-cols-2">
                                 <label className="relative block text-[10px] font-bold text-slate-500">
                                   {serviceType === 'viajes' ? 'Punto de partida' : 'Origen'}
-                                  <input type="text" value={origenInput} onChange={event => buscarDireccionGeocoding(event.target.value, 'origen')} placeholder="Sector, calle o establecimiento" className={`mt-1 w-full rounded-xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-700 bg-slate-900 text-white' : 'border-slate-200 bg-white text-slate-900'}`} />
+                                  <input type="text" value={origenInput} onChange={event => buscarDireccionGeocoding(event.target.value, 'origen')} placeholder="Sector, calle o establecimiento" className={`mt-1 w-full rounded-2xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-700 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50 text-slate-900'}`} />
                                   {sugerenciasOrigen.length > 0 && (
-                                    <span className={`absolute left-0 right-0 top-full z-40 mt-1 max-h-36 overflow-y-auto rounded-xl border shadow-lg ${darkMode ? 'border-slate-700 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+                                    <span className={`absolute left-0 right-0 top-full z-40 mt-1 max-h-36 overflow-y-auto rounded-2xl border shadow-lg ${darkMode ? 'border-slate-700 bg-slate-900' : 'border-orange-100 bg-white'}`}>
                                       {sugerenciasOrigen.map((sugerencia, indice) => (
                                         <button type="button" key={`${sugerencia.display_name}-${indice}`} onClick={() => seleccionarSugerencia(sugerencia, 'origen')} className={`block w-full border-b p-2 text-left text-xs last:border-0 ${darkMode ? 'border-slate-800 text-slate-200 hover:bg-slate-800' : 'border-orange-50 text-slate-700 hover:bg-orange-50'}`}>{sugerencia.display_name}</button>
                                       ))}
@@ -3762,9 +3906,9 @@ export default function App() {
                                 </label>
                                 <label className="relative block text-[10px] font-bold text-slate-500">
                                   {serviceType === 'viajes' ? 'Destino del viaje' : 'Destino'}
-                                  <input type="text" value={destinoInput} onChange={event => buscarDireccionGeocoding(event.target.value, 'destino')} placeholder="Sector, calle o establecimiento" className={`mt-1 w-full rounded-xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-700 bg-slate-900 text-white' : 'border-slate-200 bg-white text-slate-900'}`} />
+                                  <input type="text" value={destinoInput} onChange={event => buscarDireccionGeocoding(event.target.value, 'destino')} placeholder="Sector, calle o establecimiento" className={`mt-1 w-full rounded-2xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-700 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50 text-slate-900'}`} />
                                   {sugerenciasDestino.length > 0 && (
-                                    <span className={`absolute left-0 right-0 top-full z-40 mt-1 max-h-36 overflow-y-auto rounded-xl border shadow-lg ${darkMode ? 'border-slate-700 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+                                    <span className={`absolute left-0 right-0 top-full z-40 mt-1 max-h-36 overflow-y-auto rounded-2xl border shadow-lg ${darkMode ? 'border-slate-700 bg-slate-900' : 'border-orange-100 bg-white'}`}>
                                       {sugerenciasDestino.map((sugerencia, indice) => (
                                         <button type="button" key={`${sugerencia.display_name}-${indice}`} onClick={() => seleccionarSugerencia(sugerencia, 'destino')} className={`block w-full border-b p-2 text-left text-xs last:border-0 ${darkMode ? 'border-slate-800 text-slate-200 hover:bg-slate-800' : 'border-orange-50 text-slate-700 hover:bg-orange-50'}`}>{sugerencia.display_name}</button>
                                       ))}
@@ -3774,19 +3918,22 @@ export default function App() {
                               </div>
 
                               {(errorGeocoding || errorRuta || errorUbicacion) && (
-                                <p role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+                                <p role="alert" className="rounded-2xl border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
                                   {errorRuta || errorGeocoding || errorUbicacion}
                                 </p>
                               )}
 
-                              <div className="relative min-h-[220px] flex-1 overflow-hidden rounded-2xl border shadow-sm">
-                                <button type="button" onClick={() => obtenerUbicacionActual()} disabled={ubicacionCargando} className={`absolute left-3 top-3 z-20 inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold shadow-md disabled:opacity-60 ${darkMode ? 'border-slate-600 bg-slate-800/95 text-slate-100' : 'border-white/80 bg-white/95 text-slate-800'}`}>
-                                  <Navigation size={15} className={ubicacionCargando ? 'animate-pulse' : 'text-[#FF5722]'} />
-                                  {ubicacionCargando ? 'Buscando...' : 'Mi ubicación'}
-                                </button>
-                                <div className="absolute bottom-3 right-3 z-20 flex gap-2">
-                                  <button type="button" aria-pressed={modoSeleccionMapa === 'origen'} onClick={() => setModoSeleccionMapa('origen')} className={`rounded-xl border px-3 py-2 text-xs font-black shadow-md ${modoSeleccionMapa === 'origen' ? 'bg-emerald-600 text-white' : 'border-emerald-200 bg-white text-emerald-700'}`}>Origen</button>
-                                  <button type="button" aria-pressed={modoSeleccionMapa === 'destino'} onClick={() => setModoSeleccionMapa('destino')} className={`rounded-xl border px-3 py-2 text-xs font-black shadow-md ${modoSeleccionMapa === 'destino' ? 'bg-red-600 text-white' : 'border-red-200 bg-white text-red-700'}`}>Destino</button>
+                              <div className="relative min-h-[220px] flex-1 overflow-hidden rounded-3xl border shadow-sm">
+                                <div className="absolute left-3 right-3 top-3 z-20 flex flex-wrap items-center gap-2">
+                                  <button type="button" onClick={() => obtenerUbicacionActual()} disabled={ubicacionCargando} className={`inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-xs font-bold shadow-md disabled:opacity-60 ${darkMode ? 'border-slate-600 bg-slate-800/95 text-slate-100' : 'border-white/80 bg-white/95 text-slate-800'}`}>
+                                    <Navigation size={15} className={ubicacionCargando ? 'animate-pulse' : 'text-[#FF5722]'} />
+                                    {ubicacionCargando ? 'Buscando...' : 'Mi ubicación'}
+                                  </button>
+                                  <button type="button" aria-pressed={modoSeleccionMapa === 'origen'} onClick={() => setModoSeleccionMapa('origen')} className={`rounded-2xl border px-3 py-2 text-xs font-black shadow-md ${modoSeleccionMapa === 'origen' ? 'border-emerald-600 bg-emerald-600 text-white' : darkMode ? 'border-emerald-900 bg-slate-900 text-emerald-300' : 'border-emerald-200 bg-white text-emerald-700'}`}>Origen</button>
+                                  <button type="button" aria-pressed={modoSeleccionMapa === 'destino'} onClick={() => setModoSeleccionMapa('destino')} className={`rounded-2xl border px-3 py-2 text-xs font-black shadow-md ${modoSeleccionMapa === 'destino' ? 'border-red-600 bg-red-600 text-white' : darkMode ? 'border-red-900 bg-slate-900 text-red-300' : 'border-red-200 bg-white text-red-700'}`}>Destino</button>
+                                  <span className={`basis-full w-fit rounded-2xl border px-3 py-1.5 text-[10px] font-bold shadow-sm backdrop-blur ${darkMode ? 'border-slate-700 bg-slate-900/90 text-slate-200' : 'border-white/80 bg-white/90 text-slate-600'}`}>
+                                    {modoSeleccionMapa ? `Toca el mapa para fijar el ${modoSeleccionMapa}` : 'Selecciona Origen y Destino en el mapa'}
+                                  </span>
                                 </div>
                                 <React.Suspense fallback={<div className="flex h-full items-center justify-center bg-slate-100 text-xs font-bold text-slate-500">Cargando mapa...</div>}>
                                   <MapaLibre
@@ -3808,9 +3955,9 @@ export default function App() {
                               </div>
 
                               <div className="flex items-center justify-between gap-3">
-                                <button type="button" onClick={() => setPasoSolicitud('tipo')} className={`rounded-xl border px-4 py-3 text-xs font-bold ${darkMode ? 'border-slate-700 text-slate-200' : 'border-slate-200 text-slate-600'}`}><ArrowLeft size={15} className="mr-1 inline" /> Atrás</button>
-                                <span className="text-right text-[11px] font-semibold text-slate-500">{rutaCompletaLista ? `${distanciaKm} km · ~${tiempoEstimadoMin} min` : 'Selecciona origen y destino en el mapa'}</span>
-                                <button type="button" disabled={!rutaCompletaLista || esperandoNombreDireccion || distanciaKm <= 0 || tiempoEstimadoMin <= 0} onClick={() => { setPasoSolicitud('pago'); void cargarConfiguracionPago(); }} className="rounded-xl bg-[#FF5722] px-4 py-3 text-xs font-black text-white shadow-md disabled:cursor-not-allowed disabled:opacity-50">Continuar <ArrowRight size={15} className="ml-1 inline" /></button>
+                                <button type="button" onClick={() => setPasoSolicitud('tipo')} className={`rounded-2xl border px-4 py-3 text-xs font-bold ${darkMode ? 'border-slate-700 text-slate-200' : 'border-slate-200 text-slate-600'}`}><ArrowLeft size={15} className="mr-1 inline" /> Atrás</button>
+                                <span className="text-right text-[11px] font-semibold text-slate-500">{rutaCompletaLista ? `${distanciaKm} km · ~${tiempoEstimadoMin} min` : 'Completa origen y destino para continuar'}</span>
+                                <button type="button" disabled={!rutaCompletaLista || esperandoNombreDireccion || distanciaKm <= 0 || tiempoEstimadoMin <= 0} onClick={() => { setPasoSolicitud('pago'); void cargarConfiguracionPago(); }} className="rounded-2xl bg-[#FF5722] px-4 py-3 text-xs font-black text-white shadow-md disabled:cursor-not-allowed disabled:opacity-50">Continuar <ArrowRight size={15} className="ml-1 inline" /></button>
                               </div>
                             </div>
                           )}
@@ -3835,19 +3982,19 @@ export default function App() {
                                   <div className="text-right"><p className="text-[10px] font-bold text-slate-500">Total</p><p className="mt-1 text-sm font-black text-[#FF5722]">${tarifaUsd.toFixed(2)} USD</p><p className="text-xs font-bold">{tarifaEnBolivares || 'Tasa BCV no disponible'}</p></div>
                                 </div>
 
-                                {errorTarifas && <p role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">{errorTarifas}</p>}
+                                {errorTarifas && <p role="alert" className="rounded-2xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">{errorTarifas}</p>}
                                 {tasasCambio?.desactualizada && <p role="status" className="text-[10px] text-amber-700 dark:text-amber-300">La tasa BCV mostrada corresponde al último valor disponible.</p>}
 
                                 <label className="block text-xs font-bold">
                                   Número de comprobante
-                                  <input type="text" inputMode="numeric" pattern="[0-9]*" maxLength={100} value={referenciaPago} onChange={event => setReferenciaPago(event.target.value.replace(/[^0-9]/g, ''))} placeholder="Referencia numérica de la operación" className={`mt-1 w-full rounded-xl border px-3 py-3 ${darkMode ? 'border-slate-700 bg-slate-950 text-white' : 'border-slate-200 bg-white'}`} />
+                                  <input type="text" inputMode="numeric" pattern="[0-9]*" maxLength={100} value={referenciaPago} onChange={event => setReferenciaPago(event.target.value.replace(/[^0-9]/g, ''))} placeholder="Referencia numérica de la operación" className={`mt-1 w-full rounded-2xl border px-3 py-3 ${darkMode ? 'border-slate-700 bg-slate-950 text-white' : 'border-slate-200 bg-white'}`} />
                                 </label>
                                 <p className="text-[11px] leading-relaxed text-slate-500">Un administrador verificará la referencia. El servicio se publicará para los repartidores solo después de confirmar el pago.</p>
                                 {errorPago && <p role="alert" className="text-xs font-semibold text-red-600">{errorPago}</p>}
 
                                 <div className="flex gap-3">
-                                  <button type="button" onClick={() => setPasoSolicitud('ruta')} className={`flex-1 rounded-xl border px-4 py-3 text-xs font-bold ${darkMode ? 'border-slate-700 text-slate-200' : 'border-slate-200 text-slate-600'}`}><ArrowLeft size={15} className="mr-1 inline" /> Volver al mapa</button>
-                                  <button type="button" disabled={!rutaCompletaLista || !pagoPedidoCompleto || enviandoPedido || cargandoTarifas || !configuracionTarifas || !tasasCambio || cargandoConfiguracionPago || !configuracionPago?.pagoMovil.telefono} onClick={() => void handleCrearPedido()} className="flex-1 rounded-xl bg-[#FF5722] px-4 py-3 text-xs font-black text-white shadow-md disabled:cursor-not-allowed disabled:opacity-50">
+                                  <button type="button" onClick={() => setPasoSolicitud('ruta')} className={`flex-1 rounded-2xl border px-4 py-3 text-xs font-bold ${darkMode ? 'border-slate-700 text-slate-200' : 'border-slate-200 text-slate-600'}`}><ArrowLeft size={15} className="mr-1 inline" /> Volver al mapa</button>
+                                  <button type="button" disabled={!rutaCompletaLista || !pagoPedidoCompleto || enviandoPedido || cargandoTarifas || !configuracionTarifas || !tasasCambio || cargandoConfiguracionPago || !configuracionPago?.pagoMovil.telefono} onClick={() => void handleCrearPedido()} className="flex-1 rounded-2xl bg-[#FF5722] px-4 py-3 text-xs font-black text-white shadow-md disabled:cursor-not-allowed disabled:opacity-50">
                                     {enviandoPedido ? 'Enviando…' : 'Enviar a revisión'}
                                   </button>
                                 </div>
@@ -4761,7 +4908,7 @@ export default function App() {
             >
               <div className="space-y-5">
               <p className="text-[11px] text-slate-500">Las cuentas activas se actualizan automáticamente cada 15 segundos.</p>
-              <div className="grid gap-3 grid-cols-2 lg:grid-cols-5">
+              <div className="horizontal-story-carousel admin-metric-carousel" role="region" aria-label="Métricas de actividad" aria-roledescription="carrusel" tabIndex={0}>
                 <article className={`rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-950/60' : 'border-slate-100 bg-slate-50'}`}>
                   <Users size={17} className="text-[#FF5722]" />
                   <p className="mt-3 text-2xl font-black">{metricasAdmin?.cuentas_totales ?? '—'}</p>
@@ -4786,7 +4933,7 @@ export default function App() {
                   <p className="text-[11px] font-semibold text-slate-500">Repartidores activos</p>
                   <p className="mt-1 text-[10px] text-slate-400">De {metricasAdmin?.repartidores_totales ?? '—'} registrados</p>
                 </article>
-                <article className={`col-span-2 rounded-2xl border p-4 lg:col-span-1 ${darkMode ? 'border-slate-800 bg-slate-950/60' : 'border-slate-100 bg-slate-50'}`}>
+                <article className={`rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-950/60' : 'border-slate-100 bg-slate-50'}`}>
                   <Clock size={17} className="text-violet-500" />
                   <p className="mt-3 text-sm font-black">Actualización automática</p>
                   <p className="mt-1 text-[11px] text-slate-500">La presencia se renueva mientras la app está abierta.</p>

@@ -74,26 +74,6 @@
         line-height:1; opacity:0; will-change:transform,opacity;
         animation:startup-wordmark-enter 2.7s cubic-bezier(.2,.75,.25,1) both
       }
-      .startup-initial-wrap { position:relative; display:inline-block }
-      .startup-santa-hat {
-        position:absolute; top:-.3em; left:.02em; z-index:2; width:.58em; height:.48em;
-        transform:rotate(-24deg); transform-origin:center bottom;
-        filter:drop-shadow(0 2px 3px rgb(15 23 42 / 35%))
-      }
-      .startup-santa-hat:before {
-        position:absolute; right:.01em; bottom:.12em; left:.04em; height:.38em;
-        border-radius:.2em .22em .03em .03em; background:linear-gradient(135deg,#9f1239,#7f1d1d);
-        clip-path:polygon(0 100%,12% 56%,58% 0,100% 76%,86% 100%); content:"";
-        filter:drop-shadow(0 0 1px white)
-      }
-      .startup-santa-hat-brim,.startup-santa-hat-pom {
-        position:absolute; z-index:1; border-radius:50%; background:#fff;
-        box-shadow:0 0 0 1px #e2e8f0,0 2px 4px rgb(15 23 42 / 35%)
-      }
-      .startup-santa-hat-brim {
-        bottom:.08em; left:0; width:.58em; height:.14em; border-radius:999px
-      }
-      .startup-santa-hat-pom { top:0; right:0; width:.15em; height:.15em }
       .startup-initial { color:#ff5722 }
       .startup-wordmark-rest { display:inline-block }
       .startup-tagline {
@@ -159,7 +139,7 @@
         splash.className = localStorage.getItem('llevalo_dark_mode') === 'true' ? 'startup-intro startup-intro-dark' : 'startup-intro';
         splash.setAttribute('role', 'status');
         splash.setAttribute('aria-label', 'Iniciando Llévalo');
-        splash.innerHTML = '<span class="startup-orbit startup-orbit-one" aria-hidden="true"></span><span class="startup-orbit startup-orbit-two" aria-hidden="true"></span><div class="startup-wordmark" aria-hidden="true"><span class="startup-initial-wrap"><span class="startup-initial">L</span><span class="startup-santa-hat"><span class="startup-santa-hat-pom"></span><span class="startup-santa-hat-brim"></span></span></span><span class="startup-wordmark-rest">lévalo</span></div><span class="startup-tagline" aria-hidden="true">Hecho para resolver</span>';
+        splash.innerHTML = '<span class="startup-orbit startup-orbit-one" aria-hidden="true"></span><span class="startup-orbit startup-orbit-two" aria-hidden="true"></span><div class="startup-wordmark" aria-hidden="true"><span class="startup-initial">L</span><span class="startup-wordmark-rest">lévalo</span></div><span class="startup-tagline" aria-hidden="true">Lo que necesites, Llévalo ya</span>';
         document.body.appendChild(splash);
       }
     </script>
