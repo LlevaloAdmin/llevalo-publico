@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { Activity, Bike, MapPin, ArrowLeft, ArrowRight, Camera, ImagePlus, Mic, MicOff, User, Eye, EyeOff, Clock, Send, Power, Star, Moon, Sun, DollarSign, XCircle, Navigation, CheckCircle2, Circle, Package, ShoppingBag, CarFront, LogOut, Users, UserRound, ChevronDown, BellOff } from 'lucide-react';
+import { Activity, Bike, MapPin, ArrowLeft, ArrowRight, Camera, ImagePlus, Mic, MicOff, User, Eye, EyeOff, Clock, Send, Power, Star, Moon, Sun, DollarSign, XCircle, Navigation, CheckCircle2, Circle, Package, ShoppingBag, CarFront, LogOut, Users, UserRound, ChevronDown, Bell, BellOff } from 'lucide-react';
 import { App as CapacitorApp } from '@capacitor/app';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { PushNotifications } from '@capacitor/push-notifications';
 import { StatusBar, Style } from '@capacitor/status-bar';
 import { Capacitor, type PluginListenerHandle } from '@capacitor/core';
 import { registerWebPushToken } from './firebasePush';
+import { loadGoogleMaps } from './googleMaps';
 import {
   clearAllDriverNotifications,
   clearDriverOrderNotification,
@@ -19,7 +20,7 @@ import {
   type NotificationPermissionState
 } from './driverNotifications';
 
-const MapaLibre = React.lazy(() => import('./MapaLibre'));
+const MapaGoogle = React.lazy(() => import('./MapaGoogle'));
 
 interface PedidoReal {
   id: number;
@@ -144,67 +145,37 @@ interface ResumenCalificaciones {
 
 interface SugerenciaDireccion {
   display_name: string;
-  lat: number;
-  lon: number;
   tipo: string;
+  prediction: google.maps.places.PlacePrediction;
 }
 
 const etiquetasTipoDireccion: Record<string, string> = {
-  address: 'Dirección',
-  house: 'Dirección',
-  street: 'Calle',
+  street_address: 'Dirección',
+  premise: 'Dirección',
+  route: 'Calle',
   neighborhood: 'Sector',
+  sublocality: 'Sector',
   locality: 'Localidad',
-  district: 'Sector',
-  place: 'Ciudad',
-  city: 'Ciudad',
-  poi: 'Establecimiento'
+  administrative_area_level_2: 'Localidad',
+  establishment: 'Establecimiento',
+  point_of_interest: 'Establecimiento'
 };
 
-interface PropiedadesPhoton {
-  name?: unknown;
-  street?: unknown;
-  housenumber?: unknown;
-  locality?: unknown;
-  district?: unknown;
-  city?: unknown;
-  state?: unknown;
-  type?: unknown;
-  osm_key?: unknown;
-  osm_value?: unknown;
-}
-
-const textoPhoton = (value: unknown) => typeof value === 'string' ? value.trim() : '';
-
-const formatearDireccionPhoton = (properties: PropiedadesPhoton) => {
-  const street = textoPhoton(properties.street);
-  const houseNumber = textoPhoton(properties.housenumber);
-  const parts = [
-    textoPhoton(properties.name),
-    street ? `${houseNumber ? `${houseNumber} ` : ''}${street}` : '',
-    textoPhoton(properties.locality),
-    textoPhoton(properties.district),
-    textoPhoton(properties.city),
-    textoPhoton(properties.state)
-  ].filter(Boolean);
-
-  return parts.filter((part, index) => parts.findIndex(candidate => candidate.toLocaleLowerCase() === part.toLocaleLowerCase()) === index)
-    .join(', ');
-};
-
-const tipoDireccionPhoton = (properties: PropiedadesPhoton) => {
-  const osmKey = textoPhoton(properties.osm_key);
-  const osmValue = textoPhoton(properties.osm_value);
-  if (osmKey === 'place' && ['suburb', 'neighbourhood', 'quarter', 'hamlet'].includes(osmValue)) return 'neighborhood';
-
-  const type = textoPhoton(properties.type);
-  if (type === 'street') return 'street';
-  if (osmKey && osmKey !== 'place') return 'poi';
-  if (type === 'house') return 'address';
-  if (type === 'district') return 'district';
-  if (type === 'locality') return 'locality';
-  if (type === 'city') return 'city';
+const tipoDireccionGoogle = (types: string[]) => {
+  for (const type of types) {
+    if (etiquetasTipoDireccion[type]) return type;
+  }
   return 'place';
+};
+
+const obtenerDireccionGoogle = async (location: { lat: number; lng: number }): Promise<string> => {
+  const { geocoding } = await loadGoogleMaps();
+  const response = await new geocoding.Geocoder().geocode({
+    location,
+    language: 'es',
+    region: 'VE'
+  });
+  return response.results[0]?.formatted_address?.trim() || '';
 };
 
 interface MensajeChat {
@@ -530,6 +501,12 @@ export default function App() {
     }
   });
   const [permisoAvisosRepartidor, setPermisoAvisosRepartidor] = useState<NotificationPermissionState>('default');
+  const [permisoAvisosAdmin, setPermisoAvisosAdmin] = useState<NotificationPermissionState>('default');
+  const [avisosAdminActivos, setAvisosAdminActivos] = useState(false);
+  const [errorAvisosAdmin, setErrorAvisosAdmin] = useState('');
+  const [intentoAvisosAdmin, setIntentoAvisosAdmin] = useState(0);
+  const [pagoNotificadoId, setPagoNotificadoId] = useState<number | null>(null);
+  const pagoAdminNotificacionPendienteRef = useRef<number | null>(null);
   const [pedidosCargadosUsuarioId, setPedidosCargadosUsuarioId] = useState<number | null>(null);
   const snapshotAvisosRepartidorRef = useRef<{
     userId: number;
@@ -604,6 +581,10 @@ export default function App() {
     destino: null
   });
   const geocodificacionGPSRef = useRef<AbortController | null>(null);
+  const autocompleteSessionTokensRef = useRef<Record<
+    'origen' | 'destino',
+    google.maps.places.AutocompleteSessionToken | null
+  >>({ origen: null, destino: null });
   const [distanciaKm, setDistanciaKm] = useState<number>(0);
   const [tiempoEstimadoMin, setTiempoEstimadoMin] = useState<number>(0);
   
@@ -904,6 +885,7 @@ export default function App() {
         localStorage.removeItem('llevalo_token');
         localStorage.removeItem('llevalo_usuario');
         setUsuario(null);
+        setAvisosAdminActivos(false);
         setPedidosCargadosUsuarioId(null);
         snapshotAvisosRepartidorRef.current = null;
         ultimoBloqueTemporizadorRef.current.clear();
@@ -1023,19 +1005,8 @@ export default function App() {
     const controller = new AbortController();
     geocodingControllerRef.current[tipoActual] = controller;
     try {
-      const params = new URLSearchParams({
-        lat: String(lat),
-        lon: String(lng),
-        radius: '0.5',
-        limit: '1'
-      });
-      const res = await fetch(`https://photon.komoot.io/reverse?${params}`, { signal: controller.signal });
-      if (!res.ok) throw new Error(`Photon respondió HTTP ${res.status}`);
-      const data = await res.json();
-      const propiedades = data?.features?.[0]?.properties as PropiedadesPhoton | undefined;
-      const nombreLugar = propiedades
-        ? formatearDireccionPhoton(propiedades)
-        : '';
+      const nombreLugar = await obtenerDireccionGoogle({ lat, lng });
+      if (controller.signal.aborted) return;
       const nombreFinal = nombreLugar || `Ubicación (${lat.toFixed(5)}, ${lng.toFixed(5)})`;
       if (!nombreLugar) {
         setErrorGeocoding('No se encontró el nombre de este lugar; conservamos la ubicación exacta del pin.');
@@ -1045,7 +1016,7 @@ export default function App() {
       else setDestinoInput(nombreFinal);
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return;
-      console.error('Error buscando el nombre del punto con Photon:', error);
+      console.error('Error buscando el nombre del punto con Google Geocoding:', error);
       setErrorGeocoding('No se pudo obtener el nombre del punto; conservamos la ubicación exacta del pin.');
       const fallback = `Ubicación (${lat.toFixed(5)}, ${lng.toFixed(5)})`;
       if (tipoActual === 'origen') setOrigenInput(fallback);
@@ -1101,23 +1072,14 @@ export default function App() {
           geocodificacionGPSRef.current = controller;
           void (async () => {
             try {
-              const params = new URLSearchParams({
-                lat: String(ubicacion.lat),
-                lon: String(ubicacion.lng),
-                radius: '0.5',
-                limit: '1'
-              });
-              const response = await fetch(`https://photon.komoot.io/reverse?${params}`, { signal: controller.signal });
-              if (!response.ok) throw new Error(`Photon respondió HTTP ${response.status}`);
-              const data = await response.json();
-              const properties = data?.features?.[0]?.properties as PropiedadesPhoton | undefined;
-              const direccion = properties ? formatearDireccionPhoton(properties) : '';
+              const direccion = await obtenerDireccionGoogle(ubicacion);
+              if (controller.signal.aborted) return;
               const nombre = direccion || 'Sector cercano no identificado';
               if (objetivoActual === 'origen') setOrigenInput(nombre);
               else setDestinoInput(nombre);
             } catch (error) {
               if (error instanceof DOMException && error.name === 'AbortError') return;
-              console.error('No se pudo identificar el sector cercano a la ubicación:', error);
+              console.error('No se pudo identificar el sector cercano con Google Geocoding:', error);
               setErrorGeocoding('No se pudo identificar el sector cercano; conservamos las coordenadas del GPS.');
               if (objetivoActual === 'origen') setOrigenInput('Ubicación actual · sector cercano no disponible');
               else setDestinoInput('Ubicación actual · sector cercano no disponible');
@@ -1161,6 +1123,7 @@ export default function App() {
 
     const consulta = query.trim();
     if (consulta.length < 3) {
+      autocompleteSessionTokensRef.current[tipo] = null;
       return;
     }
 
@@ -1169,50 +1132,40 @@ export default function App() {
       geocodingControllerRef.current[tipo] = controller;
       try {
         const proximidad = coordsUsuarioGPS || { lat: 10.2291, lng: -68.0055 };
-        const params = new URLSearchParams({
-          q: consulta,
-          lat: String(proximidad.lat),
-          lon: String(proximidad.lng),
-          bbox: '-68.4,10.0,-67.7,10.5',
-          limit: '8'
+        const { places } = await loadGoogleMaps();
+        const sessionToken = autocompleteSessionTokensRef.current[tipo]
+          ?? new places.AutocompleteSessionToken();
+        autocompleteSessionTokensRef.current[tipo] = sessionToken;
+        const response = await places.AutocompleteSuggestion.fetchAutocompleteSuggestions({
+          input: consulta,
+          includedRegionCodes: ['ve'],
+          language: 'es',
+          region: 'VE',
+          locationBias: { center: proximidad, radius: 40_000 },
+          origin: proximidad,
+          sessionToken
         });
-        const response = await fetch(`https://photon.komoot.io/api/?${params}`, {
-          headers: { Accept: 'application/json' },
-          signal: controller.signal
-        });
-        if (!response.ok) throw new Error(`Photon respondió HTTP ${response.status}`);
-
-        const data = await response.json();
-        const features = Array.isArray(data?.features) ? data.features : [];
-        const formatted: SugerenciaDireccion[] = features.flatMap((feature: {
-          properties?: PropiedadesPhoton;
-          geometry?: { coordinates?: unknown };
-        }) => {
-          const coordinates = feature.geometry?.coordinates;
-          if (!Array.isArray(coordinates)
-            || typeof coordinates[0] !== 'number'
-            || typeof coordinates[1] !== 'number'
-            || !Number.isFinite(coordinates[0])
-            || !Number.isFinite(coordinates[1])) return [];
-          const properties = feature.properties || {};
-          const displayName = formatearDireccionPhoton(properties);
+        if (controller.signal.aborted) return;
+        const formatted: SugerenciaDireccion[] = response.suggestions.flatMap(suggestion => {
+          const prediction = suggestion.placePrediction;
+          if (!prediction) return [];
+          const displayName = prediction.text.toString().trim();
           if (!displayName) return [];
           return [{
             display_name: displayName,
-            lon: coordinates[0],
-            lat: coordinates[1],
-            tipo: tipoDireccionPhoton(properties)
+            tipo: tipoDireccionGoogle(prediction.types),
+            prediction
           }];
-        });
+        }).slice(0, 8);
 
         if (tipo === 'origen') setSugerenciasOrigen(formatted);
         else setSugerenciasDestino(formatted);
         setBuscandoDireccion(current => ({ ...current, [tipo]: false }));
       } catch (error) {
-        if (error instanceof DOMException && error.name === 'AbortError') return;
-        console.error('Error buscando dirección en Photon:', error);
+        if (controller.signal.aborted) return;
+        console.error('Error buscando dirección en Google Places:', error);
         setBuscandoDireccion(current => ({ ...current, [tipo]: false }));
-        setErrorGeocoding('No se pudieron buscar lugares en OpenStreetMap. Puedes marcar el punto exacto en el mapa.');
+        setErrorGeocoding('No se pudieron buscar lugares con Google. Puedes marcar el punto exacto en el mapa.');
       }
     }, 500);
   };
@@ -1221,20 +1174,40 @@ export default function App() {
     geocodificacionGPSRef.current?.abort();
     if (debounceTimerRef.current[tipo]) clearTimeout(debounceTimerRef.current[tipo]!);
     geocodingControllerRef.current[tipo]?.abort();
+    const controller = new AbortController();
+    geocodingControllerRef.current[tipo] = controller;
     setErrorGeocoding('');
     setErrorRuta('');
-    setBuscandoDireccion(current => ({ ...current, [tipo]: false }));
+    setBuscandoDireccion(current => ({ ...current, [tipo]: true }));
     setDistanciaKm(0);
     setTiempoEstimadoMin(0);
-    if (tipo === 'origen') {
-      setOrigenInput(item.display_name);
-      setCoordsOrigen({ lat: item.lat, lng: item.lon });
-      setSugerenciasOrigen([]);
-    } else {
-      setDestinoInput(item.display_name);
-      setCoordsDestino({ lat: item.lat, lng: item.lon });
-      setSugerenciasDestino([]);
-    }
+    autocompleteSessionTokensRef.current[tipo] = null;
+    const setInput = tipo === 'origen' ? setOrigenInput : setDestinoInput;
+    const setCoords = tipo === 'origen' ? setCoordsOrigen : setCoordsDestino;
+    const setSugerencias = tipo === 'origen' ? setSugerenciasOrigen : setSugerenciasDestino;
+    setInput(item.display_name);
+    setCoords(null);
+    setSugerencias([]);
+
+    void (async () => {
+      try {
+        const place = item.prediction.toPlace();
+        const response = await place.fetchFields({ fields: ['location', 'formattedAddress'] });
+        if (controller.signal.aborted) return;
+        const location = response.place.location;
+        if (!location) throw new Error('Google no devolvió las coordenadas del lugar seleccionado.');
+        setCoords({ lat: location.lat(), lng: location.lng() });
+        setInput(response.place.formattedAddress || item.display_name);
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        console.error('No se pudieron obtener las coordenadas del lugar:', error);
+        setErrorGeocoding('No se pudieron obtener las coordenadas de este lugar. Puedes marcarlo en el mapa.');
+      } finally {
+        if (!controller.signal.aborted) {
+          setBuscandoDireccion(current => ({ ...current, [tipo]: false }));
+        }
+      }
+    })();
   };
 
   const cargarConfiguracionPago = useCallback(async () => {
@@ -1722,6 +1695,57 @@ export default function App() {
     manejarAccionAvisoRef.current = manejarAccionAviso;
   }, [manejarAccionAviso]);
 
+  const manejarAccionPagoAdmin = (orderId: number | null) => {
+    if (!usuario) {
+      pagoAdminNotificacionPendienteRef.current = orderId;
+      setActiveTab('auth');
+      return;
+    }
+    if (!usuario.es_admin) {
+      alert('Inicia sesión con una cuenta de administrador para revisar este pago.');
+      return;
+    }
+    setPagoNotificadoId(orderId);
+    setSeccionAdmin('pagos');
+    navegarA('admin');
+    void cargarPanelAdmin();
+  };
+  const manejarAccionPagoAdminRef = useRef(manejarAccionPagoAdmin);
+  useEffect(() => {
+    manejarAccionPagoAdminRef.current = manejarAccionPagoAdmin;
+  });
+
+  useEffect(() => {
+    const orderId = pagoAdminNotificacionPendienteRef.current;
+    if (orderId === null || !usuario) return;
+    pagoAdminNotificacionPendienteRef.current = null;
+    if (usuario.es_admin) {
+      manejarAccionPagoAdminRef.current(orderId);
+      return;
+    }
+    alert('La cuenta no tiene permisos de administrador para revisar este pago.');
+  }, [usuario]);
+
+  const activarAvisosAdmin = async () => {
+    try {
+      const permission = await requestAppNotificationPermission();
+      setPermisoAvisosAdmin(permission);
+      if (permission !== 'granted') {
+        setErrorAvisosAdmin(permission === 'unsupported'
+          ? 'Este dispositivo no admite notificaciones push.'
+          : permission === 'denied'
+            ? 'Habilita las notificaciones de Llévalo en los ajustes del dispositivo o navegador.'
+            : 'No se concedió el permiso de notificaciones.');
+      } else {
+        setErrorAvisosAdmin('');
+        setIntentoAvisosAdmin(intento => intento + 1);
+      }
+    } catch (error) {
+      console.error('No se pudo solicitar el permiso de avisos de pago:', error);
+      setErrorAvisosAdmin(error instanceof Error ? error.message : 'No se pudo activar el permiso de notificaciones.');
+    }
+  };
+
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
     let descartado = false;
@@ -1781,6 +1805,7 @@ export default function App() {
 
         guardar(await PushNotifications.addListener('pushNotificationActionPerformed', event => {
           const data = event.notification.data as Record<string, unknown> | undefined;
+          if (data?.kind === 'admin_payment_pending') return;
           const orderId = Number(data?.orderId);
           void manejarAccionAvisoRef.current(
             event.actionId === 'apply' ? 'apply' : 'open',
@@ -1802,15 +1827,88 @@ export default function App() {
   }, [avisosRepartidorActivos, permisoAvisosRepartidor, usuario?.id, usuario?.rol]);
 
   useEffect(() => {
+    if (!usuario?.es_admin) return;
+    let descartado = false;
+    void getDriverNotificationPermission().then(permission => {
+      if (!descartado) setPermisoAvisosAdmin(permission);
+    }).catch(error => {
+      if (descartado) return;
+      console.error('No se pudo consultar el permiso de notificaciones del administrador:', error);
+      setPermisoAvisosAdmin('unsupported');
+    });
+    return () => { descartado = true; };
+  }, [usuario?.es_admin, usuario?.id]);
+
+  useEffect(() => {
+    if (!usuario?.es_admin || permisoAvisosAdmin !== 'granted') {
+      return;
+    }
+
+    let descartado = false;
+    const listeners: PluginListenerHandle[] = [];
+    const guardar = (handle: PluginListenerHandle) => {
+      if (descartado) void handle.remove();
+      else listeners.push(handle);
+    };
+    const registrarToken = async (token: string, platform: 'android' | 'web') => {
+      if (descartado) return;
+      await guardarTokenPush(token, platform, true);
+      if (descartado) return;
+      localStorage.setItem(`llevalo_push_token_${usuario.id}`, token);
+      setErrorAvisosAdmin('');
+      setAvisosAdminActivos(true);
+    };
+    const manejarError = (error: unknown) => {
+      if (descartado) return;
+      console.error('No se pudieron activar las notificaciones de pagos para el administrador:', error);
+      setAvisosAdminActivos(false);
+      setErrorAvisosAdmin(error instanceof Error ? error.message : 'No se pudieron activar los avisos de pagos.');
+    };
+
+    const iniciarRegistro = async () => {
+      if (Capacitor.isNativePlatform()) {
+        guardar(await PushNotifications.addListener('registration', event => {
+          void registrarToken(event.value, 'android').catch(manejarError);
+        }));
+        guardar(await PushNotifications.addListener('registrationError', manejarError));
+        guardar(await PushNotifications.addListener('pushNotificationActionPerformed', event => {
+          const data = event.notification.data as Record<string, unknown> | undefined;
+          if (data?.kind !== 'admin_payment_pending') return;
+          const orderId = Number(data.orderId);
+          void manejarAccionPagoAdminRef.current(
+            Number.isSafeInteger(orderId) && orderId > 0 ? orderId : null
+          );
+        }));
+        await PushNotifications.register();
+        return;
+      }
+
+      const token = await registerWebPushToken();
+      if (descartado) return;
+      await registrarToken(token, 'web');
+    };
+    void iniciarRegistro().catch(manejarError);
+
+    return () => {
+      descartado = true;
+      listeners.forEach(listener => void listener.remove());
+    };
+  }, [intentoAvisosAdmin, permisoAvisosAdmin, usuario?.es_admin, usuario?.id]);
+
+  useEffect(() => {
     let descartado = false;
     let notificacionesSolicitadas = false;
     let ubicacionPendiente = false;
     const pedirNotificaciones = () => {
       if (notificacionesSolicitadas) return;
       notificacionesSolicitadas = true;
-      void requestAppNotificationPermission().catch(error => {
-        if (!descartado) console.error('No se pudo solicitar el permiso de notificaciones:', error);
-      });
+      void requestAppNotificationPermission()
+        .then(permission => {
+          if (!descartado) setPermisoAvisosAdmin(permission);
+        })
+        .catch(error => {
+          if (!descartado) console.error('No se pudo solicitar el permiso de notificaciones:', error);
+        });
     };
 
     if (!navigator.geolocation) {
@@ -1899,11 +1997,16 @@ export default function App() {
     const recibirAccion = (event: MessageEvent<unknown>) => {
       if (!event.data || typeof event.data !== 'object') return;
       const data = event.data as { type?: unknown; action?: unknown; orderId?: unknown };
-      if (data.type !== 'driver-notification-action' || typeof data.action !== 'string') return;
       const orderId = typeof data.orderId === 'number' && Number.isSafeInteger(data.orderId)
         ? data.orderId
         : null;
-      void manejarAccionAvisoRef.current(data.action, orderId);
+      if (data.type === 'admin-payment-notification-action') {
+        manejarAccionPagoAdminRef.current(orderId);
+        return;
+      }
+      if (data.type === 'driver-notification-action' && typeof data.action === 'string') {
+        void manejarAccionAvisoRef.current(data.action, orderId);
+      }
     };
     navigator.serviceWorker.addEventListener('message', recibirAccion);
     return () => navigator.serviceWorker.removeEventListener('message', recibirAccion);
@@ -2376,7 +2479,7 @@ export default function App() {
       void actualizarDisponibilidadPush(false)
         .catch(error => console.error('No se pudo marcar al repartidor como desconectado:', error));
     }
-    const tokenPush = usuario?.rol === 'repartidor'
+    const tokenPush = usuario?.rol === 'repartidor' || usuario?.es_admin
       ? localStorage.getItem(`llevalo_push_token_${usuario.id}`)
       : null;
     if (tokenPush) {
@@ -2396,6 +2499,7 @@ export default function App() {
     localStorage.removeItem('llevalo_token');
     localStorage.removeItem('llevalo_usuario');
     setUsuario(null);
+    setAvisosAdminActivos(false);
     setPedidosCargadosUsuarioId(null);
     snapshotAvisosRepartidorRef.current = null;
     ultimoBloqueTemporizadorRef.current.clear();
@@ -2551,8 +2655,12 @@ export default function App() {
       const token = localStorage.getItem(`llevalo_push_token_${usuario.id}`);
       if (token) {
         try {
-          await retirarTokenPush(token);
-          localStorage.removeItem(`llevalo_push_token_${usuario.id}`);
+          if (usuario.es_admin) {
+            await guardarTokenPush(token, Capacitor.isNativePlatform() ? 'android' : 'web', false);
+          } else {
+            await retirarTokenPush(token);
+            localStorage.removeItem(`llevalo_push_token_${usuario.id}`);
+          }
         } catch (error) {
           localStorage.setItem(`llevalo_driver_notifications_${usuario.id}`, 'true');
           console.error('No se pudo retirar el token push del dispositivo:', error);
@@ -2756,8 +2864,21 @@ export default function App() {
       '',
       `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`
     );
-    void manejarAccionAvisoRef.current(action, orderId);
+    if (action === 'admin-payment') {
+      manejarAccionPagoAdminRef.current(orderId);
+    } else {
+      void manejarAccionAvisoRef.current(action, orderId);
+    }
   }, [usuario]);
+
+  useEffect(() => {
+    if (activeTab !== 'admin' || seccionAdmin !== 'pagos' || pagoNotificadoId === null
+      || cargandoAdmin || !pagosPendientesAdmin.some(pago => pago.id === pagoNotificadoId)) return;
+    document.getElementById(`admin-pago-${pagoNotificadoId}`)?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'center'
+    });
+  }, [activeTab, cargandoAdmin, pagoNotificadoId, pagosPendientesAdmin, seccionAdmin]);
 
   const mensajeNavegacion = (() => {
     if (usuario?.rol !== 'repartidor' || !pedidoAsignadoRepartidor || !coordsUsuarioGPS) return '';
@@ -3932,10 +4053,6 @@ export default function App() {
 
                     {errorGeocoding && <p role="alert" className="text-[10px] text-amber-700">{errorGeocoding}</p>}
                     {errorRuta && <p role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">{errorRuta}</p>}
-                    <p className="text-[9px] text-slate-500">
-                      Búsqueda Photon · Datos © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer" className="underline">OpenStreetMap contributors</a>
-                    </p>
-
                     {errorUbicacion && (
                       <div role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs font-medium text-amber-900">
                         <p>{errorUbicacion}</p>
@@ -4000,7 +4117,7 @@ export default function App() {
                             <div className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col gap-2.5 py-2 md:gap-3">
                               <div className="relative min-h-[220px] h-[min(43dvh,520px)] flex-1 overflow-hidden rounded-3xl border shadow-sm">
                                 <React.Suspense fallback={<div className="flex h-full items-center justify-center bg-slate-100 text-xs font-bold text-slate-500">Cargando mapa...</div>}>
-                                  <MapaLibre
+                                  <MapaGoogle
                                     coordsOrigen={coordsOrigen}
                                     coordsDestino={coordsDestino}
                                     coordsUsuario={coordsUsuarioGPS}
@@ -4181,7 +4298,7 @@ export default function App() {
                 {ubicacionCargando ? 'Buscando...' : 'Mi ubicación'}
               </button>
               <React.Suspense fallback={<div className="flex h-full w-full items-center justify-center bg-slate-100 text-xs font-bold text-slate-500">Cargando mapa...</div>}>
-                <MapaLibre
+                <MapaGoogle
                   coordsOrigen={coordsOrigen}
                   coordsDestino={coordsDestino}
                   coordsUsuario={
@@ -4454,7 +4571,7 @@ export default function App() {
                   </div>
                 )}
                 <React.Suspense fallback={<div className="flex h-full w-full items-center justify-center bg-slate-100 text-xs font-bold text-slate-500">Cargando mapa...</div>}>
-                  <MapaLibre
+                  <MapaGoogle
                     coordsOrigen={
                       pedidoAsignadoRepartidor
                         ? { lat: pedidoAsignadoRepartidor.origen_lat, lng: pedidoAsignadoRepartidor.origen_lon }
@@ -4706,6 +4823,23 @@ export default function App() {
             <div className={`flex flex-col gap-3 rounded-3xl border p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between ${darkMode ? 'border-slate-800 bg-slate-900 text-white' : 'border-orange-100 bg-white'}`}>
               <h2 className={`text-xl font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Administración</h2>
               <div className="flex flex-wrap gap-2">
+                {avisosAdminActivos ? (
+                  <span className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] font-bold text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300">
+                    <Bell size={14} /> Avisos activos
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => void activarAvisosAdmin()}
+                    disabled={permisoAvisosAdmin === 'granted' && !errorAvisosAdmin}
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-[11px] font-bold text-[#FF5722] disabled:opacity-60 dark:border-orange-900 dark:bg-orange-950/40 dark:text-orange-300"
+                  >
+                    <Bell size={14} />
+                    {permisoAvisosAdmin === 'granted' && !errorAvisosAdmin
+                      ? 'Activando avisos…'
+                      : permisoAvisosAdmin === 'granted' ? 'Reintentar avisos' : 'Activar avisos'}
+                  </button>
+                )}
                 <button type="button" aria-pressed={usuario.rol === 'cliente'} onClick={() => void cambiarPerspectivaAdmin('cliente')} className={`rounded-xl border px-3 py-2 text-[11px] font-bold ${usuario.rol === 'cliente' ? darkMode ? 'border-[#FF5722] bg-[#16090f] text-orange-300' : 'border-[#FF5722] bg-orange-50 text-[#FF5722]' : 'border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-300'}`}>Usar como cliente</button>
                 <button type="button" aria-pressed={usuario.rol === 'repartidor'} onClick={() => void cambiarPerspectivaAdmin('repartidor')} className={`rounded-xl border px-3 py-2 text-[11px] font-bold ${usuario.rol === 'repartidor' ? darkMode ? 'border-[#FF5722] bg-[#16090f] text-orange-300' : 'border-[#FF5722] bg-orange-50 text-[#FF5722]' : 'border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-300'}`}>Usar como repartidor</button>
                 <button type="button" onClick={() => void cargarPanelAdmin()} disabled={cargandoAdmin} className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-[11px] font-bold text-[#FF5722] disabled:opacity-50 dark:border-orange-900 dark:bg-orange-950/40 dark:text-orange-300">
@@ -4714,6 +4848,7 @@ export default function App() {
               </div>
             </div>
 
+            {errorAvisosAdmin && <p role="status" className={`rounded-xl border p-3 text-xs ${darkMode ? 'border-amber-900 bg-amber-950/30 text-amber-200' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>{errorAvisosAdmin}</p>}
             {errorAdmin && <p role="alert" className={`rounded-xl border p-3 text-xs font-semibold ${darkMode ? 'border-red-900 bg-red-950/30 text-red-300' : 'border-red-200 bg-red-50 text-red-700'}`}>{errorAdmin}</p>}
             {mensajeAdmin && <p role="status" className={`rounded-xl border p-3 text-xs font-semibold ${darkMode ? 'border-emerald-900 bg-emerald-950/30 text-emerald-300' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>{mensajeAdmin}</p>}
 
@@ -5112,7 +5247,7 @@ export default function App() {
                 {pagosPendientesAdmin.length === 0 ? (
                   <p className="rounded-2xl bg-slate-50 p-4 text-xs text-slate-500 dark:bg-slate-950">No hay pagos ni reembolsos pendientes.</p>
                 ) : pagosPendientesAdmin.map(pago => (
-                  <article key={pago.id} className={`space-y-3 rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-950' : 'border-slate-100 bg-slate-50'}`}>
+                  <article id={`admin-pago-${pago.id}`} key={pago.id} className={`space-y-3 rounded-2xl border p-4 ${pagoNotificadoId === pago.id ? 'ring-2 ring-[#FF5722] ring-offset-2 dark:ring-offset-slate-900' : ''} ${darkMode ? 'border-slate-800 bg-slate-950' : 'border-slate-100 bg-slate-50'}`}>
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <p className="text-sm font-black">{pago.cliente_nombre}</p>

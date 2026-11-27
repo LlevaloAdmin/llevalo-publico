@@ -22,7 +22,8 @@ import java.util.Map;
 import java.util.TimeZone;
 
 public class LlevaloMessagingService extends MessagingService {
-    private static final String CHANNEL_ID = "driver-requests";
+    private static final String DRIVER_CHANNEL_ID = "driver-requests";
+    private static final String ADMIN_CHANNEL_ID = "admin-payments";
     private static final String ACTION_APPLY = "com.llevalo.app.NOTIFICATION_APPLY";
     private static final String ACTION_IGNORE = "com.llevalo.app.NOTIFICATION_IGNORE";
     private static final String EXTRA_ACTION = "notificationAction";
@@ -33,7 +34,8 @@ public class LlevaloMessagingService extends MessagingService {
         super.onMessageReceived(message);
         Map<String, String> data = message.getData();
         String kind = data.get("kind");
-        if (!"driver_order".equals(kind) && !"driver_update".equals(kind)) return;
+        boolean isAdminPayment = "admin_payment_pending".equals(kind);
+        if (!isAdminPayment && !"driver_order".equals(kind) && !"driver_update".equals(kind)) return;
 
         int orderId;
         try {
@@ -66,8 +68,11 @@ public class LlevaloMessagingService extends MessagingService {
             && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return;
         ensureChannel();
         boolean isNewOrder = "driver_order".equals(kind);
+        boolean isAdminPayment = "admin_payment_pending".equals(kind);
         String title = data.get("title");
-        if (title == null || title.isEmpty()) title = isNewOrder ? "Nuevo trabajo cerca" : "Aviso de Llévalo";
+        if (title == null || title.isEmpty()) {
+            title = isAdminPayment ? "Pago móvil por verificar" : isNewOrder ? "Nuevo trabajo cerca" : "Aviso de Llévalo";
+        }
 
         String body = data.get("body");
         if (isNewOrder) {
@@ -76,8 +81,8 @@ public class LlevaloMessagingService extends MessagingService {
         }
         if (body == null || body.isEmpty()) body = "Abre Llévalo para revisar la actualización.";
 
-        int notificationId = 1_000_000 + orderId;
-        Intent openIntent = createAppIntent(orderId, "open");
+        int notificationId = (isAdminPayment ? 3_000_000 : 1_000_000) + orderId;
+        Intent openIntent = createAppIntent(orderId, isAdminPayment ? "admin-payment" : "open");
         PendingIntent contentIntent = PendingIntent.getActivity(
             this,
             notificationId,
@@ -85,7 +90,10 @@ public class LlevaloMessagingService extends MessagingService {
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
 
-        NotificationCompat.Builder notification = new NotificationCompat.Builder(this, CHANNEL_ID)
+        NotificationCompat.Builder notification = new NotificationCompat.Builder(
+            this,
+            isAdminPayment ? ADMIN_CHANNEL_ID : DRIVER_CHANNEL_ID
+        )
             .setSmallIcon(R.mipmap.ic_launcher)
             .setColor(Color.rgb(255, 87, 34))
             .setContentTitle(title)
@@ -95,7 +103,7 @@ public class LlevaloMessagingService extends MessagingService {
             .setAutoCancel(true)
             .setOnlyAlertOnce(false)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setCategory(isAdminPayment ? NotificationCompat.CATEGORY_STATUS : NotificationCompat.CATEGORY_MESSAGE)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE);
 
         if (isNewOrder) {
@@ -146,11 +154,20 @@ public class LlevaloMessagingService extends MessagingService {
     private void ensureChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
         NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-        if (manager == null || manager.getNotificationChannel(CHANNEL_ID) != null) return;
-        manager.createNotificationChannel(new NotificationChannel(
-            CHANNEL_ID,
-            "Solicitudes de trabajo",
-            NotificationManager.IMPORTANCE_HIGH
-        ));
+        if (manager == null) return;
+        if (manager.getNotificationChannel(DRIVER_CHANNEL_ID) == null) {
+            manager.createNotificationChannel(new NotificationChannel(
+                DRIVER_CHANNEL_ID,
+                "Solicitudes de trabajo",
+                NotificationManager.IMPORTANCE_HIGH
+            ));
+        }
+        if (manager.getNotificationChannel(ADMIN_CHANNEL_ID) == null) {
+            manager.createNotificationChannel(new NotificationChannel(
+                ADMIN_CHANNEL_ID,
+                "Pagos por revisar",
+                NotificationManager.IMPORTANCE_HIGH
+            ));
+        }
     }
 }

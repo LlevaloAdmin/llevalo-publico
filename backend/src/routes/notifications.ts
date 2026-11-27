@@ -1,13 +1,21 @@
-import { Router, type Request, type Response } from 'express';
+import { Router, type NextFunction, type Request, type Response } from 'express';
 import { pool } from '../db';
-import { requireAuth, requireRole } from '../middleware/auth';
+import { requireAdmin, requireAuth, requireRole } from '../middleware/auth';
 import { ensurePushTargetsTable } from '../utils/pushNotifications';
 
 const router = Router();
 
 router.use(requireAuth);
 
-router.post('/device-token', requireRole('repartidor'), async (req: Request, res: Response): Promise<any> => {
+const requireNotificationAccess = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  if (req.authUser?.rol === 'repartidor') {
+    await requireRole('repartidor')(req, res, next);
+    return;
+  }
+  await requireAdmin(req, res, next);
+};
+
+router.post('/device-token', requireNotificationAccess, async (req: Request, res: Response): Promise<any> => {
   const userId = req.authUser?.id;
   const token = req.body?.token;
   const platform = req.body?.platform;
@@ -59,7 +67,7 @@ router.put('/availability', requireRole('repartidor'), async (req: Request, res:
   }
 });
 
-router.delete('/device-token', requireRole('repartidor'), async (req: Request, res: Response): Promise<any> => {
+router.delete('/device-token', requireNotificationAccess, async (req: Request, res: Response): Promise<any> => {
   const userId = req.authUser?.id;
   const token = req.body?.token;
   if (!userId) return res.status(401).json({ error: 'Sesión inválida.' });

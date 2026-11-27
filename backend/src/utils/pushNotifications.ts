@@ -1,6 +1,7 @@
 import { cert, getApps, initializeApp, type ServiceAccount } from 'firebase-admin/app';
 import { getMessaging, type Messaging, type MulticastMessage } from 'firebase-admin/messaging';
 import { pool } from '../db';
+import { codigoPedido } from './orderCode';
 
 type PushPlatform = 'android' | 'web';
 
@@ -10,7 +11,7 @@ interface PushTarget {
 }
 
 interface PushEvent {
-  kind: 'driver_order' | 'driver_update';
+  kind: 'driver_order' | 'driver_update' | 'admin_payment_pending';
   orderId: number;
   title: string;
   body: string;
@@ -97,6 +98,7 @@ const sendToTargets = async (targets: PushTarget[], event: PushEvent): Promise<v
   const remainingSeconds = event.deadline
     ? Math.max(1, Math.ceil((Date.parse(event.deadline) - Date.now()) / 1000))
     : undefined;
+  const ttlSeconds = event.kind === 'admin_payment_pending' ? 604_800 : remainingSeconds ?? 60;
   const messageData: Record<string, string> = {
     kind: event.kind,
     orderId: String(event.orderId),
@@ -120,14 +122,14 @@ const sendToTargets = async (targets: PushTarget[], event: PushEvent): Promise<v
           data: messageData,
           android: {
             priority: 'high',
-            ttl: (remainingSeconds ?? 60) * 1000
+            ttl: ttlSeconds * 1000
           }
         }
         : {
           tokens,
           data: messageData,
           webpush: {
-            headers: { TTL: String(remainingSeconds ?? 60), Urgency: 'high' }
+            headers: { TTL: String(ttlSeconds), Urgency: 'high' }
           }
         };
       const result = await messaging.sendEachForMulticast(message);
@@ -180,6 +182,26 @@ export const notifyDriversOfNewOrder = async (pedido: {
     body: `${pedido.tipo_servicio === 'viajes' ? 'Viaje' : 'Envío'} disponible · ${secondsRemaining}s\n${'█'.repeat(progress)}${'░'.repeat(12 - progress)}`,
     serviceType: pedido.tipo_servicio,
     deadline
+  });
+};
+
+export const notifyAdminsOfPendingPayment = async (pedido: {
+  id: number;
+  clienteId: number;
+}): Promise<void> => {
+  await ensurePushTargetsTable();
+  const result = await pool.query(
+    `SELECT d.token, d.platform
+     FROM notification_devices d
+     JOIN usuarios u ON u.id = d.user_id
+     WHERE u.es_admin = TRUE AND u.id <> $1`,
+    [pedido.clienteId]
+  );
+  await sendToTargets(result.rows, {
+    kind: 'admin_payment_pending',
+    orderId: pedido.id,
+    title: 'Pago móvil por verificar',
+    body: `Pedido ${codigoPedido(pedido.id)} · Revisa el abono en Banplus.`
   });
 };
 

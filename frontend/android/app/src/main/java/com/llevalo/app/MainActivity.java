@@ -129,7 +129,7 @@ public class MainActivity extends BridgeActivity {
         if (intent == null || !intent.hasExtra("notificationAction")) return;
         String action = intent.getStringExtra("notificationAction");
         int orderId = intent.getIntExtra("orderId", 0);
-        if (orderId < 1 || (!"apply".equals(action) && !"open".equals(action))) return;
+        if (orderId < 1 || (!"apply".equals(action) && !"open".equals(action) && !"admin-payment".equals(action))) return;
 
         Uri url = Uri.parse("https://llevalo.vercel.app/")
             .buildUpon()

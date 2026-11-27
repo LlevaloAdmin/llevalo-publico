@@ -11,7 +11,7 @@ import { registrarActividad } from '../utils/activity';
 import { codigoPedido } from '../utils/orderCode';
 import { desfaseHorarioValido, fechaIsoValida, horaPedidoValida } from '../utils/orderSearch';
 import { sanitizarPedidoParaUsuario } from '../utils/orderPrivacy';
-import { notifyDriverOfUpdate, notifyDriversOfNewOrder } from '../utils/pushNotifications';
+import { notifyAdminsOfPendingPayment, notifyDriverOfUpdate, notifyDriversOfNewOrder } from '../utils/pushNotifications';
 
 const router = Router();
 const gzipAsync = promisify(gzip);
@@ -673,6 +673,14 @@ router.post('/', requireRole('cliente'), async (req: Request, res: Response): Pr
     if (pedidoCreado.publicado_en) {
       void notifyDriversOfNewOrder(pedidoCreado).catch(error => {
         console.error('No se pudo notificar a los repartidores sobre el nuevo pedido:', error);
+      });
+    }
+    if (metodoPago === 'pago_movil' && referenciaPago) {
+      void notifyAdminsOfPendingPayment({
+        id: Number(pedidoCreado.id),
+        clienteId: authUser.id
+      }).catch(error => {
+        console.error('No se pudo notificar a los administradores sobre el pago pendiente:', error);
       });
     }
     res.status(201).json({ mensaje: 'Pedido publicado', pedido: sanitizarPedidoParaUsuario(pedidoCreado) });

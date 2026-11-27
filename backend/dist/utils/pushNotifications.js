@@ -1,9 +1,10 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.notifyDriverOfUpdate = exports.notifyDriversOfNewOrder = exports.ensurePushTargetsTable = void 0;
+exports.notifyDriverOfUpdate = exports.notifyAdminsOfPendingPayment = exports.notifyDriversOfNewOrder = exports.ensurePushTargetsTable = void 0;
 const app_1 = require("firebase-admin/app");
 const messaging_1 = require("firebase-admin/messaging");
 const db_1 = require("../db");
+const orderCode_1 = require("./orderCode");
 let messagingClient;
 let avisoConfiguracionEmitido = false;
 let tablaDispositivosPromise = null;
@@ -76,6 +77,7 @@ const sendToTargets = async (targets, event) => {
     const remainingSeconds = event.deadline
         ? Math.max(1, Math.ceil((Date.parse(event.deadline) - Date.now()) / 1000))
         : undefined;
+    const ttlSeconds = event.kind === 'admin_payment_pending' ? 604_800 : remainingSeconds ?? 60;
     const messageData = {
         kind: event.kind,
         orderId: String(event.orderId),
@@ -100,14 +102,14 @@ const sendToTargets = async (targets, event) => {
                     data: messageData,
                     android: {
                         priority: 'high',
-                        ttl: (remainingSeconds ?? 60) * 1000
+                        ttl: ttlSeconds * 1000
                     }
                 }
                 : {
                     tokens,
                     data: messageData,
                     webpush: {
-                        headers: { TTL: String(remainingSeconds ?? 60), Urgency: 'high' }
+                        headers: { TTL: String(ttlSeconds), Urgency: 'high' }
                     }
                 };
             const result = await messaging.sendEachForMulticast(message);
@@ -155,6 +157,20 @@ const notifyDriversOfNewOrder = async (pedido) => {
     });
 };
 exports.notifyDriversOfNewOrder = notifyDriversOfNewOrder;
+const notifyAdminsOfPendingPayment = async (pedido) => {
+    await (0, exports.ensurePushTargetsTable)();
+    const result = await db_1.pool.query(`SELECT d.token, d.platform
+     FROM notification_devices d
+     JOIN usuarios u ON u.id = d.user_id
+     WHERE u.es_admin = TRUE AND u.id <> $1`, [pedido.clienteId]);
+    await sendToTargets(result.rows, {
+        kind: 'admin_payment_pending',
+        orderId: pedido.id,
+        title: 'Pago móvil por verificar',
+        body: `Pedido ${(0, orderCode_1.codigoPedido)(pedido.id)} · Revisa el abono en Banplus.`
+    });
+};
+exports.notifyAdminsOfPendingPayment = notifyAdminsOfPendingPayment;
 const notifyDriverOfUpdate = async (driverId, orderId, title, body) => {
     await (0, exports.ensurePushTargetsTable)();
     const result = await db_1.pool.query('SELECT token, platform FROM notification_devices WHERE user_id = $1 AND disponible = TRUE', [driverId]);

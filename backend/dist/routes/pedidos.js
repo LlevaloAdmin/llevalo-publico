@@ -613,6 +613,14 @@ router.post('/', (0, auth_1.requireRole)('cliente'), async (req, res) => {
                 console.error('No se pudo notificar a los repartidores sobre el nuevo pedido:', error);
             });
         }
+        if (metodoPago === 'pago_movil' && referenciaPago) {
+            void (0, pushNotifications_1.notifyAdminsOfPendingPayment)({
+                id: Number(pedidoCreado.id),
+                clienteId: authUser.id
+            }).catch(error => {
+                console.error('No se pudo notificar a los administradores sobre el pago pendiente:', error);
+            });
+        }
         res.status(201).json({ mensaje: 'Pedido publicado', pedido: (0, orderPrivacy_1.sanitizarPedidoParaUsuario)(pedidoCreado) });
     }
     catch (error) {

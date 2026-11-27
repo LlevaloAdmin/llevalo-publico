@@ -6,7 +6,14 @@ const auth_1 = require("../middleware/auth");
 const pushNotifications_1 = require("../utils/pushNotifications");
 const router = (0, express_1.Router)();
 router.use(auth_1.requireAuth);
-router.post('/device-token', (0, auth_1.requireRole)('repartidor'), async (req, res) => {
+const requireNotificationAccess = async (req, res, next) => {
+    if (req.authUser?.rol === 'repartidor') {
+        await (0, auth_1.requireRole)('repartidor')(req, res, next);
+        return;
+    }
+    await (0, auth_1.requireAdmin)(req, res, next);
+};
+router.post('/device-token', requireNotificationAccess, async (req, res) => {
     const userId = req.authUser?.id;
     const token = req.body?.token;
     const platform = req.body?.platform;
@@ -52,7 +59,7 @@ router.put('/availability', (0, auth_1.requireRole)('repartidor'), async (req, r
         res.status(500).json({ error: 'No se pudo actualizar la disponibilidad.' });
     }
 });
-router.delete('/device-token', (0, auth_1.requireRole)('repartidor'), async (req, res) => {
+router.delete('/device-token', requireNotificationAccess, async (req, res) => {
     const userId = req.authUser?.id;
     const token = req.body?.token;
     if (!userId)

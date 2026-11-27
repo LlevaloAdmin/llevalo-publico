@@ -11,8 +11,7 @@ Los usuarios pueden registrarse e iniciar sesión como cliente o repartidor.
 - Backend Express + PostgreSQL.
 - App móvil Android empaquetada con Capacitor.
 - Comunicación HTTP con la API y sincronización periódica de pedidos.
-- Mapa interactivo con MapLibre y estilos de OpenFreeMap; búsqueda y geocodificación inversa con Photon sobre datos de OpenStreetMap.
-- Mapbox Directions se conserva para calcular rutas; `VITE_MAPBOX_TOKEN` sigue siendo necesario para esa función.
+- Mapas, búsqueda de lugares, geocodificación y rutas integrados con Google Maps JavaScript API, Places, Geocoding y Routes.
 
 ## Estado actual
 
@@ -40,9 +39,8 @@ Los usuarios pueden registrarse e iniciar sesión como cliente o repartidor.
 - Hay modo claro/oscuro y actualización automática de la tasa oficial de Dólar API.
 - La app móvil usa `@capacitor/status-bar` para cubrir el área segura en Android.
 - La interfaz adapta la tipografía y los controles a pantallas estrechas; Android aplica a la WebView la escala de texto configurada en el dispositivo y los formularios reacomodan sus botones en pantallas compactas.
-- La búsqueda de Photon prioriza San Diego, Carabobo y puede encontrar sectores, calles y establecimientos incluidos en OpenStreetMap. Los resultados incluyen coordenadas para seleccionar con precisión el punto; si falta un lugar, se puede marcar directamente en el mapa y agregar una referencia.
-- Photon y OpenFreeMap son servicios públicos sin garantía de disponibilidad; deben usarse razonablemente. Para mayor volumen, conviene alojar Photon o contratar un proveedor con SLA.
-- El mapa muestra atribución a OpenStreetMap. Mapbox solo se utiliza para Directions, no como mapa base ni proveedor de búsqueda.
+- Google Maps JavaScript API gestiona el mapa vial, Places Autocomplete para buscar lugares, Geocoding para direcciones y Routes para calcular recorridos.
+- La clave `VITE_GOOGLE_MAPS_API_KEY` es visible en el navegador; debe restringirse por dominios y APIs habilitadas en Google Cloud.
 
 ## Pagos y automatización Banplus (pendiente)
 
@@ -111,9 +109,9 @@ Configurar las variables de entorno en el servicio correspondiente:
 - `GMAIL_RELAY_SECRET` (backend, secreto compartido con la propiedad `LLEVALO_RELAY_SECRET` del script)
 - `FRONTEND_URL` (backend, origen HTTPS de la app al que apuntan los correos; por ejemplo `https://llevalo.vercel.app`)
 - `VITE_API_URL` (frontend, URL HTTPS pública del backend)
-- `VITE_MAPBOX_TOKEN` (frontend, Directions)
+- `VITE_GOOGLE_MAPS_API_KEY` (frontend, mapas, Places, Geocoding y Routes)
 
-Los secretos de Google Drive y `ANDROID_DEBUG_KEYSTORE_BASE64` pertenecen a GitHub Actions. `JWT_SECRET`, `CORS_ORIGINS`, `GMAIL_RELAY_URL`, `GMAIL_RELAY_SECRET`, `FRONTEND_URL` y, si el backend está detrás de un proxy inverso, `TRUST_PROXY_HOPS` se configuran en el backend; `VITE_API_URL` y `VITE_MAPBOX_TOKEN`, en el entorno de compilación del frontend. No guardar secretos en Vite, Android ni Git. El backend no inicia si `JWT_SECRET` falta o tiene menos de 32 bytes.
+Los secretos de Google Drive y `ANDROID_DEBUG_KEYSTORE_BASE64` pertenecen a GitHub Actions. `JWT_SECRET`, `CORS_ORIGINS`, `GMAIL_RELAY_URL`, `GMAIL_RELAY_SECRET`, `FRONTEND_URL` y, si el backend está detrás de un proxy inverso, `TRUST_PROXY_HOPS` se configuran en el backend; `VITE_API_URL` y `VITE_GOOGLE_MAPS_API_KEY`, en el entorno de compilación del frontend. La clave de Maps es visible en el navegador: limitarla por dominios y APIs en Google Cloud, no reutilizarla como secreto de servidor ni guardarla en Git. El backend no inicia si `JWT_SECRET` falta o tiene menos de 32 bytes.
 
 ### Envío de correos beta
 

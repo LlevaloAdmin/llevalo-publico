@@ -11,7 +11,8 @@ self.addEventListener('push', event => {
     }
 
     const data = payload.data && typeof payload.data === 'object' ? payload.data : payload;
-    if (!data || (data.kind !== 'driver_order' && data.kind !== 'driver_update')) return;
+    const isAdminPayment = data?.kind === 'admin_payment_pending';
+    if (!data || (!isAdminPayment && data.kind !== 'driver_order' && data.kind !== 'driver_update')) return;
 
     const orderId = Number(data.orderId);
     if (!Number.isSafeInteger(orderId) || orderId < 1) return;
@@ -36,8 +37,8 @@ self.addEventListener('push', event => {
         badge: '/logo.svg',
         tag: `${data.kind}-${orderId}`,
         renotify: true,
-        requireInteraction: isNewOrder,
-        vibrate: isNewOrder ? [160, 80, 160] : undefined,
+        requireInteraction: isNewOrder || isAdminPayment,
+        vibrate: isNewOrder || isAdminPayment ? [160, 80, 160] : undefined,
         actions: isNewOrder
           ? [
             { action: 'apply', title: 'Postularme' },
@@ -54,6 +55,7 @@ self.addEventListener('notificationclick', event => {
   const notification = event.notification;
   const data = notification.data || {};
   const orderId = Number(data.orderId);
+  const isAdminPayment = data.kind === 'admin_payment_pending';
   const action = event.action === 'apply' ? 'apply' : event.action === 'ignore' ? 'ignore' : 'open';
   notification.close();
 
@@ -64,16 +66,23 @@ self.addEventListener('notificationclick', event => {
     for (const client of clients) {
       if (!('focus' in client)) continue;
       await client.focus();
-      client.postMessage({
-        type: 'driver-notification-action',
-        action,
-        orderId: Number.isSafeInteger(orderId) ? orderId : null
-      });
+      if (isAdminPayment) {
+        client.postMessage({
+          type: 'admin-payment-notification-action',
+          orderId: Number.isSafeInteger(orderId) ? orderId : null
+        });
+      } else {
+        client.postMessage({
+          type: 'driver-notification-action',
+          action,
+          orderId: Number.isSafeInteger(orderId) ? orderId : null
+        });
+      }
       return;
     }
 
     const url = new URL('/', self.location.origin);
-    url.searchParams.set('notificationAction', action);
+    url.searchParams.set('notificationAction', isAdminPayment ? 'admin-payment' : action);
     if (Number.isSafeInteger(orderId)) url.searchParams.set('orderId', String(orderId));
     await self.clients.openWindow(url.toString());
   })());
