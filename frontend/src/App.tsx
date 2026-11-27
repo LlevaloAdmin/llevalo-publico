@@ -8,6 +8,7 @@ import { StatusBar, Style } from '@capacitor/status-bar';
 import { Capacitor, type PluginListenerHandle } from '@capacitor/core';
 import { registerWebPushToken } from './firebasePush';
 import { loadGoogleMaps } from './googleMaps';
+import { parseGoogleMapsLocationInput } from './googleMapsLink';
 import {
   clearAllDriverNotifications,
   clearDriverOrderNotification,
@@ -918,6 +919,7 @@ export default function App() {
         }
       })();
     };
+
     actualizarPresencia();
     const intervalo = window.setInterval(actualizarPresencia, 20_000);
     const alVolver = () => {
@@ -981,53 +983,67 @@ export default function App() {
     }
   };
 
-  const manejarClicEnMapa = async (lat: number, lng: number) => {
-    if (!modoSeleccionMapa) return;
+  const activarSeleccionMapa = (tipo: 'origen' | 'destino') => {
+    setModoSeleccionMapa(actual => actual === tipo ? null : tipo);
+  };
+
+  const fijarCoordenadasDireccion = async (lat: number, lng: number, tipo: 'origen' | 'destino') => {
     geocodificacionGPSRef.current?.abort();
-    const tipoActual = modoSeleccionMapa;
     setErrorGeocoding('');
     setErrorRuta('');
-    if (debounceTimerRef.current[tipoActual]) clearTimeout(debounceTimerRef.current[tipoActual]!);
-    geocodingControllerRef.current[tipoActual]?.abort();
-    setBuscandoDireccion(current => ({ ...current, [tipoActual]: false }));
+    if (debounceTimerRef.current[tipo]) clearTimeout(debounceTimerRef.current[tipo]!);
+    geocodingControllerRef.current[tipo]?.abort();
+    autocompleteSessionTokensRef.current[tipo] = null;
+    setBuscandoDireccion(current => ({ ...current, [tipo]: true }));
     setModoSeleccionMapa(null);
     setDistanciaKm(0);
     setTiempoEstimadoMin(0);
 
-    if (tipoActual === 'origen') {
+    if (tipo === 'origen') {
       setCoordsOrigen({ lat, lng });
-      setOrigenInput('Buscando lugar...');
+      setOrigenInput('Leyendo ubicación de Google Maps…');
     } else {
       setCoordsDestino({ lat, lng });
-      setDestinoInput('Buscando lugar...');
+      setDestinoInput('Leyendo ubicación de Google Maps…');
     }
+    setSugerenciasOrigen([]);
+    setSugerenciasDestino([]);
 
     const controller = new AbortController();
-    geocodingControllerRef.current[tipoActual] = controller;
+    geocodingControllerRef.current[tipo] = controller;
     try {
       const nombreLugar = await obtenerDireccionGoogle({ lat, lng });
       if (controller.signal.aborted) return;
       const nombreFinal = nombreLugar || `Ubicación (${lat.toFixed(5)}, ${lng.toFixed(5)})`;
       if (!nombreLugar) {
-        setErrorGeocoding('No se encontró el nombre de este lugar; conservamos la ubicación exacta del pin.');
+        setErrorGeocoding('No se encontró el nombre; conservamos las coordenadas exactas.');
       }
 
-      if (tipoActual === 'origen') setOrigenInput(nombreFinal);
+      if (tipo === 'origen') setOrigenInput(nombreFinal);
       else setDestinoInput(nombreFinal);
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return;
-      console.error('Error buscando el nombre del punto con Google Geocoding:', error);
-      setErrorGeocoding('No se pudo obtener el nombre del punto; conservamos la ubicación exacta del pin.');
+      console.error('Error obteniendo la dirección de las coordenadas:', error);
+      setErrorGeocoding('No se pudo obtener el nombre; conservamos las coordenadas exactas.');
       const fallback = `Ubicación (${lat.toFixed(5)}, ${lng.toFixed(5)})`;
-      if (tipoActual === 'origen') setOrigenInput(fallback);
+      if (tipo === 'origen') setOrigenInput(fallback);
       else setDestinoInput(fallback);
+    } finally {
+      if (!controller.signal.aborted) {
+        setBuscandoDireccion(current => ({ ...current, [tipo]: false }));
+      }
     }
+  };
+
+  const manejarClicEnMapa = (lat: number, lng: number) => {
+    if (modoSeleccionMapa) void fijarCoordenadasDireccion(lat, lng, modoSeleccionMapa);
   };
 
   const obtenerUbicacionActual = (objetivo: 'origen' | 'destino' | null = null) => {
     geocodificacionGPSRef.current?.abort();
     objetivoUbicacionRef.current = objetivo;
     setObjetivoUbicacion(objetivo);
+    if (objetivo) setModoSeleccionMapa(null);
     setErrorUbicacion('');
     setErrorRuta('');
     if (objetivo) {
@@ -1042,65 +1058,78 @@ export default function App() {
       return;
     }
 
+    const manejarUbicacion = ({ coords }: GeolocationPosition) => {
+      const ubicacion = { lat: coords.latitude, lng: coords.longitude };
+      coordsUsuarioGPSRef.current = ubicacion;
+      setCoordsUsuarioGPS(ubicacion);
+      setRecentrarMapa(value => value + 1);
+
+      const objetivoActual = objetivoUbicacionRef.current;
+      if (objetivoActual === 'origen') {
+        setDistanciaKm(0);
+        setTiempoEstimadoMin(0);
+        setCoordsOrigen(ubicacion);
+        setOrigenInput('Buscando sector cercano…');
+        setSugerenciasOrigen([]);
+      } else if (objetivoActual === 'destino') {
+        setDistanciaKm(0);
+        setTiempoEstimadoMin(0);
+        setCoordsDestino(ubicacion);
+        setDestinoInput('Buscando sector cercano…');
+        setSugerenciasDestino([]);
+      }
+
+      setUbicacionCargando(false);
+      if (objetivoActual) {
+        geocodificacionGPSRef.current?.abort();
+        const controller = new AbortController();
+        geocodificacionGPSRef.current = controller;
+        void (async () => {
+          try {
+            const direccion = await obtenerDireccionGoogle(ubicacion);
+            if (controller.signal.aborted) return;
+            const nombre = direccion || 'Sector cercano no identificado';
+            if (objetivoActual === 'origen') setOrigenInput(nombre);
+            else setDestinoInput(nombre);
+          } catch (error) {
+            if (error instanceof DOMException && error.name === 'AbortError') return;
+            console.error('No se pudo identificar el sector cercano con Google Geocoding:', error);
+            setErrorGeocoding('No se pudo identificar el sector cercano; conservamos las coordenadas del GPS.');
+            if (objetivoActual === 'origen') setOrigenInput('Ubicación actual · sector cercano no disponible');
+            else setDestinoInput('Ubicación actual · sector cercano no disponible');
+          }
+        })();
+      }
+    };
+
+    const manejarErrorUbicacion = (error: GeolocationPositionError, permitirRespaldo = true) => {
+      if (error.code === error.PERMISSION_DENIED) {
+        coordsUsuarioGPSRef.current = null;
+        setCoordsUsuarioGPS(null);
+      }
+      if (permitirRespaldo
+        && (error.code === error.POSITION_UNAVAILABLE || error.code === error.TIMEOUT)) {
+        navigator.geolocation.getCurrentPosition(
+          manejarUbicacion,
+          errorRespaldo => manejarErrorUbicacion(errorRespaldo, false),
+          { enableHighAccuracy: false, maximumAge: 60_000, timeout: 12_000 }
+        );
+        return;
+      }
+      const mensaje = error.code === error.PERMISSION_DENIED
+        ? 'Permite el acceso a la ubicación en los permisos de la app o del navegador y vuelve a intentarlo.'
+        : error.code === error.POSITION_UNAVAILABLE
+          ? 'No se pudo obtener tu ubicación. Activa el GPS o los servicios de ubicación del dispositivo.'
+          : 'La solicitud de ubicación tardó demasiado. Comprueba el GPS e inténtalo de nuevo.';
+      setErrorUbicacion(mensaje);
+      setUbicacionCargando(false);
+    };
+
     setUbicacionCargando(true);
     navigator.geolocation.getCurrentPosition(
-      ({ coords }) => {
-        const ubicacion = { lat: coords.latitude, lng: coords.longitude };
-        coordsUsuarioGPSRef.current = ubicacion;
-        setCoordsUsuarioGPS(ubicacion);
-        setRecentrarMapa(value => value + 1);
-
-        const objetivoActual = objetivoUbicacionRef.current;
-        if (objetivoActual === 'origen') {
-          setDistanciaKm(0);
-          setTiempoEstimadoMin(0);
-          setCoordsOrigen(ubicacion);
-          setOrigenInput('Buscando sector cercano…');
-          setSugerenciasOrigen([]);
-        } else if (objetivoActual === 'destino') {
-          setDistanciaKm(0);
-          setTiempoEstimadoMin(0);
-          setCoordsDestino(ubicacion);
-          setDestinoInput('Buscando sector cercano…');
-          setSugerenciasDestino([]);
-        }
-
-        setUbicacionCargando(false);
-        if (objetivoActual) {
-          geocodificacionGPSRef.current?.abort();
-          const controller = new AbortController();
-          geocodificacionGPSRef.current = controller;
-          void (async () => {
-            try {
-              const direccion = await obtenerDireccionGoogle(ubicacion);
-              if (controller.signal.aborted) return;
-              const nombre = direccion || 'Sector cercano no identificado';
-              if (objetivoActual === 'origen') setOrigenInput(nombre);
-              else setDestinoInput(nombre);
-            } catch (error) {
-              if (error instanceof DOMException && error.name === 'AbortError') return;
-              console.error('No se pudo identificar el sector cercano con Google Geocoding:', error);
-              setErrorGeocoding('No se pudo identificar el sector cercano; conservamos las coordenadas del GPS.');
-              if (objetivoActual === 'origen') setOrigenInput('Ubicación actual · sector cercano no disponible');
-              else setDestinoInput('Ubicación actual · sector cercano no disponible');
-            }
-          })();
-        }
-      },
-      (error) => {
-        if (error.code === error.PERMISSION_DENIED) {
-          coordsUsuarioGPSRef.current = null;
-          setCoordsUsuarioGPS(null);
-        }
-        const mensaje = error.code === error.PERMISSION_DENIED
-          ? 'Permite el acceso a la ubicación en los permisos de la app o del navegador y vuelve a intentarlo.'
-          : error.code === error.POSITION_UNAVAILABLE
-            ? 'No se pudo obtener tu ubicación. Activa el GPS o los servicios de ubicación del dispositivo.'
-            : 'La solicitud de ubicación tardó demasiado. Comprueba el GPS e inténtalo de nuevo.';
-        setErrorUbicacion(mensaje);
-        setUbicacionCargando(false);
-      },
-      { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
+      manejarUbicacion,
+      error => manejarErrorUbicacion(error),
+      { enableHighAccuracy: true, maximumAge: 10_000, timeout: 15_000 }
     );
   };
 
@@ -1109,20 +1138,80 @@ export default function App() {
     const setInput = tipo === 'origen' ? setOrigenInput : setDestinoInput;
     const setCoords = tipo === 'origen' ? setCoordsOrigen : setCoordsDestino;
     const setSugerencias = tipo === 'origen' ? setSugerenciasOrigen : setSugerenciasDestino;
-    setInput(query);
+    const parsedInput = parseGoogleMapsLocationInput(query, tipo);
+    setInput(parsedInput?.kind === 'search' ? parsedInput.query : query);
+    setModoSeleccionMapa(null);
     setCoords(null);
     setSugerencias([]);
     setErrorGeocoding('');
     setErrorRuta('');
-    setBuscandoDireccion(current => ({ ...current, [tipo]: query.trim().length >= 3 }));
+    setBuscandoDireccion(current => ({
+      ...current,
+      [tipo]: parsedInput?.kind === 'coordinates' || parsedInput?.kind === 'short-link'
+        || (parsedInput?.kind === 'search' ? parsedInput.query.trim().length >= 2 : query.trim().length >= 2)
+    }));
     setDistanciaKm(0);
     setTiempoEstimadoMin(0);
 
     if (debounceTimerRef.current[tipo]) clearTimeout(debounceTimerRef.current[tipo]!);
     geocodingControllerRef.current[tipo]?.abort();
 
-    const consulta = query.trim();
-    if (consulta.length < 3) {
+    if (parsedInput?.kind === 'coordinates') {
+      void fijarCoordenadasDireccion(parsedInput.coordinates.lat, parsedInput.coordinates.lng, tipo);
+      return;
+    }
+
+    if (parsedInput?.kind === 'short-link') {
+      const controller = new AbortController();
+      geocodingControllerRef.current[tipo] = controller;
+      setInput('Resolviendo enlace de Google Maps…');
+      void (async () => {
+        try {
+          const response = await authenticatedFetch(`${API_URL}/api/maps/resolve-link`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: query.trim() }),
+            signal: controller.signal
+          });
+          if (!response.ok) throw new Error(await mensajeErrorApi(response, 'No se pudo abrir el enlace corto.'));
+          const data: { url?: unknown } = await response.json();
+          if (controller.signal.aborted) return;
+          if (typeof data.url !== 'string') throw new Error('Google Maps no devolvió una ubicación válida.');
+          const resolvedInput = parseGoogleMapsLocationInput(data.url, tipo);
+          if (resolvedInput?.kind === 'coordinates') {
+            void fijarCoordenadasDireccion(
+              resolvedInput.coordinates.lat,
+              resolvedInput.coordinates.lng,
+              tipo
+            );
+            return;
+          }
+          if (resolvedInput?.kind === 'search') {
+            buscarDireccionGeocoding(resolvedInput.query, tipo);
+            return;
+          }
+          throw new Error('No pudimos extraer la ubicación. Pide que compartan el enlace completo de Google Maps.');
+        } catch (error) {
+          if (controller.signal.aborted) return;
+          console.error('No se pudo resolver el enlace compartido de Google Maps:', error);
+          setInput(query);
+          setErrorGeocoding(error instanceof Error
+            ? error.message
+            : 'No se pudo abrir el enlace de Google Maps.');
+          setBuscandoDireccion(current => ({ ...current, [tipo]: false }));
+        }
+      })();
+      return;
+    }
+
+    if (parsedInput?.kind === 'unsupported') {
+      setErrorGeocoding('No pudimos leer esa ubicación. Verifica que sea un enlace de Google Maps.');
+      setBuscandoDireccion(current => ({ ...current, [tipo]: false }));
+      return;
+    }
+
+    const consulta = parsedInput?.kind === 'search' ? parsedInput.query.trim() : query.trim();
+    if (consulta.length < 2) {
       autocompleteSessionTokensRef.current[tipo] = null;
       return;
     }
@@ -1186,6 +1275,7 @@ export default function App() {
     const setCoords = tipo === 'origen' ? setCoordsOrigen : setCoordsDestino;
     const setSugerencias = tipo === 'origen' ? setSugerenciasOrigen : setSugerenciasDestino;
     setInput(item.display_name);
+    setModoSeleccionMapa(null);
     setCoords(null);
     setSugerencias([]);
 
@@ -1208,6 +1298,17 @@ export default function App() {
         }
       }
     })();
+  };
+
+  const manejarEnterEnDireccion = (
+    event: React.KeyboardEvent<HTMLInputElement>,
+    tipo: 'origen' | 'destino'
+  ) => {
+    if (event.key !== 'Enter') return;
+    const sugerencia = tipo === 'origen' ? sugerenciasOrigen[0] : sugerenciasDestino[0];
+    if (!sugerencia) return;
+    event.preventDefault();
+    seleccionarSugerencia(sugerencia, tipo);
   };
 
   const cargarConfiguracionPago = useCallback(async () => {
@@ -4001,11 +4102,11 @@ export default function App() {
                       <label className={`text-xs font-bold ${darkMode ? 'text-slate-300' : 'text-slate-700'}`}>{serviceType === 'viajes' ? 'Punto de partida' : 'Origen (Retirada)'}</label>
                       <div className="relative mt-1">
                         <div className="address-controls grid grid-cols-[minmax(0,1fr)_auto_auto] gap-2">
-                        <input type="text" value={origenInput} onChange={e => buscarDireccionGeocoding(e.target.value, 'origen')} placeholder="Sector, calle o establecimiento" className={`min-w-0 border rounded-xl px-3 py-2 text-xs ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
+                        <input type="text" value={origenInput} onChange={e => buscarDireccionGeocoding(e.target.value, 'origen')} onKeyDown={e => manejarEnterEnDireccion(e, 'origen')} placeholder="Dirección, coordenadas o enlace de Maps" className={`min-w-0 border rounded-xl px-3 py-2 text-xs ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
                         <button type="button" onClick={() => obtenerUbicacionActual('origen')} disabled={ubicacionCargando} aria-label="Usar mi ubicación como origen" title="Usar mi ubicación como origen" className="px-3 py-2 rounded-xl border text-xs font-bold text-[#FF5722] border-orange-200 bg-orange-50 disabled:opacity-50">
                           <Navigation size={15} />
                         </button>
-                        <button type="button" onClick={() => setModoSeleccionMapa('origen')} className={`px-3 py-2 rounded-xl border text-xs font-bold transition cursor-pointer ${modoSeleccionMapa === 'origen' ? 'bg-emerald-600 text-white' : 'bg-emerald-50 text-emerald-600 border-emerald-200'}`}>Mapa</button>
+                        <button type="button" aria-pressed={modoSeleccionMapa === 'origen'} onClick={() => activarSeleccionMapa('origen')} className={`px-3 py-2 rounded-xl border text-xs font-bold transition cursor-pointer ${modoSeleccionMapa === 'origen' ? 'bg-emerald-600 text-white' : 'bg-emerald-50 text-emerald-600 border-emerald-200'}`}>Mapa</button>
                         </div>
                       {sugerenciasOrigen.length > 0 && (
                         <div className={`absolute left-0 right-0 top-full z-30 mt-1 max-h-36 w-full max-w-full overflow-y-auto rounded-xl border shadow-lg ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-orange-100'}`}>
@@ -4028,11 +4129,11 @@ export default function App() {
                       <label className={`text-xs font-bold ${darkMode ? 'text-slate-300' : 'text-slate-700'}`}>{serviceType === 'viajes' ? 'Destino del viaje' : 'Destino (Entrega)'}</label>
                       <div className="relative mt-1">
                         <div className="address-controls grid grid-cols-[minmax(0,1fr)_auto_auto] gap-2">
-                        <input type="text" value={destinoInput} onChange={e => buscarDireccionGeocoding(e.target.value, 'destino')} placeholder="Sector, calle o establecimiento" className={`min-w-0 border rounded-xl px-3 py-2 text-xs ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
+                        <input type="text" value={destinoInput} onChange={e => buscarDireccionGeocoding(e.target.value, 'destino')} onKeyDown={e => manejarEnterEnDireccion(e, 'destino')} placeholder="Dirección, coordenadas o enlace de Maps" className={`min-w-0 border rounded-xl px-3 py-2 text-xs ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
                         <button type="button" onClick={() => obtenerUbicacionActual('destino')} disabled={ubicacionCargando} aria-label="Usar mi ubicación como destino" title="Usar mi ubicación como destino" className="px-3 py-2 rounded-xl border text-xs font-bold text-[#FF5722] border-orange-200 bg-orange-50 disabled:opacity-50">
                           <Navigation size={15} />
                         </button>
-                        <button type="button" onClick={() => setModoSeleccionMapa('destino')} className={`px-3 py-2 rounded-xl border text-xs font-bold transition cursor-pointer ${modoSeleccionMapa === 'destino' ? 'bg-red-600 text-white' : 'bg-red-50 text-red-600 border-red-200'}`}>Mapa</button>
+                        <button type="button" aria-pressed={modoSeleccionMapa === 'destino'} onClick={() => activarSeleccionMapa('destino')} className={`px-3 py-2 rounded-xl border text-xs font-bold transition cursor-pointer ${modoSeleccionMapa === 'destino' ? 'bg-red-600 text-white' : 'bg-red-50 text-red-600 border-red-200'}`}>Mapa</button>
                         </div>
                       {sugerenciasDestino.length > 0 && (
                         <div className={`absolute left-0 right-0 top-full z-30 mt-1 max-h-36 w-full max-w-full overflow-y-auto rounded-xl border shadow-lg ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-orange-100'}`}>
@@ -4140,11 +4241,11 @@ export default function App() {
                                     {serviceType === 'viajes' ? 'Punto de partida' : 'Origen'}
                                   </label>
                                   <div className="mt-1 flex gap-2">
-                                    <input id="solicitud-origen" type="text" value={origenInput} onChange={event => buscarDireccionGeocoding(event.target.value, 'origen')} placeholder="Sector, calle o establecimiento" className={`min-w-0 flex-1 rounded-2xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-700 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50 text-slate-900'}`} />
+                                    <input id="solicitud-origen" type="text" value={origenInput} onChange={event => buscarDireccionGeocoding(event.target.value, 'origen')} onKeyDown={event => manejarEnterEnDireccion(event, 'origen')} placeholder="Dirección, coordenadas o enlace de Maps" className={`min-w-0 flex-1 rounded-2xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-700 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50 text-slate-900'}`} />
                                     <button type="button" onClick={() => obtenerUbicacionActual('origen')} disabled={ubicacionCargando} aria-label="Usar mi ubicación como origen" title="Usar mi ubicación como origen" className="inline-flex shrink-0 items-center justify-center rounded-2xl border border-orange-200 bg-orange-50 px-3 text-[#FF5722] disabled:opacity-50 dark:border-orange-900 dark:bg-orange-950/30">
                                       <Navigation size={17} className={ubicacionCargando && objetivoUbicacion === 'origen' ? 'animate-pulse' : ''} />
                                     </button>
-                                    <button type="button" aria-pressed={modoSeleccionMapa === 'origen'} onClick={() => setModoSeleccionMapa('origen')} aria-label="Elegir origen en el mapa" title="Elegir origen en el mapa" className={`inline-flex shrink-0 items-center justify-center rounded-2xl border px-3 transition ${modoSeleccionMapa === 'origen' ? 'border-emerald-600 bg-emerald-600 text-white' : darkMode ? 'border-emerald-900 bg-slate-900 text-emerald-300' : 'border-emerald-200 bg-white text-emerald-700'}`}>
+                                    <button type="button" aria-pressed={modoSeleccionMapa === 'origen'} onClick={() => activarSeleccionMapa('origen')} aria-label="Elegir origen en el mapa" title="Elegir origen en el mapa" className={`inline-flex shrink-0 items-center justify-center rounded-2xl border px-3 transition ${modoSeleccionMapa === 'origen' ? 'border-emerald-600 bg-emerald-600 text-white' : darkMode ? 'border-emerald-900 bg-slate-900 text-emerald-300' : 'border-emerald-200 bg-white text-emerald-700'}`}>
                                       <MapPin size={17} />
                                     </button>
                                   </div>
@@ -4161,11 +4262,11 @@ export default function App() {
                                     {serviceType === 'viajes' ? 'Destino del viaje' : 'Destino'}
                                   </label>
                                   <div className="mt-1 flex gap-2">
-                                    <input id="solicitud-destino" type="text" value={destinoInput} onChange={event => buscarDireccionGeocoding(event.target.value, 'destino')} placeholder="Sector, calle o establecimiento" className={`min-w-0 flex-1 rounded-2xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-700 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50 text-slate-900'}`} />
+                                    <input id="solicitud-destino" type="text" value={destinoInput} onChange={event => buscarDireccionGeocoding(event.target.value, 'destino')} onKeyDown={event => manejarEnterEnDireccion(event, 'destino')} placeholder="Dirección, coordenadas o enlace de Maps" className={`min-w-0 flex-1 rounded-2xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-700 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50 text-slate-900'}`} />
                                     <button type="button" onClick={() => obtenerUbicacionActual('destino')} disabled={ubicacionCargando} aria-label="Usar mi ubicación como destino" title="Usar mi ubicación como destino" className="inline-flex shrink-0 items-center justify-center rounded-2xl border border-orange-200 bg-orange-50 px-3 text-[#FF5722] disabled:opacity-50 dark:border-orange-900 dark:bg-orange-950/30">
                                       <Navigation size={17} className={ubicacionCargando && objetivoUbicacion === 'destino' ? 'animate-pulse' : ''} />
                                     </button>
-                                    <button type="button" aria-pressed={modoSeleccionMapa === 'destino'} onClick={() => setModoSeleccionMapa('destino')} aria-label="Elegir destino en el mapa" title="Elegir destino en el mapa" className={`inline-flex shrink-0 items-center justify-center rounded-2xl border px-3 transition ${modoSeleccionMapa === 'destino' ? 'border-red-600 bg-red-600 text-white' : darkMode ? 'border-red-900 bg-slate-900 text-red-300' : 'border-red-200 bg-white text-red-700'}`}>
+                                    <button type="button" aria-pressed={modoSeleccionMapa === 'destino'} onClick={() => activarSeleccionMapa('destino')} aria-label="Elegir destino en el mapa" title="Elegir destino en el mapa" className={`inline-flex shrink-0 items-center justify-center rounded-2xl border px-3 transition ${modoSeleccionMapa === 'destino' ? 'border-red-600 bg-red-600 text-white' : darkMode ? 'border-red-900 bg-slate-900 text-red-300' : 'border-red-200 bg-white text-red-700'}`}>
                                       <MapPin size={17} />
                                     </button>
                                   </div>
@@ -4187,7 +4288,7 @@ export default function App() {
 
                               <div className="flex items-center justify-between gap-2">
                                 <button type="button" onClick={() => setPasoSolicitud('tipo')} className={`shrink-0 rounded-2xl border px-3 py-2.5 text-xs font-bold ${darkMode ? 'border-slate-700 text-slate-200' : 'border-slate-200 text-slate-600'}`}><ArrowLeft size={15} className="mr-1 inline" /> Atrás</button>
-                                <span className="min-w-0 text-center text-[10px] font-semibold text-slate-500">{rutaCompletaLista ? `${distanciaKm} km · ~${tiempoEstimadoMin} min` : `Toca el mapa para elegir ${modoSeleccionMapa}`}</span>
+                                <span className="min-w-0 text-center text-[10px] font-semibold text-slate-500">{rutaCompletaLista ? `${distanciaKm} km · ~${tiempoEstimadoMin} min` : modoSeleccionMapa === 'origen' ? 'Toca el mapa para elegir el origen' : modoSeleccionMapa === 'destino' ? 'Toca el mapa para elegir el destino' : 'Busca una dirección o elige un pin en el mapa'}</span>
                                 <button type="button" disabled={!rutaCompletaLista || esperandoNombreDireccion || distanciaKm <= 0 || tiempoEstimadoMin <= 0} onClick={() => { setPasoSolicitud('pago'); void cargarConfiguracionPago(); }} className="shrink-0 rounded-2xl bg-[#FF5722] px-3 py-2.5 text-xs font-black text-white shadow-md disabled:cursor-not-allowed disabled:opacity-50">Continuar <ArrowRight size={15} className="ml-1 inline" /></button>
                               </div>
                             </div>

@@ -18,6 +18,7 @@ backend/dist/middleware/*
 !backend/dist/routes/
 backend/dist/routes/*
 !backend/dist/routes/notifications.js
+!backend/dist/routes/maps.js
 !backend/dist/routes/pagos.js
 !backend/dist/routes/reviews.js
 !backend/dist/utils/

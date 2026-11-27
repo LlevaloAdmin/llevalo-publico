@@ -10,7 +10,7 @@
 ## Tecnologías y rutas
 
 - Frontend: `frontend/src/App.tsx`, React, TypeScript, Tailwind CSS 4 y Lucide.
-- Mapas: Google Maps JavaScript API, Places, Geocoding y Routes; enfoque inicial en San Diego/Carabobo/Venezuela. La clave del frontend es `VITE_GOOGLE_MAPS_API_KEY` y debe restringirse por dominios y APIs.
+- Mapas: Google Maps JavaScript API, Places, Geocoding y Routes; enfoque inicial en San Diego/Carabobo/Venezuela. Las direcciones aceptan coordenadas y enlaces de Maps, incluidos los cortos resueltos mediante el backend con allowlist. La clave del frontend es `VITE_GOOGLE_MAPS_API_KEY` y debe restringirse por dominios y APIs.
 - Móvil: `frontend/capacitor.config.ts` y `frontend/android/`.
 - Backend: `backend/src/index.ts`, rutas de Express y PostgreSQL mediante `pg`.
 - API: variable `VITE_API_URL`; en desarrollo se usa el host actual y el puerto 5000.

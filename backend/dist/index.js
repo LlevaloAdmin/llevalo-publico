@@ -19,6 +19,7 @@ const notifications_1 = __importDefault(require("./routes/notifications"));
 const pedidos_1 = __importDefault(require("./routes/pedidos"));
 const pagos_1 = __importDefault(require("./routes/pagos"));
 const reviews_1 = __importDefault(require("./routes/reviews"));
+const maps_1 = __importDefault(require("./routes/maps"));
 const app = (0, express_1.default)();
 app.set('trust proxy', config_1.TRUST_PROXY_HOPS);
 app.use((0, helmet_1.default)());
@@ -32,6 +33,7 @@ app.use('/api/notifications', notifications_1.default);
 app.use('/api/pedidos', pedidos_1.default);
 app.use('/api/pagos', pagos_1.default);
 app.use('/api/reviews', reviews_1.default);
+app.use('/api/maps', maps_1.default);
 const server = http_1.default.createServer(app);
 const io = new socket_io_1.Server(server, {
     cors: {

@@ -12,6 +12,7 @@ Los usuarios pueden registrarse e iniciar sesión como cliente o repartidor.
 - App móvil Android empaquetada con Capacitor.
 - Comunicación HTTP con la API y sincronización periódica de pedidos.
 - Mapas, búsqueda de lugares, geocodificación y rutas integrados con Google Maps JavaScript API, Places, Geocoding y Routes.
+- En las direcciones de viajes y envíos se aceptan nombres, coordenadas y enlaces compartidos de Google Maps; los enlaces cortos se resuelven desde una ruta autenticada del backend con destinos restringidos a Google Maps.
 
 ## Estado actual
 
