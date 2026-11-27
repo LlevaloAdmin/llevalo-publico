@@ -124,7 +124,10 @@
       if (window.Capacitor?.isNativePlatform?.()) {
         const splash = document.createElement('div');
         splash.id = 'startup-splash';
-        splash.className = localStorage.getItem('llevalo_dark_mode') === 'true' ? 'startup-intro startup-intro-dark' : 'startup-intro';
+        const themePreference = localStorage.getItem('llevalo_theme_preference') || 'system';
+        const useDarkTheme = themePreference === 'dark'
+          || (themePreference !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        splash.className = useDarkTheme ? 'startup-intro startup-intro-dark' : 'startup-intro';
         splash.setAttribute('role', 'status');
         splash.setAttribute('aria-label', 'Iniciando Llévalo');
         splash.innerHTML = '<span class="startup-orbit startup-orbit-one" aria-hidden="true"></span><span class="startup-orbit startup-orbit-two" aria-hidden="true"></span><div class="startup-wordmark" aria-hidden="true"><span class="startup-initial">L</span><span class="startup-wordmark-rest">lévalo</span></div>';

@@ -8,16 +8,16 @@
     <script>
       (() => {
         const themeFromUrl = new URLSearchParams(window.location.search).get('theme');
-        let darkMode = themeFromUrl === 'dark'
-          || (themeFromUrl !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-        if (themeFromUrl !== 'dark' && themeFromUrl !== 'light') {
+        let preference = themeFromUrl;
+        if (preference !== 'dark' && preference !== 'light') {
           try {
-            const savedMode = localStorage.getItem('llevalo_dark_mode');
-            if (savedMode === 'true' || savedMode === 'false') darkMode = savedMode === 'true';
+            preference = localStorage.getItem('llevalo_theme_preference');
           } catch {
-            // Use the device appearance if local storage is unavailable.
+            preference = null;
           }
         }
+        const darkMode = preference === 'dark'
+          || (preference !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
         document.documentElement.dataset.theme = darkMode ? 'dark' : 'light';
         document.querySelector('meta[name="theme-color"]').content = darkMode ? '#0b1120' : '#fdfbf7';
       })();

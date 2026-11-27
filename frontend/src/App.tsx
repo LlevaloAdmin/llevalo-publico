@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { Activity, Bike, MapPin, ArrowLeft, ArrowRight, Camera, ImagePlus, Mic, MicOff, User, Eye, EyeOff, Clock, Send, Power, Star, Moon, Sun, DollarSign, XCircle, Navigation, CheckCircle2, Circle, Package, ShoppingBag, CarFront, LogOut, Users, UserRound, ChevronDown, Bell, BellOff } from 'lucide-react';
+import { Activity, Bike, MapPin, ArrowLeft, ArrowRight, Camera, ImagePlus, Mic, MicOff, User, Eye, EyeOff, Clock, Send, Power, Star, DollarSign, XCircle, Navigation, CheckCircle2, Circle, Package, ShoppingBag, CarFront, LogOut, Users, UserRound, ChevronDown, Bell, BellOff } from 'lucide-react';
 import { App as CapacitorApp } from '@capacitor/app';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { PushNotifications } from '@capacitor/push-notifications';
@@ -193,14 +193,7 @@ const tipoDireccionGoogle = (types: string[]) => {
   return 'place';
 };
 
-interface ResultadoDireccionGoogle {
-  nombre: string;
-  aproximada: boolean;
-}
-
-const obtenerDireccionGoogle = async (
-  location: { lat: number; lng: number }
-): Promise<ResultadoDireccionGoogle> => {
+const obtenerDireccionGoogle = async (location: { lat: number; lng: number }): Promise<string> => {
   const { geocoding, places } = await loadGoogleMaps();
   let errorGeocoding: unknown;
   try {
@@ -228,12 +221,35 @@ const obtenerDireccionGoogle = async (
     const resultado = response.results
       .filter(item => item.formatted_address?.trim() && !item.types.includes('plus_code'))
       .sort((a, b) => puntuacion(b.types) - puntuacion(a.types))[0];
-    const direccion = resultado?.formatted_address?.trim();
-    if (direccion && resultado) {
-      const aproximada = !resultado.types.some(type =>
-        ['street_address', 'premise', 'subpremise', 'establishment', 'point_of_interest'].includes(type)
-      );
-      return { nombre: direccion, aproximada };
+    if (resultado) {
+      const obtenerComponente = (types: string[]) => {
+        for (const type of types) {
+          const componente = resultado.address_components.find(item => item.types.includes(type));
+          if (componente) return componente.long_name.trim();
+        }
+        return '';
+      };
+      const calle = [
+        obtenerComponente(['street_number']),
+        obtenerComponente(['route'])
+      ].filter(Boolean).join(' ');
+      const sector = obtenerComponente([
+        'neighborhood',
+        'sublocality_level_1',
+        'sublocality_level_2',
+        'sublocality'
+      ]);
+      const municipio = obtenerComponente([
+        'administrative_area_level_2',
+        'locality',
+        'administrative_area_level_3'
+      ]);
+      const region = obtenerComponente(['administrative_area_level_1']);
+      const partes = [calle || obtenerComponente(['premise']), sector, municipio, region]
+        .filter((parte, indice, todas) => Boolean(parte)
+          && todas.findIndex(otra => otra.toLocaleLowerCase('es') === parte.toLocaleLowerCase('es')) === indice);
+      const direccion = partes.join(', ') || resultado.formatted_address.trim();
+      if (direccion) return direccion;
     }
   } catch (error) {
     errorGeocoding = error;
@@ -253,13 +269,10 @@ const obtenerDireccionGoogle = async (
       candidate.displayName?.trim()
       && candidate.types?.some(type => ['neighborhood', 'sublocality', 'locality'].includes(type))
     );
-    return {
-      nombre: place?.displayName?.trim() || place?.formattedAddress?.trim() || '',
-      aproximada: true
-    };
+    return place?.formattedAddress?.trim() || place?.displayName?.trim() || '';
   } catch (error) {
     console.error('No se pudo resolver el nombre con Geocoding ni Places:', { errorGeocoding, error });
-    return { nombre: '', aproximada: true };
+    return '';
   }
 };
 
@@ -515,6 +528,7 @@ function AdminAccordion({ title, darkMode, badge, defaultOpen = true, children }
 export default function App() {
   type Tab = 'home' | 'cliente' | 'repartidor' | 'perfil' | 'auth' | 'admin';
   type SeccionAdmin = 'actividad' | 'solicitudes' | 'pedidos' | 'pagos' | 'tarifas' | 'archivos';
+  type PreferenciaTema = 'system' | 'light' | 'dark';
   const accionCorreoInicial: AccionCorreo | null = (() => {
     if (typeof window === 'undefined') return null;
     const parametros = new URLSearchParams(window.location.hash.slice(1));
@@ -527,13 +541,32 @@ export default function App() {
   const [serviceType, setServiceType] = useState<TipoServicio>('envios');
   const [pasoSolicitud, setPasoSolicitud] = useState<'tipo' | 'ruta' | 'pago' | null>(null);
   
-  const [darkMode, setDarkMode] = useState<boolean>(() => localStorage.getItem('llevalo_dark_mode') === 'true');
+  const [preferenciaTema, setPreferenciaTema] = useState<PreferenciaTema>(() => {
+    const stored = localStorage.getItem('llevalo_theme_preference');
+    return stored === 'light' || stored === 'dark' ? stored : 'system';
+  });
+  const [temaOscuroDelSistema, setTemaOscuroDelSistema] = useState(
+    () => window.matchMedia('(prefers-color-scheme: dark)').matches
+  );
+  const darkMode = preferenciaTema === 'system' ? temaOscuroDelSistema : preferenciaTema === 'dark';
   const [estadoConexion, setEstadoConexion] = useState<'sin-internet' | 'lenta' | null>(
     () => typeof navigator !== 'undefined' && !navigator.onLine ? 'sin-internet' : null
   );
   const [probandoConexion, setProbandoConexion] = useState(false);
   const fallosConexionRef = useRef(0);
   const medicionesLentasRef = useRef(0);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const actualizarTemaDelSistema = (event: MediaQueryListEvent) => setTemaOscuroDelSistema(event.matches);
+    mediaQuery.addEventListener('change', actualizarTemaDelSistema);
+    return () => mediaQuery.removeEventListener('change', actualizarTemaDelSistema);
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem('llevalo_theme_preference', preferenciaTema);
+    localStorage.setItem('llevalo_dark_mode', String(darkMode));
+  }, [preferenciaTema, darkMode]);
 
   const [usuario, setUsuario] = useState<UsuarioSesion | null>(() => {
     const storedUser = localStorage.getItem('llevalo_usuario');
@@ -943,6 +976,7 @@ export default function App() {
       try {
         await StatusBar.setOverlaysWebView({ overlay: true });
         await StatusBar.setStyle({ style: darkMode ? Style.Light : Style.Dark });
+        await StatusBar.hide();
       } catch (error) {
         console.error('No se pudo configurar la barra de estado:', error);
       }
@@ -950,11 +984,9 @@ export default function App() {
     void setupFullScreen();
   }, [darkMode]);
 
-  const toggleDarkMode = () => {
-    const nuevo = !darkMode;
-    setDarkMode(nuevo);
-    localStorage.setItem('llevalo_dark_mode', String(nuevo));
-    if (Capacitor.isNativePlatform()) window.location.href = `llevalo://theme/${nuevo ? 'dark' : 'light'}`;
+  const cambiarPreferenciaTema = (preferencia: PreferenciaTema) => {
+    setPreferenciaTema(preferencia);
+    if (Capacitor.isNativePlatform()) window.location.href = `llevalo://theme/${preferencia}`;
   };
 
   const sincronizarDatos = useCallback(async () => {
@@ -1096,21 +1128,15 @@ export default function App() {
     const controller = new AbortController();
     geocodingControllerRef.current[tipo] = controller;
     try {
-      const resultadoDireccion = await obtenerDireccionGoogle({ lat, lng });
+      const nombreLugar = await obtenerDireccionGoogle({ lat, lng });
       if (controller.signal.aborted) return;
-      const nombreFinal = resultadoDireccion.nombre || 'Ubicación seleccionada';
-      if (resultadoDireccion.aproximada) {
-        setErrorGeocoding(resultadoDireccion.nombre
-          ? 'Dirección aproximada: se muestra el sector más cercano.'
-          : 'No se encontró una dirección; se conservó el punto exacto.');
-      }
+      const nombreFinal = nombreLugar || 'Ubicación seleccionada';
 
       if (tipo === 'origen') setOrigenInput(nombreFinal);
       else setDestinoInput(nombreFinal);
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return;
       console.error('Error obteniendo la dirección de las coordenadas:', error);
-      setErrorGeocoding('No se pudo identificar el lugar; se conservó el punto exacto.');
       const fallback = 'Ubicación seleccionada';
       if (tipo === 'origen') setOrigenInput(fallback);
       else setDestinoInput(fallback);
@@ -1130,6 +1156,7 @@ export default function App() {
     objetivoUbicacionRef.current = objetivo;
     setObjetivoUbicacion(objetivo);
     if (objetivo) setModoSeleccionMapa(null);
+    setErrorGeocoding('');
     setErrorUbicacion('');
     setErrorRuta('');
     if (objetivo) {
@@ -1172,20 +1199,14 @@ export default function App() {
         geocodificacionGPSRef.current = controller;
         void (async () => {
           try {
-            const resultadoDireccion = await obtenerDireccionGoogle(ubicacion);
+            const direccion = await obtenerDireccionGoogle(ubicacion);
             if (controller.signal.aborted) return;
-            const nombre = resultadoDireccion.nombre || 'Ubicación actual';
-            if (resultadoDireccion.aproximada) {
-              setErrorGeocoding(resultadoDireccion.nombre
-                ? 'Dirección aproximada: se muestra el sector más cercano.'
-                : 'No se encontró el sector; se conservó tu ubicación.');
-            }
+            const nombre = direccion || 'Ubicación actual';
             if (objetivoActual === 'origen') setOrigenInput(nombre);
             else setDestinoInput(nombre);
           } catch (error) {
             if (error instanceof DOMException && error.name === 'AbortError') return;
             console.error('No se pudo identificar el sector cercano con Google Geocoding:', error);
-            setErrorGeocoding('No se pudo identificar el sector; se conservó tu ubicación.');
             if (objetivoActual === 'origen') setOrigenInput('Ubicación actual');
             else setDestinoInput('Ubicación actual');
           }
@@ -2309,8 +2330,15 @@ export default function App() {
     } catch (err: any) { alert(err.message); }
   };
 
+  const chatSoloLectura = (pedido: PedidoReal) =>
+    pedido.estado === 'completado' || pedido.estado === 'cancelado';
+  const chatSoloLecturaPorId = (pedidoId: number) => {
+    const pedido = pedidosReales.find(item => item.id === pedidoId);
+    return !pedido || chatSoloLectura(pedido);
+  };
+
   const enviarMensaje = async (pedidoId: number) => {
-    if (!usuario || !nuevoMensajeTexto.trim()) return;
+    if (!usuario || !nuevoMensajeTexto.trim() || chatSoloLecturaPorId(pedidoId)) return;
     setErrorChat('');
     try {
       const response = await authenticatedFetch(`${API_URL}/api/pedidos/${pedidoId}/chat`, {
@@ -2333,6 +2361,7 @@ export default function App() {
     tipo: 'imagen' | 'audio',
     nombre: string
   ) => {
+    if (chatSoloLecturaPorId(pedidoId)) return;
     if (archivo.size === 0) {
       setErrorChat('El archivo está vacío.');
       return;
@@ -2368,6 +2397,7 @@ export default function App() {
       grabadoraActual.stop();
       return;
     }
+    if (chatSoloLecturaPorId(pedidoId)) return;
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
       setErrorChat('Este navegador no permite grabar audio. Actualiza la app o usa el navegador del dispositivo.');
       return;
@@ -2408,7 +2438,9 @@ export default function App() {
     }
   };
 
-  const renderChatPedido = (pedido: PedidoReal) => (
+  const renderChatPedido = (pedido: PedidoReal) => {
+    const soloLectura = chatSoloLectura(pedido);
+    return (
     <section className={`space-y-3 rounded-2xl border p-3 ${darkMode ? 'border-slate-800 bg-slate-950/60' : 'border-slate-200 bg-slate-50'}`} aria-label={`Chat privado del pedido ${pedido.id}`}>
       <div className="flex items-center justify-between gap-2">
         <div>
@@ -2430,18 +2462,23 @@ export default function App() {
             {mensaje.creado_en && <time className="mt-1 block text-[9px] opacity-60">{new Date(mensaje.creado_en).toLocaleString('es-VE')}</time>}
           </article>
         ))}
-        {mensajesChat.every(mensaje => mensaje.pedido_id !== pedido.id) && <p className="py-3 text-center text-[10px] text-slate-500">Aún no hay mensajes. Puedes escribirle cuando quieras.</p>}
+        {mensajesChat.every(mensaje => mensaje.pedido_id !== pedido.id) && <p className="py-3 text-center text-[10px] text-slate-500">{soloLectura ? 'Aún no hay mensajes.' : 'Aún no hay mensajes. Puedes escribirle cuando quieras.'}</p>}
       </div>
-      <div className="flex items-center gap-2">
-        <input type="text" value={nuevoMensajeTexto} onChange={event => setNuevoMensajeTexto(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void enviarMensaje(pedido.id); }} maxLength={2000} placeholder="Escribe un mensaje..." className={`min-w-0 flex-1 rounded-xl border px-3 py-2 text-xs ${darkMode ? 'border-slate-700 bg-slate-900 text-white' : 'border-slate-200 bg-white'}`} />
-        <button type="button" aria-label="Adjuntar imagen" onClick={() => { pedidoChatAdjuntoRef.current = pedido.id; inputAdjuntoChatRef.current?.click(); }} className="rounded-xl border border-slate-200 p-2 text-slate-600 dark:border-slate-700 dark:text-slate-200"><ImagePlus size={17} /></button>
-        <button type="button" aria-label={grabandoAudio ? 'Detener grabación de audio' : 'Grabar audio'} onClick={() => void alternarGrabacionAudio(pedido.id)} className={`rounded-xl p-2 text-white ${grabandoAudio ? 'bg-red-600' : 'bg-emerald-600'}`}>{grabandoAudio ? <MicOff size={17} /> : <Mic size={17} />}</button>
-        <button type="button" aria-label="Enviar mensaje" onClick={() => void enviarMensaje(pedido.id)} disabled={!nuevoMensajeTexto.trim()} className="rounded-xl bg-[#FF5722] p-2 text-white disabled:opacity-50"><Send size={17} /></button>
-      </div>
-      {grabandoAudio && <p role="status" className="text-[10px] font-semibold text-red-600">Grabando… pulsa el micrófono de nuevo para enviar el audio.</p>}
-      {errorChat && <p role="alert" className="text-[10px] font-semibold text-red-600">{errorChat}</p>}
+      {!soloLectura && (
+        <>
+          <div className="flex items-center gap-2">
+            <input type="text" value={nuevoMensajeTexto} onChange={event => setNuevoMensajeTexto(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void enviarMensaje(pedido.id); }} maxLength={2000} placeholder="Escribe un mensaje..." className={`min-w-0 flex-1 rounded-xl border px-3 py-2 text-xs ${darkMode ? 'border-slate-700 bg-slate-900 text-white' : 'border-slate-200 bg-white'}`} />
+            <button type="button" aria-label="Adjuntar imagen" onClick={() => { pedidoChatAdjuntoRef.current = pedido.id; inputAdjuntoChatRef.current?.click(); }} className="rounded-xl border border-slate-200 p-2 text-slate-600 dark:border-slate-700 dark:text-slate-200"><ImagePlus size={17} /></button>
+            <button type="button" aria-label={grabandoAudio ? 'Detener grabación de audio' : 'Grabar audio'} onClick={() => void alternarGrabacionAudio(pedido.id)} className={`rounded-xl p-2 text-white ${grabandoAudio ? 'bg-red-600' : 'bg-emerald-600'}`}>{grabandoAudio ? <MicOff size={17} /> : <Mic size={17} />}</button>
+            <button type="button" aria-label="Enviar mensaje" onClick={() => void enviarMensaje(pedido.id)} disabled={!nuevoMensajeTexto.trim()} className="rounded-xl bg-[#FF5722] p-2 text-white disabled:opacity-50"><Send size={17} /></button>
+          </div>
+          {grabandoAudio && <p role="status" className="text-[10px] font-semibold text-red-600">Grabando… pulsa el micrófono de nuevo para enviar el audio.</p>}
+          {errorChat && <p role="alert" className="text-[10px] font-semibold text-red-600">{errorChat}</p>}
+        </>
+      )}
     </section>
-  );
+    );
+  };
 
   const cambiarEstadoPedido = useCallback(async (pedidoId: number, nuevoEstado: 'entregado_repartidor' | 'completado' | 'cancelado') => {
     try {
@@ -5032,20 +5069,23 @@ export default function App() {
                   <div className={`flex items-center justify-between gap-4 rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-950/60' : 'border-slate-100 bg-slate-50'}`}>
                     <div>
                       <h3 className={`text-sm font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Apariencia</h3>
-                      <p className="mt-1 text-xs text-slate-500">Modo oscuro</p>
+                      <p className="mt-1 text-xs text-slate-500">Tema de la aplicación</p>
                     </div>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={darkMode}
-                      aria-label="Modo oscuro"
-                      onClick={toggleDarkMode}
-                      className={`flex h-10 w-16 shrink-0 items-center rounded-full border p-1 transition-colors ${darkMode ? 'justify-end border-orange-500 bg-orange-500' : 'justify-start border-slate-300 bg-slate-200'}`}
+                    <select
+                      aria-label="Preferencia de apariencia"
+                      value={preferenciaTema}
+                      onChange={event => {
+                        const value = event.currentTarget.value;
+                        if (value === 'system' || value === 'light' || value === 'dark') {
+                          cambiarPreferenciaTema(value);
+                        }
+                      }}
+                      className={`max-w-[200px] rounded-xl border px-3 py-2 text-xs font-bold ${darkMode ? 'border-slate-700 bg-slate-900 text-white' : 'border-slate-200 bg-white text-slate-800'}`}
                     >
-                      <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-slate-700 shadow-sm">
-                        {darkMode ? <Sun size={15} /> : <Moon size={15} />}
-                      </span>
-                    </button>
+                      <option value="system">Predeterminado del sistema</option>
+                      <option value="light">Claro</option>
+                      <option value="dark">Oscuro</option>
+                    </select>
                   </div>
                 </div>
 

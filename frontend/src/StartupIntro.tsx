@@ -25,9 +25,11 @@ export function StartupIntro({ enabled, children }: StartupIntroProps) {
       document.body.appendChild(splash);
     }
 
-    const darkMode = localStorage.getItem('llevalo_dark_mode') === 'true';
+    const preference = localStorage.getItem('llevalo_theme_preference') || 'system';
+    const darkMode = preference === 'dark'
+      || (preference !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
     splash.classList.toggle('startup-intro-dark', darkMode);
-    window.location.href = `llevalo://theme/${darkMode ? 'dark' : 'light'}`;
+    window.location.href = `llevalo://theme/${preference}`;
     const startedAt = Number(document.documentElement.dataset.startupAt);
     const elapsed = Number.isFinite(startedAt) ? performance.now() - startedAt : 0;
     const timeout = window.setTimeout(() => {

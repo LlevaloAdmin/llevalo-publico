@@ -949,10 +949,7 @@ router.post('/:id/chat', async (req, res) => {
     try {
         const order = await db_1.pool.query(`SELECT id FROM pedidos
        WHERE id = $1 AND (cliente_id = $2 OR repartidor_id = $2)
-         AND (
-           estado IN ('aceptado', 'entregado_repartidor')
-           OR (estado = 'completado' AND completado_en > CURRENT_TIMESTAMP - INTERVAL '7 days')
-         )`, [id, authUser.id]);
+         AND estado IN ('aceptado', 'entregado_repartidor')`, [id, authUser.id]);
         if (order.rows.length === 0)
             return res.status(404).json({ error: 'No tienes acceso al chat de este pedido.' });
         const sender = await db_1.pool.query('SELECT nombre FROM usuarios WHERE id = $1', [authUser.id]);
@@ -994,10 +991,7 @@ router.post('/:id/chat/media', parseChatMediaBody, async (req, res) => {
         await exports.tablasPedidosListas;
         const order = await db_1.pool.query(`SELECT id FROM pedidos
        WHERE id = $1 AND (cliente_id = $2 OR repartidor_id = $2)
-         AND (
-           estado IN ('aceptado', 'entregado_repartidor')
-           OR (estado = 'completado' AND completado_en > CURRENT_TIMESTAMP - INTERVAL '7 days')
-         )`, [id, authUser.id]);
+         AND estado IN ('aceptado', 'entregado_repartidor')`, [id, authUser.id]);
         if (order.rows.length === 0)
             return res.status(404).json({ error: 'No tienes acceso al chat de este pedido.' });
         const sender = await db_1.pool.query('SELECT nombre FROM usuarios WHERE id = $1', [authUser.id]);
