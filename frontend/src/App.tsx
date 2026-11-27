@@ -193,14 +193,74 @@ const tipoDireccionGoogle = (types: string[]) => {
   return 'place';
 };
 
-const obtenerDireccionGoogle = async (location: { lat: number; lng: number }): Promise<string> => {
-  const { geocoding } = await loadGoogleMaps();
-  const response = await new geocoding.Geocoder().geocode({
-    location,
-    language: 'es',
-    region: 'VE'
-  });
-  return response.results[0]?.formatted_address?.trim() || '';
+interface ResultadoDireccionGoogle {
+  nombre: string;
+  aproximada: boolean;
+}
+
+const obtenerDireccionGoogle = async (
+  location: { lat: number; lng: number }
+): Promise<ResultadoDireccionGoogle> => {
+  const { geocoding, places } = await loadGoogleMaps();
+  let errorGeocoding: unknown;
+  try {
+    const response = await new geocoding.Geocoder().geocode({
+      location,
+      language: 'es',
+      region: 'VE'
+    });
+    const prioridadTipos: Record<string, number> = {
+      street_address: 100,
+      premise: 95,
+      subpremise: 95,
+      intersection: 90,
+      route: 85,
+      establishment: 80,
+      point_of_interest: 75,
+      neighborhood: 65,
+      sublocality: 60,
+      locality: 55
+    };
+    const puntuacion = (types: string[]) => Math.max(
+      0,
+      ...types.map(type => prioridadTipos[type] ?? 0)
+    );
+    const resultado = response.results
+      .filter(item => item.formatted_address?.trim() && !item.types.includes('plus_code'))
+      .sort((a, b) => puntuacion(b.types) - puntuacion(a.types))[0];
+    const direccion = resultado?.formatted_address?.trim();
+    if (direccion && resultado) {
+      const aproximada = !resultado.types.some(type =>
+        ['street_address', 'premise', 'subpremise', 'establishment', 'point_of_interest'].includes(type)
+      );
+      return { nombre: direccion, aproximada };
+    }
+  } catch (error) {
+    errorGeocoding = error;
+  }
+
+  try {
+    const response = await places.Place.searchNearby({
+      fields: ['displayName', 'formattedAddress', 'location', 'types'],
+      includedTypes: ['neighborhood', 'sublocality', 'locality'],
+      locationRestriction: { center: location, radius: 1500 },
+      maxResultCount: 10,
+      rankPreference: 'DISTANCE',
+      language: 'es',
+      region: 'VE'
+    });
+    const place = response.places.find(candidate =>
+      candidate.displayName?.trim()
+      && candidate.types?.some(type => ['neighborhood', 'sublocality', 'locality'].includes(type))
+    );
+    return {
+      nombre: place?.displayName?.trim() || place?.formattedAddress?.trim() || '',
+      aproximada: true
+    };
+  } catch (error) {
+    console.error('No se pudo resolver el nombre con Geocoding ni Places:', { errorGeocoding, error });
+    return { nombre: '', aproximada: true };
+  }
 };
 
 interface MensajeChat {
@@ -1036,11 +1096,13 @@ export default function App() {
     const controller = new AbortController();
     geocodingControllerRef.current[tipo] = controller;
     try {
-      const nombreLugar = await obtenerDireccionGoogle({ lat, lng });
+      const resultadoDireccion = await obtenerDireccionGoogle({ lat, lng });
       if (controller.signal.aborted) return;
-      const nombreFinal = nombreLugar || `Ubicación (${lat.toFixed(5)}, ${lng.toFixed(5)})`;
-      if (!nombreLugar) {
-        setErrorGeocoding('No se encontró el nombre; conservamos las coordenadas exactas.');
+      const nombreFinal = resultadoDireccion.nombre || 'Ubicación seleccionada';
+      if (resultadoDireccion.aproximada) {
+        setErrorGeocoding(resultadoDireccion.nombre
+          ? 'Dirección aproximada: se muestra el sector más cercano.'
+          : 'No se encontró una dirección; se conservó el punto exacto.');
       }
 
       if (tipo === 'origen') setOrigenInput(nombreFinal);
@@ -1048,8 +1110,8 @@ export default function App() {
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return;
       console.error('Error obteniendo la dirección de las coordenadas:', error);
-      setErrorGeocoding(`${mensajeErrorGoogleMaps(error, 'Geocoding API')} Conservamos las coordenadas exactas.`);
-      const fallback = `Ubicación (${lat.toFixed(5)}, ${lng.toFixed(5)})`;
+      setErrorGeocoding('No se pudo identificar el lugar; se conservó el punto exacto.');
+      const fallback = 'Ubicación seleccionada';
       if (tipo === 'origen') setOrigenInput(fallback);
       else setDestinoInput(fallback);
     } finally {
@@ -1110,17 +1172,22 @@ export default function App() {
         geocodificacionGPSRef.current = controller;
         void (async () => {
           try {
-            const direccion = await obtenerDireccionGoogle(ubicacion);
+            const resultadoDireccion = await obtenerDireccionGoogle(ubicacion);
             if (controller.signal.aborted) return;
-            const nombre = direccion || 'Sector cercano no identificado';
+            const nombre = resultadoDireccion.nombre || 'Ubicación actual';
+            if (resultadoDireccion.aproximada) {
+              setErrorGeocoding(resultadoDireccion.nombre
+                ? 'Dirección aproximada: se muestra el sector más cercano.'
+                : 'No se encontró el sector; se conservó tu ubicación.');
+            }
             if (objetivoActual === 'origen') setOrigenInput(nombre);
             else setDestinoInput(nombre);
           } catch (error) {
             if (error instanceof DOMException && error.name === 'AbortError') return;
             console.error('No se pudo identificar el sector cercano con Google Geocoding:', error);
-            setErrorGeocoding(`${mensajeErrorGoogleMaps(error, 'Geocoding API')} Conservamos las coordenadas del GPS.`);
-            if (objetivoActual === 'origen') setOrigenInput('Ubicación actual · sector cercano no disponible');
-            else setDestinoInput('Ubicación actual · sector cercano no disponible');
+            setErrorGeocoding('No se pudo identificar el sector; se conservó tu ubicación.');
+            if (objetivoActual === 'origen') setOrigenInput('Ubicación actual');
+            else setDestinoInput('Ubicación actual');
           }
         })();
       }
@@ -4218,16 +4285,10 @@ export default function App() {
                               <span className="mt-1 inline-block rounded bg-slate-100 px-1.5 py-0.5 text-[9px] uppercase text-slate-500 dark:bg-slate-800 dark:text-slate-400">{etiquetasTipoDireccion[s.tipo] || 'Ubicación'}</span>
                             </button>
                           ))}
-                          <button type="button" disabled={buscandoDireccion.origen} onClick={() => void buscarLugaresPorTexto(origenInput, 'origen')} className={`w-full p-2 text-left text-xs font-bold text-[#FF5722] disabled:opacity-50 ${darkMode ? 'hover:bg-slate-800' : 'hover:bg-orange-50'}`}>
-                            Buscar más resultados en Google Maps
-                          </button>
                         </div>
                       )}
                       </div>
-                      {buscandoDireccion.origen && <p className="mt-1 text-[10px] text-slate-500">Buscando calles, sectores y establecimientos…</p>}
-                      {!buscandoDireccion.origen && origenInput.trim().length >= 3 && sugerenciasOrigen.length === 0 && !errorGeocoding && (
-                        <p className="mt-1 text-[10px] text-slate-500">Presiona Enter para buscar más resultados en Google Maps o toca “Mapa” para marcar el punto exacto.</p>
-                      )}
+                      {buscandoDireccion.origen && <p className="mt-1 text-[10px] text-slate-500">Buscando…</p>}
                     </div>
 
                     <div>
@@ -4248,16 +4309,10 @@ export default function App() {
                               <span className="mt-1 inline-block rounded bg-slate-100 px-1.5 py-0.5 text-[9px] uppercase text-slate-500 dark:bg-slate-800 dark:text-slate-400">{etiquetasTipoDireccion[s.tipo] || 'Ubicación'}</span>
                             </button>
                           ))}
-                          <button type="button" disabled={buscandoDireccion.destino} onClick={() => void buscarLugaresPorTexto(destinoInput, 'destino')} className={`w-full p-2 text-left text-xs font-bold text-[#FF5722] disabled:opacity-50 ${darkMode ? 'hover:bg-slate-800' : 'hover:bg-orange-50'}`}>
-                            Buscar más resultados en Google Maps
-                          </button>
                         </div>
                       )}
                       </div>
-                      {buscandoDireccion.destino && <p className="mt-1 text-[10px] text-slate-500">Buscando calles, sectores y establecimientos…</p>}
-                      {!buscandoDireccion.destino && destinoInput.trim().length >= 3 && sugerenciasDestino.length === 0 && !errorGeocoding && (
-                        <p className="mt-1 text-[10px] text-slate-500">Presiona Enter para buscar más resultados en Google Maps o toca “Mapa” para marcar el punto exacto.</p>
-                      )}
+                      {buscandoDireccion.destino && <p className="mt-1 text-[10px] text-slate-500">Buscando…</p>}
                     </div>
 
                     {errorGeocoding && <p role="alert" className="text-[10px] text-amber-700">{errorGeocoding}</p>}
@@ -4362,15 +4417,7 @@ export default function App() {
                                       {sugerenciasOrigen.map((sugerencia, indice) => (
                                         <button type="button" key={`${sugerencia.display_name}-${indice}`} onClick={() => seleccionarSugerencia(sugerencia, 'origen')} className={`block w-full border-b p-2 text-left text-xs last:border-0 ${darkMode ? 'border-slate-800 text-slate-200 hover:bg-slate-800' : 'border-orange-50 text-slate-700 hover:bg-orange-50'}`}>{sugerencia.display_name}</button>
                                       ))}
-                                      <button type="button" disabled={buscandoDireccion.origen} onClick={() => void buscarLugaresPorTexto(origenInput, 'origen')} className={`block w-full p-2 text-left text-xs font-bold text-[#FF5722] disabled:opacity-50 ${darkMode ? 'hover:bg-slate-800' : 'hover:bg-orange-50'}`}>
-                                        Buscar más resultados en Google Maps
-                                      </button>
                                     </div>
-                                  )}
-                                  {!buscandoDireccion.origen && origenInput.trim().length >= 3 && sugerenciasOrigen.length === 0 && (
-                                    <button type="button" onClick={() => void buscarLugaresPorTexto(origenInput, 'origen')} className="mt-1 text-left text-[10px] font-semibold text-[#FF5722]">
-                                      Buscar en Google Maps o elegir el punto en el mapa.
-                                    </button>
                                   )}
                                 </div>
                                 <div className="relative min-w-0">
@@ -4391,15 +4438,7 @@ export default function App() {
                                       {sugerenciasDestino.map((sugerencia, indice) => (
                                         <button type="button" key={`${sugerencia.display_name}-${indice}`} onClick={() => seleccionarSugerencia(sugerencia, 'destino')} className={`block w-full border-b p-2 text-left text-xs last:border-0 ${darkMode ? 'border-slate-800 text-slate-200 hover:bg-slate-800' : 'border-orange-50 text-slate-700 hover:bg-orange-50'}`}>{sugerencia.display_name}</button>
                                       ))}
-                                      <button type="button" disabled={buscandoDireccion.destino} onClick={() => void buscarLugaresPorTexto(destinoInput, 'destino')} className={`block w-full p-2 text-left text-xs font-bold text-[#FF5722] disabled:opacity-50 ${darkMode ? 'hover:bg-slate-800' : 'hover:bg-orange-50'}`}>
-                                        Buscar más resultados en Google Maps
-                                      </button>
                                     </div>
-                                  )}
-                                  {!buscandoDireccion.destino && destinoInput.trim().length >= 3 && sugerenciasDestino.length === 0 && (
-                                    <button type="button" onClick={() => void buscarLugaresPorTexto(destinoInput, 'destino')} className="mt-1 text-left text-[10px] font-semibold text-[#FF5722]">
-                                      Buscar en Google Maps o elegir el punto en el mapa.
-                                    </button>
                                   )}
                                 </div>
                               </div>
@@ -4412,7 +4451,7 @@ export default function App() {
 
                               <div className="flex items-center justify-between gap-2">
                                 <button type="button" onClick={() => setPasoSolicitud('tipo')} className={`shrink-0 rounded-2xl border px-3 py-2.5 text-xs font-bold ${darkMode ? 'border-slate-700 text-slate-200' : 'border-slate-200 text-slate-600'}`}><ArrowLeft size={15} className="mr-1 inline" /> Atrás</button>
-                                <span className="min-w-0 text-center text-[10px] font-semibold text-slate-500">{rutaCompletaLista ? `${distanciaKm} km · ~${tiempoEstimadoMin} min` : modoSeleccionMapa === 'origen' ? 'Toca el mapa para elegir el origen' : modoSeleccionMapa === 'destino' ? 'Toca el mapa para elegir el destino' : 'Busca una dirección o elige un pin en el mapa'}</span>
+                                <span className="min-w-0 text-center text-[10px] font-semibold text-slate-500">{rutaCompletaLista ? `${distanciaKm} km · ~${tiempoEstimadoMin} min` : modoSeleccionMapa === 'origen' ? 'Toca el mapa para elegir el origen' : modoSeleccionMapa === 'destino' ? 'Toca el mapa para elegir el destino' : ''}</span>
                                 <button type="button" disabled={!rutaCompletaLista || esperandoNombreDireccion || distanciaKm <= 0 || tiempoEstimadoMin <= 0} onClick={() => { setPasoSolicitud('pago'); void cargarConfiguracionPago(); }} className="shrink-0 rounded-2xl bg-[#FF5722] px-3 py-2.5 text-xs font-black text-white shadow-md disabled:cursor-not-allowed disabled:opacity-50">Continuar <ArrowRight size={15} className="ml-1 inline" /></button>
                               </div>
                             </div>
