@@ -1490,8 +1490,9 @@ export default function App() {
       localStorage.setItem('llevalo_token', data.token);
       localStorage.setItem('llevalo_usuario', JSON.stringify(data.usuario));
       setUsuario(data.usuario);
-      navegarA(rol);
-      setMensajeAdmin(`Perspectiva de ${rol} activada.`);
+      setPasoSolicitud(null);
+      setMensajeAdmin('');
+      navegarA('home');
       await sincronizarDatos();
     } catch (error) {
       setErrorAdmin(error instanceof Error ? error.message : 'No se pudo cambiar la perspectiva.');
@@ -2356,7 +2357,8 @@ export default function App() {
       const actualizado: UsuarioSesion = data.usuario;
       setUsuario(actualizado);
       localStorage.setItem('llevalo_usuario', JSON.stringify(actualizado));
-      navegarA(usuario.rol === 'cliente' ? 'cliente' : 'repartidor');
+      setPasoSolicitud(null);
+      navegarA('home');
     } catch (error) {
       setErrorPerfil(error instanceof Error ? error.message : 'No se pudo guardar el perfil.');
     } finally {
@@ -3719,7 +3721,7 @@ export default function App() {
         {/* --- VISTA CLIENTE --- */}
         {activeTab === 'cliente' && usuario?.rol === 'cliente' && (
           <>
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 py-4 items-start">
+          <div className={`grid grid-cols-1 lg:grid-cols-12 gap-6 py-4 items-start ${pedidoActivoCliente ? '' : 'hidden'}`}>
             <div className="lg:col-span-5 space-y-4">
               <div className={`space-y-4 ${darkMode ? 'text-white' : ''}`}>
                 <div className="flex justify-between items-center">
@@ -3957,7 +3959,7 @@ export default function App() {
                       )}
 
                       {!pedidoActivoCliente && pasoSolicitud && createPortal(
-                        <div className={`fixed inset-0 z-[120] flex h-[100dvh] flex-col overflow-y-auto px-3 pb-3 pt-[calc(env(safe-area-inset-top)+12px)] md:px-8 md:pb-6 ${darkMode ? 'bg-slate-950 text-white' : 'bg-[#FDFBF7] text-slate-800'}`} role="dialog" aria-modal="true" aria-labelledby="solicitud-title">
+                        <div className={`${darkMode ? 'dark' : ''} fixed inset-0 z-[120] flex h-[100dvh] flex-col overflow-y-auto px-3 pb-3 pt-[calc(env(safe-area-inset-top)+12px)] md:px-8 md:pb-6 ${darkMode ? 'bg-slate-950 text-white' : 'bg-[#FDFBF7] text-slate-800'}`} role="dialog" aria-modal="true" aria-labelledby="solicitud-title">
                           <header className={`mx-auto flex w-full max-w-6xl items-center justify-between gap-3 border-b pb-3 ${darkMode ? 'border-slate-800' : 'border-orange-100'}`}>
                             <div>
                               <p className="text-[10px] font-black uppercase tracking-[0.18em] text-[#FF5722]">
@@ -4704,9 +4706,9 @@ export default function App() {
             <div className={`flex flex-col gap-3 rounded-3xl border p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between ${darkMode ? 'border-slate-800 bg-slate-900 text-white' : 'border-orange-100 bg-white'}`}>
               <h2 className={`text-xl font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Administración</h2>
               <div className="flex flex-wrap gap-2">
-                <button type="button" aria-pressed={usuario.rol === 'cliente'} onClick={() => void cambiarPerspectivaAdmin('cliente')} className={`rounded-xl border px-3 py-2 text-[11px] font-bold ${usuario.rol === 'cliente' ? 'border-[#FF5722] bg-orange-50 text-[#FF5722]' : 'border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-300'}`}>Usar como cliente</button>
-                <button type="button" aria-pressed={usuario.rol === 'repartidor'} onClick={() => void cambiarPerspectivaAdmin('repartidor')} className={`rounded-xl border px-3 py-2 text-[11px] font-bold ${usuario.rol === 'repartidor' ? 'border-[#FF5722] bg-orange-50 text-[#FF5722]' : 'border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-300'}`}>Usar como repartidor</button>
-                <button type="button" onClick={() => void cargarPanelAdmin()} disabled={cargandoAdmin} className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-[11px] font-bold text-[#FF5722] disabled:opacity-50">
+                <button type="button" aria-pressed={usuario.rol === 'cliente'} onClick={() => void cambiarPerspectivaAdmin('cliente')} className={`rounded-xl border px-3 py-2 text-[11px] font-bold ${usuario.rol === 'cliente' ? darkMode ? 'border-orange-800 bg-orange-950/40 text-orange-300' : 'border-[#FF5722] bg-orange-50 text-[#FF5722]' : 'border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-300'}`}>Usar como cliente</button>
+                <button type="button" aria-pressed={usuario.rol === 'repartidor'} onClick={() => void cambiarPerspectivaAdmin('repartidor')} className={`rounded-xl border px-3 py-2 text-[11px] font-bold ${usuario.rol === 'repartidor' ? darkMode ? 'border-orange-800 bg-orange-950/40 text-orange-300' : 'border-[#FF5722] bg-orange-50 text-[#FF5722]' : 'border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-300'}`}>Usar como repartidor</button>
+                <button type="button" onClick={() => void cargarPanelAdmin()} disabled={cargandoAdmin} className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-[11px] font-bold text-[#FF5722] disabled:opacity-50 dark:border-orange-900 dark:bg-orange-950/40 dark:text-orange-300">
                   {cargandoAdmin ? 'Actualizando…' : 'Actualizar'}
                 </button>
               </div>

@@ -3,12 +3,16 @@ package com.llevalo.app;
 import android.content.Context;
 import android.content.Intent;
 import android.content.res.Configuration;
+import android.graphics.Color;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
+import android.view.View;
+import android.view.Window;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
@@ -23,6 +27,8 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        aplicarColorBarraNavegacion(getPreferences(Context.MODE_PRIVATE)
+            .getBoolean(CLAVE_MODO_OSCURO, modoOscuroDelDispositivo()));
         aplicarEscalaDeTexto();
         WebView webView = getBridge().getWebView();
         webView.setWebViewClient(new BridgeWebViewClient(getBridge()) {
@@ -103,6 +109,7 @@ public class MainActivity extends BridgeActivity {
                     .edit()
                     .putBoolean(CLAVE_MODO_OSCURO, "dark".equals(mode))
                     .apply();
+                aplicarColorBarraNavegacion("dark".equals(mode));
             }
             return true;
         }
@@ -141,6 +148,26 @@ public class MainActivity extends BridgeActivity {
             .appendQueryParameter("theme", darkMode ? "dark" : "light")
             .build()
             .toString();
+    }
+
+    private void aplicarColorBarraNavegacion(boolean darkMode) {
+        Window window = getWindow();
+        window.setNavigationBarColor(Color.parseColor(darkMode ? "#17212b" : "#fdfbf7"));
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            View decorView = window.getDecorView();
+            int systemUiVisibility = decorView.getSystemUiVisibility();
+            if (darkMode) {
+                systemUiVisibility &= ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            } else {
+                systemUiVisibility |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            }
+            decorView.setSystemUiVisibility(systemUiVisibility);
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.setNavigationBarContrastEnforced(false);
+        }
     }
 
     private boolean modoOscuroDelDispositivo() {
