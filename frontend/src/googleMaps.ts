@@ -7,6 +7,20 @@ export interface GoogleMapsLibraries {
   routes: google.maps.RoutesLibrary;
 }
 
+export const mensajeErrorGoogleMaps = (error: unknown, servicio: string): string => {
+  const detalle = error instanceof Error
+    ? error.message
+    : typeof error === 'string'
+      ? error
+      : error && typeof error === 'object' && 'message' in error && typeof error.message === 'string'
+        ? error.message
+        : '';
+  if (/PERMISSION_DENIED|REQUEST_DENIED|not authorized|not activated|billing|ApiNotActivated|RefererNotAllowed|InvalidKey|ProjectNotFound/i.test(detalle)) {
+    return `Google rechazó ${servicio}. Habilítalo en el mismo proyecto de la clave, activa la facturación y permite esta API y el dominio en las restricciones de la clave.`;
+  }
+  return detalle || `No se pudo completar la solicitud con ${servicio}.`;
+};
+
 let optionsConfigured = false;
 let librariesPromise: Promise<GoogleMapsLibraries> | null = null;
 

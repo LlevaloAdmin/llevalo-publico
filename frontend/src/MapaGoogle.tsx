@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { loadGoogleMaps, type GoogleMapsLibraries } from './googleMaps';
+import { loadGoogleMaps, mensajeErrorGoogleMaps, type GoogleMapsLibraries } from './googleMaps';
 
 interface Coordenadas {
   lat: number;
@@ -120,13 +120,14 @@ export default function MapaGoogle({
         center: centroInicial,
         zoom: esMini ? 12 : 14,
         mapTypeId: libraries.maps.MapTypeId.ROADMAP,
+        disableDefaultUI: true,
         mapTypeControl: false,
         streetViewControl: false,
         fullscreenControl: false,
         rotateControl: false,
         clickableIcons: false,
         gestureHandling: esMini || !esInteractivo ? 'none' : 'greedy',
-        zoomControl: !esMini
+        zoomControl: false
       });
       mapInstance.current = map;
       routePolylineRef.current = new google.maps.Polyline({
@@ -160,8 +161,9 @@ export default function MapaGoogle({
     const map = mapInstance.current;
     if (!mapReady || !map) return;
     map.setOptions({
+      disableDefaultUI: true,
       gestureHandling: mini || !interactivo ? 'none' : 'greedy',
-      zoomControl: !mini
+      zoomControl: false
     });
     const clickListener = map.addListener('click', (event: google.maps.MapMouseEvent) => {
       const location = event.latLng;
@@ -268,9 +270,7 @@ export default function MapaGoogle({
       } catch (error) {
         if (routeRequestKeyRef.current !== key) return;
         console.error('Error calculando la ruta con Google Routes:', error);
-        onErrorRutaRef.current?.(error instanceof Error
-          ? error.message
-          : 'No se pudo calcular la ruta con Google Maps.');
+        onErrorRutaRef.current?.(mensajeErrorGoogleMaps(error, 'Routes API'));
       }
     };
 

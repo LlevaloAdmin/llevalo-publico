@@ -7,7 +7,7 @@ import { PushNotifications } from '@capacitor/push-notifications';
 import { StatusBar, Style } from '@capacitor/status-bar';
 import { Capacitor, type PluginListenerHandle } from '@capacitor/core';
 import { registerWebPushToken } from './firebasePush';
-import { loadGoogleMaps } from './googleMaps';
+import { loadGoogleMaps, mensajeErrorGoogleMaps } from './googleMaps';
 import { parseGoogleMapsLocationInput } from './googleMapsLink';
 import {
   clearAllDriverNotifications,
@@ -144,11 +144,19 @@ interface ResumenCalificaciones {
   }>;
 }
 
-interface SugerenciaDireccion {
-  display_name: string;
-  tipo: string;
-  prediction: google.maps.places.PlacePrediction;
-}
+type SugerenciaDireccion =
+  | {
+      clase: 'prediccion';
+      display_name: string;
+      tipo: string;
+      prediction: google.maps.places.PlacePrediction;
+    }
+  | {
+      clase: 'lugar';
+      display_name: string;
+      tipo: string;
+      place: google.maps.places.Place;
+    };
 
 const etiquetasTipoDireccion: Record<string, string> = {
   street_address: 'Dirección',
@@ -159,7 +167,23 @@ const etiquetasTipoDireccion: Record<string, string> = {
   locality: 'Localidad',
   administrative_area_level_2: 'Localidad',
   establishment: 'Establecimiento',
-  point_of_interest: 'Establecimiento'
+  point_of_interest: 'Establecimiento',
+  restaurant: 'Restaurante',
+  cafe: 'Cafetería',
+  bar: 'Bar',
+  store: 'Tienda',
+  supermarket: 'Supermercado',
+  grocery_store: 'Mercado',
+  pharmacy: 'Farmacia',
+  gas_station: 'Gasolinera',
+  hospital: 'Hospital',
+  bank: 'Banco',
+  school: 'Escuela',
+  university: 'Universidad',
+  shopping_mall: 'Centro comercial',
+  lodging: 'Alojamiento',
+  park: 'Parque',
+  tourist_attraction: 'Lugar de interés'
 };
 
 const tipoDireccionGoogle = (types: string[]) => {
@@ -176,7 +200,29 @@ const obtenerDireccionGoogle = async (location: { lat: number; lng: number }): P
     language: 'es',
     region: 'VE'
   });
-  return response.results[0]?.formatted_address?.trim() || '';
+  const resultados = response.results;
+  const componentes = resultados.flatMap(resultado => resultado.address_components);
+  const componente = (...tipos: string[]) => componentes.find(item =>
+    tipos.some(tipo => item.types.includes(tipo))
+  )?.long_name;
+  const calle = [componente('street_number'), componente('route')].filter(Boolean).join(' ');
+  const partesDireccion = [
+    calle || componente('premise'),
+    componente('neighborhood', 'sublocality_level_1', 'sublocality'),
+    componente('locality', 'administrative_area_level_2'),
+    componente('administrative_area_level_1'),
+    componente('country')
+  ].filter((parte): parte is string => Boolean(parte));
+  const partesUnicas = partesDireccion.filter((parte, indice) =>
+    partesDireccion.findIndex(otra => otra.toLocaleLowerCase('es') === parte.toLocaleLowerCase('es')) === indice
+  );
+  if (partesUnicas.length > 0) return partesUnicas.join(', ');
+
+  const tiposPreferidos = ['street_address', 'premise', 'route', 'neighborhood', 'sublocality', 'locality'];
+  const resultadoMasPreciso = tiposPreferidos
+    .map(tipo => resultados.find(resultado => resultado.types.includes(tipo)))
+    .find(resultado => Boolean(resultado?.formatted_address));
+  return resultadoMasPreciso?.formatted_address?.trim() || resultados[0]?.formatted_address?.trim() || '';
 };
 
 interface MensajeChat {
@@ -565,6 +611,17 @@ export default function App() {
   const [coordsOrigen, setCoordsOrigen] = useState<{ lat: number; lng: number } | null>(null);
   const [destinoInput, setDestinoInput] = useState('');
   const [coordsDestino, setCoordsDestino] = useState<{ lat: number; lng: number } | null>(null);
+  const [direccionModal, setDireccionModal] = useState<'origen' | 'destino' | null>(null);
+  const [textoModalDireccion, setTextoModalDireccion] = useState('');
+  const direccionAnteriorModalRef = useRef<{
+    tipo: 'origen' | 'destino';
+    valor: string;
+    coordenadas: { lat: number; lng: number } | null;
+    distanciaKm: number;
+    tiempoEstimadoMin: number;
+    errorGeocoding: string;
+    errorRuta: string;
+  } | null>(null);
   
   const [modoSeleccionMapa, setModoSeleccionMapa] = useState<'origen' | 'destino' | null>(null);
 
@@ -1024,7 +1081,7 @@ export default function App() {
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return;
       console.error('Error obteniendo la dirección de las coordenadas:', error);
-      setErrorGeocoding('No se pudo obtener el nombre; conservamos las coordenadas exactas.');
+      setErrorGeocoding(`${mensajeErrorGoogleMaps(error, 'Geocoding API')} Conservamos las coordenadas exactas.`);
       const fallback = `Ubicación (${lat.toFixed(5)}, ${lng.toFixed(5)})`;
       if (tipo === 'origen') setOrigenInput(fallback);
       else setDestinoInput(fallback);
@@ -1034,6 +1091,54 @@ export default function App() {
       }
     }
   };
+
+  const abrirModalDireccion = (tipo: 'origen' | 'destino') => {
+    direccionAnteriorModalRef.current = {
+      tipo,
+      valor: tipo === 'origen' ? origenInput : destinoInput,
+      coordenadas: tipo === 'origen' ? coordsOrigen : coordsDestino,
+      distanciaKm,
+      tiempoEstimadoMin,
+      errorGeocoding,
+      errorRuta
+    };
+    setTextoModalDireccion(tipo === 'origen' ? origenInput : destinoInput);
+    setErrorGeocoding('');
+    setErrorRuta('');
+    setDireccionModal(tipo);
+  };
+
+  const cerrarModalDireccion = (restaurar = false) => {
+    const anterior = direccionAnteriorModalRef.current;
+    if (restaurar && anterior) {
+      geocodificacionGPSRef.current?.abort();
+      if (debounceTimerRef.current[anterior.tipo]) clearTimeout(debounceTimerRef.current[anterior.tipo]!);
+      geocodingControllerRef.current[anterior.tipo]?.abort();
+      const setInput = anterior.tipo === 'origen' ? setOrigenInput : setDestinoInput;
+      const setCoords = anterior.tipo === 'origen' ? setCoordsOrigen : setCoordsDestino;
+      const setSugerencias = anterior.tipo === 'origen' ? setSugerenciasOrigen : setSugerenciasDestino;
+      setInput(anterior.valor);
+      setCoords(anterior.coordenadas);
+      setSugerencias([]);
+      setBuscandoDireccion(current => ({ ...current, [anterior.tipo]: false }));
+      setDistanciaKm(anterior.distanciaKm);
+      setTiempoEstimadoMin(anterior.tiempoEstimadoMin);
+      setErrorGeocoding(anterior.errorGeocoding);
+      setErrorRuta(anterior.errorRuta);
+    }
+    direccionAnteriorModalRef.current = null;
+    setDireccionModal(null);
+    setTextoModalDireccion('');
+  };
+
+  useEffect(() => {
+    if (!direccionModal) return;
+    const overflowAnterior = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = overflowAnterior;
+    };
+  }, [direccionModal]);
 
   const manejarClicEnMapa = (lat: number, lng: number) => {
     if (modoSeleccionMapa) void fijarCoordenadasDireccion(lat, lng, modoSeleccionMapa);
@@ -1094,7 +1199,7 @@ export default function App() {
           } catch (error) {
             if (error instanceof DOMException && error.name === 'AbortError') return;
             console.error('No se pudo identificar el sector cercano con Google Geocoding:', error);
-            setErrorGeocoding('No se pudo identificar el sector cercano; conservamos las coordenadas del GPS.');
+            setErrorGeocoding(`${mensajeErrorGoogleMaps(error, 'Geocoding API')} Conservamos las coordenadas del GPS.`);
             if (objetivoActual === 'origen') setOrigenInput('Ubicación actual · sector cercano no disponible');
             else setDestinoInput('Ubicación actual · sector cercano no disponible');
           }
@@ -1112,7 +1217,7 @@ export default function App() {
         navigator.geolocation.getCurrentPosition(
           manejarUbicacion,
           errorRespaldo => manejarErrorUbicacion(errorRespaldo, false),
-          { enableHighAccuracy: false, maximumAge: 60_000, timeout: 12_000 }
+          { enableHighAccuracy: false, maximumAge: 0, timeout: 12_000 }
         );
         return;
       }
@@ -1129,7 +1234,7 @@ export default function App() {
     navigator.geolocation.getCurrentPosition(
       manejarUbicacion,
       error => manejarErrorUbicacion(error),
-      { enableHighAccuracy: true, maximumAge: 10_000, timeout: 15_000 }
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 20_000 }
     );
   };
 
@@ -1158,6 +1263,7 @@ export default function App() {
 
     if (parsedInput?.kind === 'coordinates') {
       void fijarCoordenadasDireccion(parsedInput.coordinates.lat, parsedInput.coordinates.lng, tipo);
+      if (direccionModal === tipo) cerrarModalDireccion(false);
       return;
     }
 
@@ -1187,6 +1293,7 @@ export default function App() {
             return;
           }
           if (resolvedInput?.kind === 'search') {
+            if (direccionModal === tipo) setTextoModalDireccion(resolvedInput.query);
             buscarDireccionGeocoding(resolvedInput.query, tipo);
             return;
           }
@@ -1227,10 +1334,9 @@ export default function App() {
         autocompleteSessionTokensRef.current[tipo] = sessionToken;
         const response = await places.AutocompleteSuggestion.fetchAutocompleteSuggestions({
           input: consulta,
-          includedRegionCodes: ['ve'],
           language: 'es',
           region: 'VE',
-          locationBias: { center: proximidad, radius: 40_000 },
+          locationBias: { center: proximidad, radius: 80_000 },
           origin: proximidad,
           sessionToken
         });
@@ -1241,6 +1347,7 @@ export default function App() {
           const displayName = prediction.text.toString().trim();
           if (!displayName) return [];
           return [{
+            clase: 'prediccion' as const,
             display_name: displayName,
             tipo: tipoDireccionGoogle(prediction.types),
             prediction
@@ -1254,9 +1361,70 @@ export default function App() {
         if (controller.signal.aborted) return;
         console.error('Error buscando dirección en Google Places:', error);
         setBuscandoDireccion(current => ({ ...current, [tipo]: false }));
-        setErrorGeocoding('No se pudieron buscar lugares con Google. Puedes marcar el punto exacto en el mapa.');
+        setErrorGeocoding(`${mensajeErrorGoogleMaps(error, 'Places API (New)')} Puedes marcar el punto exacto en el mapa.`);
       }
     }, 500);
+  };
+
+  const buscarLugaresPorTexto = async (consulta: string, tipo: 'origen' | 'destino') => {
+    const texto = consulta.trim();
+    if (texto.length < 2) return;
+
+    if (debounceTimerRef.current[tipo]) clearTimeout(debounceTimerRef.current[tipo]!);
+    geocodingControllerRef.current[tipo]?.abort();
+    const controller = new AbortController();
+    geocodingControllerRef.current[tipo] = controller;
+    const setCoordenadas = tipo === 'origen' ? setCoordsOrigen : setCoordsDestino;
+    const setSugerencias = tipo === 'origen' ? setSugerenciasOrigen : setSugerenciasDestino;
+    setCoordenadas(null);
+    setSugerencias([]);
+    setBuscandoDireccion(current => ({ ...current, [tipo]: true }));
+    setErrorGeocoding('');
+    setErrorRuta('');
+    setDistanciaKm(0);
+    setTiempoEstimadoMin(0);
+    autocompleteSessionTokensRef.current[tipo] = null;
+
+    try {
+      const proximidad = coordsUsuarioGPS || { lat: 10.2291, lng: -68.0055 };
+      const { places } = await loadGoogleMaps();
+      const response = await places.Place.searchByText({
+        textQuery: texto,
+        fields: ['displayName', 'formattedAddress', 'location', 'types'],
+        maxResultCount: 20,
+        language: 'es',
+        region: 'VE',
+        locationBias: { center: proximidad, radius: 80_000 }
+      });
+      if (controller.signal.aborted) return;
+      const resultados: SugerenciaDireccion[] = response.places.flatMap(place => {
+        if (!place.location) return [];
+        const partes = [place.displayName?.trim(), place.formattedAddress?.trim()]
+          .filter((parte): parte is string => Boolean(parte));
+        const displayName = partes.filter((parte, indice) =>
+          partes.findIndex(otra => otra.toLocaleLowerCase('es') === parte.toLocaleLowerCase('es')) === indice
+        ).join(' · ');
+        if (!displayName) return [];
+        return [{
+          clase: 'lugar',
+          display_name: displayName,
+          tipo: tipoDireccionGoogle(place.types ?? []),
+          place
+        }];
+      });
+      setSugerencias(resultados);
+      if (resultados.length === 0) {
+        setErrorGeocoding(`Google Maps no encontró lugares para “${texto}”. Prueba con otro nombre o marca el punto en el mapa.`);
+      }
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      console.error('Error buscando lugares en Google Maps:', error);
+      setErrorGeocoding(`${mensajeErrorGoogleMaps(error, 'Places API (New)')} Puedes marcar el punto exacto en el mapa.`);
+    } finally {
+      if (!controller.signal.aborted) {
+        setBuscandoDireccion(current => ({ ...current, [tipo]: false }));
+      }
+    }
   };
 
   const seleccionarSugerencia = (item: SugerenciaDireccion, tipo: 'origen' | 'destino') => {
@@ -1281,17 +1449,31 @@ export default function App() {
 
     void (async () => {
       try {
-        const place = item.prediction.toPlace();
-        const response = await place.fetchFields({ fields: ['location', 'formattedAddress'] });
-        if (controller.signal.aborted) return;
-        const location = response.place.location;
-        if (!location) throw new Error('Google no devolvió las coordenadas del lugar seleccionado.');
-        setCoords({ lat: location.lat(), lng: location.lng() });
-        setInput(response.place.formattedAddress || item.display_name);
+        if (item.clase === 'lugar') {
+          const location = item.place.location;
+          if (!location) throw new Error('Google no devolvió las coordenadas del lugar seleccionado.');
+          if (controller.signal.aborted) return;
+          setCoords({ lat: location.lat(), lng: location.lng() });
+          setInput(item.display_name);
+        } else {
+          const place = item.prediction.toPlace();
+          const response = await place.fetchFields({ fields: ['location', 'formattedAddress', 'displayName'] });
+          if (controller.signal.aborted) return;
+          const location = response.place.location;
+          if (!location) throw new Error('Google no devolvió las coordenadas del lugar seleccionado.');
+          setCoords({ lat: location.lat(), lng: location.lng() });
+          const partes = [response.place.displayName?.trim(), response.place.formattedAddress?.trim()]
+            .filter((parte): parte is string => Boolean(parte));
+          const direccion = partes.filter((parte, indice) =>
+            partes.findIndex(otra => otra.toLocaleLowerCase('es') === parte.toLocaleLowerCase('es')) === indice
+          ).join(' · ');
+          setInput(direccion || item.display_name);
+        }
+        cerrarModalDireccion(false);
       } catch (error) {
         if (controller.signal.aborted) return;
         console.error('No se pudieron obtener las coordenadas del lugar:', error);
-        setErrorGeocoding('No se pudieron obtener las coordenadas de este lugar. Puedes marcarlo en el mapa.');
+        setErrorGeocoding(`${mensajeErrorGoogleMaps(error, 'Places API (New)')} Puedes marcarlo en el mapa.`);
       } finally {
         if (!controller.signal.aborted) {
           setBuscandoDireccion(current => ({ ...current, [tipo]: false }));
@@ -1305,10 +1487,13 @@ export default function App() {
     tipo: 'origen' | 'destino'
   ) => {
     if (event.key !== 'Enter') return;
-    const sugerencia = tipo === 'origen' ? sugerenciasOrigen[0] : sugerenciasDestino[0];
-    if (!sugerencia) return;
     event.preventDefault();
-    seleccionarSugerencia(sugerencia, tipo);
+    const sugerencia = tipo === 'origen' ? sugerenciasOrigen[0] : sugerenciasDestino[0];
+    if (sugerencia) {
+      seleccionarSugerencia(sugerencia, tipo);
+      return;
+    }
+    void buscarLugaresPorTexto(tipo === 'origen' ? origenInput : destinoInput, tipo);
   };
 
   const cargarConfiguracionPago = useCallback(async () => {
@@ -3215,8 +3400,133 @@ export default function App() {
     }).catch((error) => console.error('Error enviando ubicación del repartidor:', error));
   }, [coordsUsuarioGPS, usuario?.rol, pedidoAsignadoRepartidorId]);
 
+  const sugerenciasModalDireccion = direccionModal === 'origen' ? sugerenciasOrigen : sugerenciasDestino;
+  const buscandoModalDireccion = direccionModal === 'origen' ? buscandoDireccion.origen : buscandoDireccion.destino;
+
   return (
     <div className={`app-shell flex flex-col font-sans transition-colors duration-300 ${usuario ? 'app-shell-authenticated' : ''} ${pasoSolicitud ? 'solicitud-open' : ''} ${darkMode ? 'dark bg-slate-950 text-slate-100' : 'bg-[#FDFBF7] text-slate-800'}`}>
+      {direccionModal && createPortal(
+        <div
+          className={`fixed inset-0 z-[160] flex items-start justify-center overflow-y-auto bg-slate-950/75 px-3 pb-4 pt-[calc(env(safe-area-inset-top)+12px)] backdrop-blur-sm md:items-center md:py-8 ${darkMode ? 'dark' : ''}`}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="direccion-modal-title"
+          onClick={event => {
+            if (event.target === event.currentTarget) cerrarModalDireccion(true);
+          }}
+          onKeyDown={event => {
+            if (event.key === 'Escape') {
+              event.stopPropagation();
+              cerrarModalDireccion(true);
+            }
+          }}
+        >
+          <section
+            className={`flex w-full max-w-2xl flex-col overflow-hidden rounded-3xl border shadow-2xl ${darkMode ? 'border-slate-700 bg-slate-900 text-white' : 'border-orange-100 bg-white text-slate-900'}`}
+            style={{ maxHeight: 'calc(100dvh - env(safe-area-inset-top) - 24px)' }}
+          >
+            <header className={`flex items-center justify-between gap-3 border-b px-4 py-4 sm:px-6 ${darkMode ? 'border-slate-700' : 'border-slate-100'}`}>
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-[#FF5722]">Buscar ubicación</p>
+                <h2 id="direccion-modal-title" className="mt-1 text-lg font-black">
+                  {direccionModal === 'origen' ? '¿Desde dónde salimos?' : '¿A dónde vamos?'}
+                </h2>
+              </div>
+              <button
+                type="button"
+                aria-label="Cerrar búsqueda de dirección"
+                onClick={() => cerrarModalDireccion(true)}
+                className={`rounded-xl border p-2 text-sm font-bold ${darkMode ? 'border-slate-700 text-slate-300' : 'border-slate-200 text-slate-600'}`}
+              >
+                Cerrar
+              </button>
+            </header>
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4 sm:p-6">
+              <label htmlFor="modal-busqueda-direccion" className="block text-xs font-bold text-slate-500">
+                Dirección, negocio, calle, avenida, coordenadas o enlace de Google Maps
+              </label>
+              <input
+                id="modal-busqueda-direccion"
+                type="text"
+                autoFocus
+                value={textoModalDireccion}
+                onChange={event => {
+                  const valor = event.target.value;
+                  setTextoModalDireccion(valor);
+                  if (direccionModal) buscarDireccionGeocoding(valor, direccionModal);
+                }}
+                onKeyDown={event => {
+                  if (event.key === 'Enter' && direccionModal) manejarEnterEnDireccion(event, direccionModal);
+                  if (event.key === 'Escape') {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    cerrarModalDireccion(true);
+                  }
+                }}
+                placeholder="Ej. Av. Bolívar, Valles de Colinas o una farmacia"
+                className={`w-full rounded-2xl border px-4 py-3 text-base outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-400/30 ${darkMode ? 'border-slate-700 bg-slate-950 text-white placeholder:text-slate-500' : 'border-slate-200 bg-slate-50 text-slate-900 placeholder:text-slate-400'}`}
+              />
+              <p className="text-[11px] text-slate-500">
+                Escribe para ver sugerencias. Enter acepta la primera o busca más resultados en Google Maps.
+              </p>
+              {buscandoModalDireccion && <p className="text-xs font-medium text-slate-500">Buscando direcciones y negocios…</p>}
+              {errorGeocoding && <p role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">{errorGeocoding}</p>}
+              {sugerenciasModalDireccion.length > 0 && (
+                <div className={`max-h-[42dvh] overflow-y-auto rounded-2xl border ${darkMode ? 'border-slate-700 bg-slate-950' : 'border-slate-200 bg-white'}`}>
+                  {sugerenciasModalDireccion.map((sugerencia, indice) => (
+                    <button
+                      type="button"
+                      key={`${sugerencia.display_name}-${indice}`}
+                      onClick={() => direccionModal && seleccionarSugerencia(sugerencia, direccionModal)}
+                      className={`block w-full border-b p-3 text-left last:border-0 ${darkMode ? 'border-slate-800 hover:bg-slate-800' : 'border-slate-100 hover:bg-orange-50'}`}
+                    >
+                      <span className="block text-sm font-semibold">{sugerencia.display_name}</span>
+                      <span className="mt-1 inline-block rounded bg-slate-100 px-2 py-0.5 text-[9px] font-bold uppercase text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                        {etiquetasTipoDireccion[sugerencia.tipo] || 'Ubicación'}
+                      </span>
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    disabled={buscandoModalDireccion}
+                    onClick={() => direccionModal && void buscarLugaresPorTexto(textoModalDireccion, direccionModal)}
+                    className={`w-full p-3 text-left text-xs font-bold text-[#FF5722] disabled:opacity-50 ${darkMode ? 'hover:bg-slate-800' : 'hover:bg-orange-50'}`}
+                  >
+                    Buscar más resultados en Google Maps
+                  </button>
+                </div>
+              )}
+            </div>
+            <footer className={`flex justify-end gap-2 border-t p-4 sm:px-6 ${darkMode ? 'border-slate-700' : 'border-slate-100'}`}>
+              <button
+                type="button"
+                onClick={() => cerrarModalDireccion(true)}
+                className={`rounded-xl border px-4 py-2.5 text-xs font-bold ${darkMode ? 'border-slate-700 text-slate-300' : 'border-slate-200 text-slate-600'}`}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={buscandoModalDireccion || textoModalDireccion.trim().length < 2}
+                onClick={() => {
+                  if (!direccionModal) return;
+                  const sugerencia = direccionModal === 'origen' ? sugerenciasOrigen[0] : sugerenciasDestino[0];
+                  if (sugerencia) seleccionarSugerencia(sugerencia, direccionModal);
+                  else void buscarLugaresPorTexto(textoModalDireccion, direccionModal);
+                }}
+                className="rounded-xl bg-[#FF5722] px-5 py-2.5 text-xs font-black text-white disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {buscandoModalDireccion
+                  ? 'Buscando…'
+                  : sugerenciasModalDireccion.length > 0
+                    ? 'Aceptar primera sugerencia'
+                    : 'Buscar en Google Maps'}
+              </button>
+            </footer>
+          </section>
+        </div>,
+        document.body
+      )}
       <header className={`app-header border-b backdrop-blur sticky top-0 z-50 px-4 md:px-10 py-3 flex flex-wrap justify-between items-center gap-y-2 shadow-sm transition-colors ${darkMode ? 'bg-slate-950/90 border-slate-800' : 'bg-[#FDFBF7]/90 border-orange-100'}`}>
         {usuario ? (
           <div className="flex items-center space-x-3" aria-label="Llévalo">
@@ -4102,13 +4412,13 @@ export default function App() {
                       <label className={`text-xs font-bold ${darkMode ? 'text-slate-300' : 'text-slate-700'}`}>{serviceType === 'viajes' ? 'Punto de partida' : 'Origen (Retirada)'}</label>
                       <div className="relative mt-1">
                         <div className="address-controls grid grid-cols-[minmax(0,1fr)_auto_auto] gap-2">
-                        <input type="text" value={origenInput} onChange={e => buscarDireccionGeocoding(e.target.value, 'origen')} onKeyDown={e => manejarEnterEnDireccion(e, 'origen')} placeholder="Dirección, coordenadas o enlace de Maps" className={`min-w-0 border rounded-xl px-3 py-2 text-xs ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
+                        <input type="text" value={origenInput} readOnly aria-haspopup="dialog" onClick={() => abrirModalDireccion('origen')} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); abrirModalDireccion('origen'); } }} placeholder="Dirección, negocio, coordenadas o enlace de Maps" className={`min-w-0 cursor-pointer border rounded-xl px-3 py-2 text-xs ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
                         <button type="button" onClick={() => obtenerUbicacionActual('origen')} disabled={ubicacionCargando} aria-label="Usar mi ubicación como origen" title="Usar mi ubicación como origen" className="px-3 py-2 rounded-xl border text-xs font-bold text-[#FF5722] border-orange-200 bg-orange-50 disabled:opacity-50">
                           <Navigation size={15} />
                         </button>
                         <button type="button" aria-pressed={modoSeleccionMapa === 'origen'} onClick={() => activarSeleccionMapa('origen')} className={`px-3 py-2 rounded-xl border text-xs font-bold transition cursor-pointer ${modoSeleccionMapa === 'origen' ? 'bg-emerald-600 text-white' : 'bg-emerald-50 text-emerald-600 border-emerald-200'}`}>Mapa</button>
                         </div>
-                      {sugerenciasOrigen.length > 0 && (
+                      {!direccionModal && sugerenciasOrigen.length > 0 && (
                         <div className={`absolute left-0 right-0 top-full z-30 mt-1 max-h-36 w-full max-w-full overflow-y-auto rounded-xl border shadow-lg ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-orange-100'}`}>
                           {sugerenciasOrigen.map((s, idx) => (
                             <button type="button" key={`${s.display_name}-${idx}`} onClick={() => seleccionarSugerencia(s, 'origen')} className={`w-full p-2 text-left text-xs cursor-pointer border-b last:border-0 ${darkMode ? 'hover:bg-slate-800 border-slate-800 text-slate-200' : 'hover:bg-orange-50 border-orange-50 text-slate-700'}`}>
@@ -4116,12 +4426,15 @@ export default function App() {
                               <span className="mt-1 inline-block rounded bg-slate-100 px-1.5 py-0.5 text-[9px] uppercase text-slate-500 dark:bg-slate-800 dark:text-slate-400">{etiquetasTipoDireccion[s.tipo] || 'Ubicación'}</span>
                             </button>
                           ))}
+                          <button type="button" disabled={buscandoDireccion.origen} onClick={() => void buscarLugaresPorTexto(origenInput, 'origen')} className={`w-full p-2 text-left text-xs font-bold text-[#FF5722] disabled:opacity-50 ${darkMode ? 'hover:bg-slate-800' : 'hover:bg-orange-50'}`}>
+                            Buscar más resultados en Google Maps
+                          </button>
                         </div>
                       )}
                       </div>
                       {buscandoDireccion.origen && <p className="mt-1 text-[10px] text-slate-500">Buscando calles, sectores y establecimientos…</p>}
                       {!buscandoDireccion.origen && origenInput.trim().length >= 3 && sugerenciasOrigen.length === 0 && !errorGeocoding && (
-                        <p className="mt-1 text-[10px] text-slate-500">¿No aparece el lugar o establecimiento? Toca “Mapa” para marcar el punto exacto.</p>
+                        <p className="mt-1 text-[10px] text-slate-500">Presiona Enter para buscar más resultados en Google Maps o toca “Mapa” para marcar el punto exacto.</p>
                       )}
                     </div>
 
@@ -4129,13 +4442,13 @@ export default function App() {
                       <label className={`text-xs font-bold ${darkMode ? 'text-slate-300' : 'text-slate-700'}`}>{serviceType === 'viajes' ? 'Destino del viaje' : 'Destino (Entrega)'}</label>
                       <div className="relative mt-1">
                         <div className="address-controls grid grid-cols-[minmax(0,1fr)_auto_auto] gap-2">
-                        <input type="text" value={destinoInput} onChange={e => buscarDireccionGeocoding(e.target.value, 'destino')} onKeyDown={e => manejarEnterEnDireccion(e, 'destino')} placeholder="Dirección, coordenadas o enlace de Maps" className={`min-w-0 border rounded-xl px-3 py-2 text-xs ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
+                        <input type="text" value={destinoInput} readOnly aria-haspopup="dialog" onClick={() => abrirModalDireccion('destino')} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); abrirModalDireccion('destino'); } }} placeholder="Dirección, negocio, coordenadas o enlace de Maps" className={`min-w-0 cursor-pointer border rounded-xl px-3 py-2 text-xs ${darkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200'}`} />
                         <button type="button" onClick={() => obtenerUbicacionActual('destino')} disabled={ubicacionCargando} aria-label="Usar mi ubicación como destino" title="Usar mi ubicación como destino" className="px-3 py-2 rounded-xl border text-xs font-bold text-[#FF5722] border-orange-200 bg-orange-50 disabled:opacity-50">
                           <Navigation size={15} />
                         </button>
                         <button type="button" aria-pressed={modoSeleccionMapa === 'destino'} onClick={() => activarSeleccionMapa('destino')} className={`px-3 py-2 rounded-xl border text-xs font-bold transition cursor-pointer ${modoSeleccionMapa === 'destino' ? 'bg-red-600 text-white' : 'bg-red-50 text-red-600 border-red-200'}`}>Mapa</button>
                         </div>
-                      {sugerenciasDestino.length > 0 && (
+                      {!direccionModal && sugerenciasDestino.length > 0 && (
                         <div className={`absolute left-0 right-0 top-full z-30 mt-1 max-h-36 w-full max-w-full overflow-y-auto rounded-xl border shadow-lg ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-orange-100'}`}>
                           {sugerenciasDestino.map((s, idx) => (
                             <button type="button" key={`${s.display_name}-${idx}`} onClick={() => seleccionarSugerencia(s, 'destino')} className={`w-full p-2 text-left text-xs cursor-pointer border-b last:border-0 ${darkMode ? 'hover:bg-slate-800 border-slate-800 text-slate-200' : 'hover:bg-orange-50 border-orange-50 text-slate-700'}`}>
@@ -4143,12 +4456,15 @@ export default function App() {
                               <span className="mt-1 inline-block rounded bg-slate-100 px-1.5 py-0.5 text-[9px] uppercase text-slate-500 dark:bg-slate-800 dark:text-slate-400">{etiquetasTipoDireccion[s.tipo] || 'Ubicación'}</span>
                             </button>
                           ))}
+                          <button type="button" disabled={buscandoDireccion.destino} onClick={() => void buscarLugaresPorTexto(destinoInput, 'destino')} className={`w-full p-2 text-left text-xs font-bold text-[#FF5722] disabled:opacity-50 ${darkMode ? 'hover:bg-slate-800' : 'hover:bg-orange-50'}`}>
+                            Buscar más resultados en Google Maps
+                          </button>
                         </div>
                       )}
                       </div>
                       {buscandoDireccion.destino && <p className="mt-1 text-[10px] text-slate-500">Buscando calles, sectores y establecimientos…</p>}
                       {!buscandoDireccion.destino && destinoInput.trim().length >= 3 && sugerenciasDestino.length === 0 && !errorGeocoding && (
-                        <p className="mt-1 text-[10px] text-slate-500">¿No aparece el lugar o establecimiento? Toca “Mapa” para marcar el punto exacto.</p>
+                        <p className="mt-1 text-[10px] text-slate-500">Presiona Enter para buscar más resultados en Google Maps o toca “Mapa” para marcar el punto exacto.</p>
                       )}
                     </div>
 
@@ -4241,7 +4557,7 @@ export default function App() {
                                     {serviceType === 'viajes' ? 'Punto de partida' : 'Origen'}
                                   </label>
                                   <div className="mt-1 flex gap-2">
-                                    <input id="solicitud-origen" type="text" value={origenInput} onChange={event => buscarDireccionGeocoding(event.target.value, 'origen')} onKeyDown={event => manejarEnterEnDireccion(event, 'origen')} placeholder="Dirección, coordenadas o enlace de Maps" className={`min-w-0 flex-1 rounded-2xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-700 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50 text-slate-900'}`} />
+                                    <input id="solicitud-origen" type="text" value={origenInput} readOnly aria-haspopup="dialog" onClick={() => abrirModalDireccion('origen')} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); abrirModalDireccion('origen'); } }} placeholder="Dirección, negocio, coordenadas o enlace de Maps" className={`min-w-0 flex-1 cursor-pointer rounded-2xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-700 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50 text-slate-900'}`} />
                                     <button type="button" onClick={() => obtenerUbicacionActual('origen')} disabled={ubicacionCargando} aria-label="Usar mi ubicación como origen" title="Usar mi ubicación como origen" className="inline-flex shrink-0 items-center justify-center rounded-2xl border border-orange-200 bg-orange-50 px-3 text-[#FF5722] disabled:opacity-50 dark:border-orange-900 dark:bg-orange-950/30">
                                       <Navigation size={17} className={ubicacionCargando && objetivoUbicacion === 'origen' ? 'animate-pulse' : ''} />
                                     </button>
@@ -4249,12 +4565,20 @@ export default function App() {
                                       <MapPin size={17} />
                                     </button>
                                   </div>
-                                  {sugerenciasOrigen.length > 0 && (
-                                    <span className={`absolute left-0 right-0 top-full z-40 mt-1 max-h-36 overflow-y-auto rounded-2xl border shadow-lg ${darkMode ? 'border-slate-700 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+                                  {!direccionModal && sugerenciasOrigen.length > 0 && (
+                                    <div className={`absolute left-0 right-0 top-full z-40 mt-1 max-h-36 overflow-y-auto rounded-2xl border shadow-lg ${darkMode ? 'border-slate-700 bg-slate-900' : 'border-orange-100 bg-white'}`}>
                                       {sugerenciasOrigen.map((sugerencia, indice) => (
                                         <button type="button" key={`${sugerencia.display_name}-${indice}`} onClick={() => seleccionarSugerencia(sugerencia, 'origen')} className={`block w-full border-b p-2 text-left text-xs last:border-0 ${darkMode ? 'border-slate-800 text-slate-200 hover:bg-slate-800' : 'border-orange-50 text-slate-700 hover:bg-orange-50'}`}>{sugerencia.display_name}</button>
                                       ))}
-                                    </span>
+                                      <button type="button" disabled={buscandoDireccion.origen} onClick={() => void buscarLugaresPorTexto(origenInput, 'origen')} className={`block w-full p-2 text-left text-xs font-bold text-[#FF5722] disabled:opacity-50 ${darkMode ? 'hover:bg-slate-800' : 'hover:bg-orange-50'}`}>
+                                        Buscar más resultados en Google Maps
+                                      </button>
+                                    </div>
+                                  )}
+                                  {!buscandoDireccion.origen && origenInput.trim().length >= 3 && sugerenciasOrigen.length === 0 && (
+                                    <button type="button" onClick={() => void buscarLugaresPorTexto(origenInput, 'origen')} className="mt-1 text-left text-[10px] font-semibold text-[#FF5722]">
+                                      Buscar en Google Maps o elegir el punto en el mapa.
+                                    </button>
                                   )}
                                 </div>
                                 <div className="relative min-w-0">
@@ -4262,7 +4586,7 @@ export default function App() {
                                     {serviceType === 'viajes' ? 'Destino del viaje' : 'Destino'}
                                   </label>
                                   <div className="mt-1 flex gap-2">
-                                    <input id="solicitud-destino" type="text" value={destinoInput} onChange={event => buscarDireccionGeocoding(event.target.value, 'destino')} onKeyDown={event => manejarEnterEnDireccion(event, 'destino')} placeholder="Dirección, coordenadas o enlace de Maps" className={`min-w-0 flex-1 rounded-2xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-700 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50 text-slate-900'}`} />
+                                    <input id="solicitud-destino" type="text" value={destinoInput} readOnly aria-haspopup="dialog" onClick={() => abrirModalDireccion('destino')} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); abrirModalDireccion('destino'); } }} placeholder="Dirección, negocio, coordenadas o enlace de Maps" className={`min-w-0 flex-1 cursor-pointer rounded-2xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-700 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50 text-slate-900'}`} />
                                     <button type="button" onClick={() => obtenerUbicacionActual('destino')} disabled={ubicacionCargando} aria-label="Usar mi ubicación como destino" title="Usar mi ubicación como destino" className="inline-flex shrink-0 items-center justify-center rounded-2xl border border-orange-200 bg-orange-50 px-3 text-[#FF5722] disabled:opacity-50 dark:border-orange-900 dark:bg-orange-950/30">
                                       <Navigation size={17} className={ubicacionCargando && objetivoUbicacion === 'destino' ? 'animate-pulse' : ''} />
                                     </button>
@@ -4270,12 +4594,20 @@ export default function App() {
                                       <MapPin size={17} />
                                     </button>
                                   </div>
-                                  {sugerenciasDestino.length > 0 && (
-                                    <span className={`absolute left-0 right-0 top-full z-40 mt-1 max-h-36 overflow-y-auto rounded-2xl border shadow-lg ${darkMode ? 'border-slate-700 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+                                  {!direccionModal && sugerenciasDestino.length > 0 && (
+                                    <div className={`absolute left-0 right-0 top-full z-40 mt-1 max-h-36 overflow-y-auto rounded-2xl border shadow-lg ${darkMode ? 'border-slate-700 bg-slate-900' : 'border-orange-100 bg-white'}`}>
                                       {sugerenciasDestino.map((sugerencia, indice) => (
                                         <button type="button" key={`${sugerencia.display_name}-${indice}`} onClick={() => seleccionarSugerencia(sugerencia, 'destino')} className={`block w-full border-b p-2 text-left text-xs last:border-0 ${darkMode ? 'border-slate-800 text-slate-200 hover:bg-slate-800' : 'border-orange-50 text-slate-700 hover:bg-orange-50'}`}>{sugerencia.display_name}</button>
                                       ))}
-                                    </span>
+                                      <button type="button" disabled={buscandoDireccion.destino} onClick={() => void buscarLugaresPorTexto(destinoInput, 'destino')} className={`block w-full p-2 text-left text-xs font-bold text-[#FF5722] disabled:opacity-50 ${darkMode ? 'hover:bg-slate-800' : 'hover:bg-orange-50'}`}>
+                                        Buscar más resultados en Google Maps
+                                      </button>
+                                    </div>
+                                  )}
+                                  {!buscandoDireccion.destino && destinoInput.trim().length >= 3 && sugerenciasDestino.length === 0 && (
+                                    <button type="button" onClick={() => void buscarLugaresPorTexto(destinoInput, 'destino')} className="mt-1 text-left text-[10px] font-semibold text-[#FF5722]">
+                                      Buscar en Google Maps o elegir el punto en el mapa.
+                                    </button>
                                   )}
                                 </div>
                               </div>
