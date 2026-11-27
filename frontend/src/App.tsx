@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { Activity, Bike, MapPin, ArrowLeft, ArrowRight, Camera, ImagePlus, Mic, MicOff, User, Eye, EyeOff, Clock, Send, Power, Star, DollarSign, XCircle, Navigation, CheckCircle2, Circle, Package, ShoppingBag, CarFront, LogOut, Users, UserRound, ChevronDown, Bell, BellOff } from 'lucide-react';
+import { Activity, Bike, MapPin, ArrowLeft, ArrowRight, Camera, ImagePlus, Mic, MicOff, User, Eye, EyeOff, Clock, Send, Power, Star, Sun, Moon, Monitor, DollarSign, XCircle, Navigation, CheckCircle2, Circle, Package, ShoppingBag, CarFront, LogOut, Users, UserRound, ChevronDown, Bell, BellOff } from 'lucide-react';
 import { App as CapacitorApp } from '@capacitor/app';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { PushNotifications } from '@capacitor/push-notifications';
@@ -5065,26 +5065,36 @@ export default function App() {
                       </button>
                     </div>
                   )}
-                  <div className={`flex items-center justify-between gap-4 rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-950/60' : 'border-slate-100 bg-slate-50'}`}>
+                  <div className={`space-y-4 rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-950/60' : 'border-slate-100 bg-slate-50'}`}>
                     <div>
                       <h3 className={`text-sm font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Apariencia</h3>
-                      <p className="mt-1 text-xs text-slate-500">Tema de la aplicación</p>
+                      <p className="mt-1 text-xs text-slate-500">Elige cómo se muestra Llévalo</p>
                     </div>
-                    <select
-                      aria-label="Preferencia de apariencia"
-                      value={preferenciaTema}
-                      onChange={event => {
-                        const value = event.currentTarget.value;
-                        if (value === 'system' || value === 'light' || value === 'dark') {
-                          cambiarPreferenciaTema(value);
-                        }
-                      }}
-                      className={`max-w-[200px] rounded-xl border px-3 py-2 text-xs font-bold ${darkMode ? 'border-slate-700 bg-slate-900 text-white' : 'border-slate-200 bg-white text-slate-800'}`}
-                    >
-                      <option value="system">Predeterminado del sistema</option>
-                      <option value="light">Claro</option>
-                      <option value="dark">Oscuro</option>
-                    </select>
+                    <div role="group" aria-label="Preferencia de apariencia" className="grid grid-cols-3 gap-2">
+                      {(['system', 'light', 'dark'] as const).map(preference => {
+                        const selected = preferenciaTema === preference;
+                        const label = preference === 'system' ? 'Sistema' : preference === 'light' ? 'Claro' : 'Oscuro';
+                        const Icon = preference === 'system' ? Monitor : preference === 'light' ? Sun : Moon;
+                        return (
+                          <button
+                            key={preference}
+                            type="button"
+                            aria-pressed={selected}
+                            onClick={() => cambiarPreferenciaTema(preference)}
+                            className={`flex min-w-0 flex-col items-center justify-center gap-1 rounded-xl border px-2 py-2.5 text-[11px] font-bold transition-colors ${
+                              selected
+                                ? 'border-[#FF5722] bg-[#FF5722]/10 text-[#FF5722]'
+                                : darkMode
+                                  ? 'border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-600'
+                                  : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                            }`}
+                          >
+                            <Icon size={16} aria-hidden="true" />
+                            <span>{label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
 
