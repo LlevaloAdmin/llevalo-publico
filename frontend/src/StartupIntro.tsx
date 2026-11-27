@@ -5,7 +5,7 @@ interface StartupIntroProps {
   children: ReactNode;
 }
 
-const STARTUP_DURATION_MS = 2700;
+const STARTUP_DURATION_MS = 3500;
 const FADE_DURATION_MS = 220;
 
 export function StartupIntro({ enabled, children }: StartupIntroProps) {

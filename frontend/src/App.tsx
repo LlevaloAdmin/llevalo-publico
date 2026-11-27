@@ -419,20 +419,19 @@ const crearParametrosBusquedaAdmin = (
 
 interface AdminAccordionProps {
   title: string;
-  description: string;
   darkMode: boolean;
   badge?: React.ReactNode;
+  defaultOpen?: boolean;
   children: React.ReactNode;
 }
 
-function AdminAccordion({ title, description, darkMode, badge, children }: AdminAccordionProps) {
+function AdminAccordion({ title, darkMode, badge, defaultOpen = true, children }: AdminAccordionProps) {
+  const [isOpen, setIsOpen] = useState(defaultOpen);
+
   return (
-    <details className={`admin-accordion rounded-3xl border shadow-sm ${darkMode ? 'border-slate-800 bg-slate-900 text-white' : 'border-orange-100 bg-white'}`}>
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 p-5 transition-colors duration-200 hover:bg-slate-50 dark:hover:bg-slate-800/50">
-        <div className="min-w-0">
-          <h3 className="text-base font-black">{title}</h3>
-          <p className="mt-1 text-xs text-slate-500">{description}</p>
-        </div>
+    <details open={isOpen} onToggle={event => setIsOpen(event.currentTarget.open)} className={`admin-accordion rounded-3xl border shadow-sm ${darkMode ? 'border-slate-800 bg-slate-900 text-white' : 'border-orange-100 bg-white'}`}>
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 p-4 transition-colors duration-200 hover:bg-slate-50 dark:hover:bg-slate-800/50">
+        <h3 className="min-w-0 text-sm font-black">{title}</h3>
         <span className="flex shrink-0 items-center gap-2">
           {badge}
           <ChevronDown size={18} className="admin-accordion-chevron text-slate-500" />
@@ -447,6 +446,7 @@ function AdminAccordion({ title, description, darkMode, badge, children }: Admin
 
 export default function App() {
   type Tab = 'home' | 'cliente' | 'repartidor' | 'perfil' | 'auth' | 'admin';
+  type SeccionAdmin = 'actividad' | 'solicitudes' | 'pedidos' | 'pagos' | 'tarifas' | 'archivos';
   const accionCorreoInicial: AccionCorreo | null = (() => {
     if (typeof window === 'undefined') return null;
     const parametros = new URLSearchParams(window.location.hash.slice(1));
@@ -562,7 +562,6 @@ export default function App() {
   }, [coordsUsuarioGPS]);
   const [ubicacionCargando, setUbicacionCargando] = useState(true);
   const [errorUbicacion, setErrorUbicacion] = useState('');
-  const [rumboUsuario, setRumboUsuario] = useState<number | null>(null);
   const disponiblePushRepartidor = repartidorOnline && Boolean(coordsUsuarioGPS);
   const disponiblePushRepartidorRef = useRef(disponiblePushRepartidor);
   useEffect(() => {
@@ -570,6 +569,7 @@ export default function App() {
   }, [disponiblePushRepartidor]);
   const [recentrarMapa, setRecentrarMapa] = useState(0);
   const objetivoUbicacionRef = useRef<'origen' | 'destino' | null>(null);
+  const [objetivoUbicacion, setObjetivoUbicacion] = useState<'origen' | 'destino' | null>(null);
 
   const [origenInput, setOrigenInput] = useState('');
   const [coordsOrigen, setCoordsOrigen] = useState<{ lat: number; lng: number } | null>(null);
@@ -603,6 +603,7 @@ export default function App() {
   const [tasasCambio, setTasasCambio] = useState<TasasCambio | null>(null);
   const [cargandoTarifas, setCargandoTarifas] = useState(false);
   const [errorTarifas, setErrorTarifas] = useState('');
+  const [seccionAdmin, setSeccionAdmin] = useState<SeccionAdmin>('actividad');
   const [modoBusquedaAdmin, setModoBusquedaAdmin] = useState<ModoBusquedaAdmin>('codigo');
   const [busquedaAdmin, setBusquedaAdmin] = useState('');
   const [fechaBusquedaAdmin, setFechaBusquedaAdmin] = useState('');
@@ -873,7 +874,7 @@ export default function App() {
     if (Capacitor.isNativePlatform()) window.location.href = `llevalo://theme/${nuevo ? 'dark' : 'light'}`;
   };
 
-  const sincronizarDatos = async () => {
+  const sincronizarDatos = useCallback(async () => {
     try {
       const res = await authenticatedFetch(`${API_URL}/api/pedidos`);
       if (res.ok) {
@@ -895,7 +896,7 @@ export default function App() {
         setActiveTab('home');
       }
     } catch (e) { console.error('Error sincronizando:', e); }
-  };
+  }, [usuario]);
 
   useEffect(() => {
     if (!usuario) return;
@@ -904,7 +905,7 @@ export default function App() {
     sincronizarDatos();
     const intervalo = setInterval(sincronizarDatos, 3000);
     return () => clearInterval(intervalo);
-  }, [repartidorOnline, usuario]);
+  }, [repartidorOnline, sincronizarDatos, usuario]);
 
   useEffect(() => {
     if (!usuarioId) return;
@@ -1035,23 +1036,10 @@ export default function App() {
     }
   };
 
-  const solicitarPermisoOrientacion = () => {
-    if (typeof DeviceOrientationEvent !== 'undefined') {
-      const orientationApi = DeviceOrientationEvent as typeof DeviceOrientationEvent & {
-        requestPermission?: () => Promise<'granted' | 'denied'>;
-      };
-      if (orientationApi.requestPermission) {
-        void orientationApi.requestPermission().catch(error => {
-          console.error('No se pudo activar la brújula del dispositivo:', error);
-        });
-      }
-    }
-  };
-
   const obtenerUbicacionActual = (objetivo: 'origen' | 'destino' | null = null) => {
-    solicitarPermisoOrientacion();
     geocodificacionGPSRef.current?.abort();
     objetivoUbicacionRef.current = objetivo;
+    setObjetivoUbicacion(objetivo);
     setErrorUbicacion('');
     setErrorRuta('');
     if (objetivo) {
@@ -1324,7 +1312,6 @@ export default function App() {
 
   const irAPedidos = () => {
     setPasoSolicitud('tipo');
-    solicitarPermisoOrientacion();
     navegarA('cliente');
     void cargarConfiguracionPago();
     void cargarTarifas();
@@ -1860,20 +1847,6 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (activeTab !== 'cliente' && activeTab !== 'repartidor') return;
-    const handleOrientation = (event: DeviceOrientationEvent & { webkitCompassHeading?: number }) => {
-      const heading = typeof event.webkitCompassHeading === 'number' && Number.isFinite(event.webkitCompassHeading)
-        ? event.webkitCompassHeading
-        : event.alpha === null ? null : (360 - event.alpha + 360) % 360;
-      if (heading !== null && Number.isFinite(heading)) {
-        setRumboUsuario(Math.round(heading) % 360);
-      }
-    };
-    window.addEventListener('deviceorientation', handleOrientation, true);
-    return () => window.removeEventListener('deviceorientation', handleOrientation, true);
-  }, [activeTab]);
-
-  useEffect(() => {
     if (Capacitor.isNativePlatform()
       || usuario?.rol !== 'repartidor'
       || !avisosRepartidorActivos
@@ -2079,7 +2052,7 @@ export default function App() {
     </section>
   );
 
-  const cambiarEstadoPedido = async (pedidoId: number, nuevoEstado: 'entregado_repartidor' | 'completado' | 'cancelado') => {
+  const cambiarEstadoPedido = useCallback(async (pedidoId: number, nuevoEstado: 'entregado_repartidor' | 'completado' | 'cancelado') => {
     try {
       const response = await authenticatedFetch(`${API_URL}/api/pedidos/${pedidoId}/estado`, {
         method: 'PUT',
@@ -2095,7 +2068,7 @@ export default function App() {
     } catch (error) {
       alert(error instanceof Error ? error.message : 'No se pudo actualizar el estado del pedido.');
     }
-  };
+  }, [sincronizarDatos]);
 
   const guardarSesionAutenticada = (data: { token: string; usuario: UsuarioSesion }) => {
     localStorage.setItem('llevalo_token', data.token);
@@ -2767,7 +2740,7 @@ export default function App() {
       // oxlint-disable-next-line react/set-state-in-effect
       void cambiarEstadoPedido(pedidoAsignadoRepartidor.id, 'entregado_repartidor');
     }
-  }, [coordsUsuarioGPS, pedidoAsignadoRepartidor, usuario?.rol]);
+  }, [cambiarEstadoPedido, coordsUsuarioGPS, pedidoAsignadoRepartidor, usuario?.rol]);
 
   const cambiarEstadoRepartidor = async () => {
     if (!usuario || usuario.rol !== 'repartidor' || cambiandoEstadoRepartidor) return;
@@ -2956,7 +2929,7 @@ export default function App() {
   }, [coordsUsuarioGPS, usuario?.rol, pedidoAsignadoRepartidorId]);
 
   return (
-    <div className={`app-shell flex flex-col font-sans transition-colors duration-300 ${usuario ? 'app-shell-authenticated' : ''} ${darkMode ? 'dark bg-slate-950 text-slate-100' : 'bg-[#FDFBF7] text-slate-800'}`}>
+    <div className={`app-shell flex flex-col font-sans transition-colors duration-300 ${usuario ? 'app-shell-authenticated' : ''} ${pasoSolicitud ? 'solicitud-open' : ''} ${darkMode ? 'dark bg-slate-950 text-slate-100' : 'bg-[#FDFBF7] text-slate-800'}`}>
       <header className={`app-header border-b backdrop-blur sticky top-0 z-50 px-4 md:px-10 py-3 flex flex-wrap justify-between items-center gap-y-2 shadow-sm transition-colors ${darkMode ? 'bg-slate-950/90 border-slate-800' : 'bg-[#FDFBF7]/90 border-orange-100'}`}>
         {usuario ? (
           <div className="flex items-center space-x-3" aria-label="Llévalo">
@@ -3163,7 +3136,7 @@ export default function App() {
         {activeTab === 'home' && usuario && (
           <section className="w-full max-w-5xl mx-auto py-6 md:py-12 space-y-6">
             <div className={`dashboard-welcome rounded-3xl p-6 md:p-10 border shadow-sm ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-orange-100'}`}>
-              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-6">
+              <div className="flex flex-col items-center gap-6 text-center md:flex-row md:justify-center">
                 <div className="space-y-3">
                   <h1 className={`text-3xl md:text-5xl font-black tracking-tight ${darkMode ? 'text-white' : 'text-slate-900'}`}>
                     ¡Hola, {usuario.nombre.split(' ')[0]}!
@@ -3184,17 +3157,17 @@ export default function App() {
 
             {usuario.rol === 'cliente' ? (
               <div className="dashboard-service-carousel mobile-service-carousel grid gap-4 md:grid-cols-2" role="region" aria-label="Accesos rápidos del cliente" aria-roledescription="carrusel" tabIndex={0}>
-                <button onClick={() => { setServiceType('envios'); irAPedidos(); }} className={`dashboard-action-card rounded-3xl border p-6 text-left transition hover:-translate-y-0.5 ${darkMode ? 'bg-slate-900 border-slate-800 hover:border-orange-700' : 'bg-white border-orange-100 hover:border-orange-300'}`}>
+                <button onClick={() => { setServiceType('envios'); irAPedidos(); }} className={`dashboard-action-card flex flex-col items-center rounded-3xl border p-6 text-center transition hover:-translate-y-0.5 ${darkMode ? 'bg-slate-900 border-slate-800 hover:border-orange-700' : 'bg-white border-orange-100 hover:border-orange-300'}`}>
                   <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-orange-100 text-[#FF5722]"><Package size={20} /></div>
                   <h2 className="font-black">Pedir un envío</h2>
                   <p className="mt-2 text-xs text-slate-500">Comida, mercado, mandados y más.</p>
-                  <span className="mt-4 inline-flex items-center gap-1 text-xs font-bold text-[#FF5722]">Continuar <ArrowRight size={14} /></span>
+                  <span className="mt-4 inline-flex items-center justify-center gap-1 text-xs font-bold text-[#FF5722]">Continuar <ArrowRight size={14} /></span>
                 </button>
-                <button onClick={() => { setServiceType('viajes'); irAPedidos(); }} className={`dashboard-action-card rounded-3xl border p-6 text-left transition hover:-translate-y-0.5 ${darkMode ? 'bg-slate-900 border-slate-800 hover:border-orange-700' : 'bg-white border-orange-100 hover:border-orange-300'}`}>
+                <button onClick={() => { setServiceType('viajes'); irAPedidos(); }} className={`dashboard-action-card flex flex-col items-center rounded-3xl border p-6 text-center transition hover:-translate-y-0.5 ${darkMode ? 'bg-slate-900 border-slate-800 hover:border-orange-700' : 'bg-white border-orange-100 hover:border-orange-300'}`}>
                   <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-700"><CarFront size={20} /></div>
                   <h2 className="font-black">Pedir un viaje</h2>
                   <p className="mt-2 text-xs text-slate-500">Indica tu origen y destino para ver el costo.</p>
-                  <span className="mt-4 inline-flex items-center gap-1 text-xs font-bold text-[#FF5722]">Continuar <ArrowRight size={14} /></span>
+                  <span className="mt-4 inline-flex items-center justify-center gap-1 text-xs font-bold text-[#FF5722]">Continuar <ArrowRight size={14} /></span>
                 </button>
               </div>
             ) : (
@@ -3891,63 +3864,13 @@ export default function App() {
                           )}
 
                           {pasoSolicitud === 'ruta' && (
-                            <div className="mx-auto flex w-full max-w-6xl min-h-0 flex-1 flex-col gap-3 py-3 md:gap-4">
-                              <div className="grid gap-2 sm:grid-cols-2">
-                                <label className="relative block text-[10px] font-bold text-slate-500">
-                                  {serviceType === 'viajes' ? 'Punto de partida' : 'Origen'}
-                                  <div className="mt-1 flex gap-2">
-                                    <input type="text" value={origenInput} onChange={event => buscarDireccionGeocoding(event.target.value, 'origen')} placeholder="Sector, calle o establecimiento" className={`min-w-0 flex-1 rounded-2xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-700 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50 text-slate-900'}`} />
-                                    <button type="button" onClick={() => obtenerUbicacionActual('origen')} disabled={ubicacionCargando} aria-label="Usar mi ubicación como origen" title="Usar mi ubicación como origen" className="inline-flex items-center justify-center rounded-2xl border border-orange-200 bg-orange-50 px-3 text-[#FF5722] disabled:opacity-50 dark:border-orange-900 dark:bg-orange-950/30">
-                                      <Navigation size={17} className={ubicacionCargando && objetivoUbicacionRef.current === 'origen' ? 'animate-pulse' : ''} />
-                                    </button>
-                                  </div>
-                                  {sugerenciasOrigen.length > 0 && (
-                                    <span className={`absolute left-0 right-0 top-full z-40 mt-1 max-h-36 overflow-y-auto rounded-2xl border shadow-lg ${darkMode ? 'border-slate-700 bg-slate-900' : 'border-orange-100 bg-white'}`}>
-                                      {sugerenciasOrigen.map((sugerencia, indice) => (
-                                        <button type="button" key={`${sugerencia.display_name}-${indice}`} onClick={() => seleccionarSugerencia(sugerencia, 'origen')} className={`block w-full border-b p-2 text-left text-xs last:border-0 ${darkMode ? 'border-slate-800 text-slate-200 hover:bg-slate-800' : 'border-orange-50 text-slate-700 hover:bg-orange-50'}`}>{sugerencia.display_name}</button>
-                                      ))}
-                                    </span>
-                                  )}
-                                </label>
-                                <label className="relative block text-[10px] font-bold text-slate-500">
-                                  {serviceType === 'viajes' ? 'Destino del viaje' : 'Destino'}
-                                  <div className="mt-1 flex gap-2">
-                                    <input type="text" value={destinoInput} onChange={event => buscarDireccionGeocoding(event.target.value, 'destino')} placeholder="Sector, calle o establecimiento" className={`min-w-0 flex-1 rounded-2xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-700 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50 text-slate-900'}`} />
-                                    <button type="button" onClick={() => obtenerUbicacionActual('destino')} disabled={ubicacionCargando} aria-label="Usar mi ubicación como destino" title="Usar mi ubicación como destino" className="inline-flex items-center justify-center rounded-2xl border border-orange-200 bg-orange-50 px-3 text-[#FF5722] disabled:opacity-50 dark:border-orange-900 dark:bg-orange-950/30">
-                                      <Navigation size={17} className={ubicacionCargando && objetivoUbicacionRef.current === 'destino' ? 'animate-pulse' : ''} />
-                                    </button>
-                                  </div>
-                                  {sugerenciasDestino.length > 0 && (
-                                    <span className={`absolute left-0 right-0 top-full z-40 mt-1 max-h-36 overflow-y-auto rounded-2xl border shadow-lg ${darkMode ? 'border-slate-700 bg-slate-900' : 'border-orange-100 bg-white'}`}>
-                                      {sugerenciasDestino.map((sugerencia, indice) => (
-                                        <button type="button" key={`${sugerencia.display_name}-${indice}`} onClick={() => seleccionarSugerencia(sugerencia, 'destino')} className={`block w-full border-b p-2 text-left text-xs last:border-0 ${darkMode ? 'border-slate-800 text-slate-200 hover:bg-slate-800' : 'border-orange-50 text-slate-700 hover:bg-orange-50'}`}>{sugerencia.display_name}</button>
-                                      ))}
-                                    </span>
-                                  )}
-                                </label>
-                              </div>
-
-                              {(errorGeocoding || errorRuta || errorUbicacion) && (
-                                <p role="alert" className="rounded-2xl border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
-                                  {errorRuta || errorGeocoding || errorUbicacion}
-                                </p>
-                              )}
-
-                              <div className="relative min-h-[220px] flex-1 overflow-hidden rounded-3xl border shadow-sm">
-                                <div className="absolute left-3 right-3 top-3 z-20 flex flex-wrap items-center gap-2">
-                                  <button type="button" onClick={() => obtenerUbicacionActual()} disabled={ubicacionCargando} className={`inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-xs font-bold shadow-md disabled:opacity-60 ${darkMode ? 'border-slate-600 bg-slate-800/95 text-slate-100' : 'border-white/80 bg-white/95 text-slate-800'}`}>
-                                    <Navigation size={15} className={ubicacionCargando ? 'animate-pulse' : 'text-[#FF5722]'} />
-                                    {ubicacionCargando ? 'Buscando...' : 'Mi ubicación'}
-                                  </button>
-                                  <button type="button" aria-pressed={modoSeleccionMapa === 'origen'} onClick={() => setModoSeleccionMapa('origen')} className={`rounded-2xl border px-3 py-2 text-xs font-black shadow-md ${modoSeleccionMapa === 'origen' ? 'border-emerald-600 bg-emerald-600 text-white' : darkMode ? 'border-emerald-900 bg-slate-900 text-emerald-300' : 'border-emerald-200 bg-white text-emerald-700'}`}>Origen</button>
-                                  <button type="button" aria-pressed={modoSeleccionMapa === 'destino'} onClick={() => setModoSeleccionMapa('destino')} className={`rounded-2xl border px-3 py-2 text-xs font-black shadow-md ${modoSeleccionMapa === 'destino' ? 'border-red-600 bg-red-600 text-white' : darkMode ? 'border-red-900 bg-slate-900 text-red-300' : 'border-red-200 bg-white text-red-700'}`}>Destino</button>
-                                </div>
+                            <div className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col gap-2.5 py-2 md:gap-3">
+                              <div className="relative min-h-[220px] h-[min(43dvh,520px)] flex-1 overflow-hidden rounded-3xl border shadow-sm">
                                 <React.Suspense fallback={<div className="flex h-full items-center justify-center bg-slate-100 text-xs font-bold text-slate-500">Cargando mapa...</div>}>
                                   <MapaLibre
                                     coordsOrigen={coordsOrigen}
                                     coordsDestino={coordsDestino}
                                     coordsUsuario={coordsUsuarioGPS}
-                                    rumboUsuario={rumboUsuario}
                                     modoSeleccion={modoSeleccionMapa}
                                     onMapClick={manejarClicEnMapa}
                                     onRutaCalculada={(km, min) => { setDistanciaKm(km); setTiempoEstimadoMin(min); setErrorRuta(''); }}
@@ -3961,10 +3884,61 @@ export default function App() {
                                 </React.Suspense>
                               </div>
 
-                              <div className="flex items-center justify-between gap-3">
-                                <button type="button" onClick={() => setPasoSolicitud('tipo')} className={`rounded-2xl border px-4 py-3 text-xs font-bold ${darkMode ? 'border-slate-700 text-slate-200' : 'border-slate-200 text-slate-600'}`}><ArrowLeft size={15} className="mr-1 inline" /> Atrás</button>
-                                <span className="text-right text-[11px] font-semibold text-slate-500">{rutaCompletaLista ? `${distanciaKm} km · ~${tiempoEstimadoMin} min` : 'Completa origen y destino para continuar'}</span>
-                                <button type="button" disabled={!rutaCompletaLista || esperandoNombreDireccion || distanciaKm <= 0 || tiempoEstimadoMin <= 0} onClick={() => { setPasoSolicitud('pago'); void cargarConfiguracionPago(); }} className="rounded-2xl bg-[#FF5722] px-4 py-3 text-xs font-black text-white shadow-md disabled:cursor-not-allowed disabled:opacity-50">Continuar <ArrowRight size={15} className="ml-1 inline" /></button>
+                              <div className="grid gap-2 sm:grid-cols-2">
+                                <div className="relative min-w-0">
+                                  <label htmlFor="solicitud-origen" className="block text-[10px] font-bold text-slate-500">
+                                    {serviceType === 'viajes' ? 'Punto de partida' : 'Origen'}
+                                  </label>
+                                  <div className="mt-1 flex gap-2">
+                                    <input id="solicitud-origen" type="text" value={origenInput} onChange={event => buscarDireccionGeocoding(event.target.value, 'origen')} placeholder="Sector, calle o establecimiento" className={`min-w-0 flex-1 rounded-2xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-700 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50 text-slate-900'}`} />
+                                    <button type="button" onClick={() => obtenerUbicacionActual('origen')} disabled={ubicacionCargando} aria-label="Usar mi ubicación como origen" title="Usar mi ubicación como origen" className="inline-flex shrink-0 items-center justify-center rounded-2xl border border-orange-200 bg-orange-50 px-3 text-[#FF5722] disabled:opacity-50 dark:border-orange-900 dark:bg-orange-950/30">
+                                      <Navigation size={17} className={ubicacionCargando && objetivoUbicacion === 'origen' ? 'animate-pulse' : ''} />
+                                    </button>
+                                    <button type="button" aria-pressed={modoSeleccionMapa === 'origen'} onClick={() => setModoSeleccionMapa('origen')} aria-label="Elegir origen en el mapa" title="Elegir origen en el mapa" className={`inline-flex shrink-0 items-center justify-center rounded-2xl border px-3 transition ${modoSeleccionMapa === 'origen' ? 'border-emerald-600 bg-emerald-600 text-white' : darkMode ? 'border-emerald-900 bg-slate-900 text-emerald-300' : 'border-emerald-200 bg-white text-emerald-700'}`}>
+                                      <MapPin size={17} />
+                                    </button>
+                                  </div>
+                                  {sugerenciasOrigen.length > 0 && (
+                                    <span className={`absolute left-0 right-0 top-full z-40 mt-1 max-h-36 overflow-y-auto rounded-2xl border shadow-lg ${darkMode ? 'border-slate-700 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+                                      {sugerenciasOrigen.map((sugerencia, indice) => (
+                                        <button type="button" key={`${sugerencia.display_name}-${indice}`} onClick={() => seleccionarSugerencia(sugerencia, 'origen')} className={`block w-full border-b p-2 text-left text-xs last:border-0 ${darkMode ? 'border-slate-800 text-slate-200 hover:bg-slate-800' : 'border-orange-50 text-slate-700 hover:bg-orange-50'}`}>{sugerencia.display_name}</button>
+                                      ))}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="relative min-w-0">
+                                  <label htmlFor="solicitud-destino" className="block text-[10px] font-bold text-slate-500">
+                                    {serviceType === 'viajes' ? 'Destino del viaje' : 'Destino'}
+                                  </label>
+                                  <div className="mt-1 flex gap-2">
+                                    <input id="solicitud-destino" type="text" value={destinoInput} onChange={event => buscarDireccionGeocoding(event.target.value, 'destino')} placeholder="Sector, calle o establecimiento" className={`min-w-0 flex-1 rounded-2xl border px-3 py-2.5 text-sm ${darkMode ? 'border-slate-700 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50 text-slate-900'}`} />
+                                    <button type="button" onClick={() => obtenerUbicacionActual('destino')} disabled={ubicacionCargando} aria-label="Usar mi ubicación como destino" title="Usar mi ubicación como destino" className="inline-flex shrink-0 items-center justify-center rounded-2xl border border-orange-200 bg-orange-50 px-3 text-[#FF5722] disabled:opacity-50 dark:border-orange-900 dark:bg-orange-950/30">
+                                      <Navigation size={17} className={ubicacionCargando && objetivoUbicacion === 'destino' ? 'animate-pulse' : ''} />
+                                    </button>
+                                    <button type="button" aria-pressed={modoSeleccionMapa === 'destino'} onClick={() => setModoSeleccionMapa('destino')} aria-label="Elegir destino en el mapa" title="Elegir destino en el mapa" className={`inline-flex shrink-0 items-center justify-center rounded-2xl border px-3 transition ${modoSeleccionMapa === 'destino' ? 'border-red-600 bg-red-600 text-white' : darkMode ? 'border-red-900 bg-slate-900 text-red-300' : 'border-red-200 bg-white text-red-700'}`}>
+                                      <MapPin size={17} />
+                                    </button>
+                                  </div>
+                                  {sugerenciasDestino.length > 0 && (
+                                    <span className={`absolute left-0 right-0 top-full z-40 mt-1 max-h-36 overflow-y-auto rounded-2xl border shadow-lg ${darkMode ? 'border-slate-700 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+                                      {sugerenciasDestino.map((sugerencia, indice) => (
+                                        <button type="button" key={`${sugerencia.display_name}-${indice}`} onClick={() => seleccionarSugerencia(sugerencia, 'destino')} className={`block w-full border-b p-2 text-left text-xs last:border-0 ${darkMode ? 'border-slate-800 text-slate-200 hover:bg-slate-800' : 'border-orange-50 text-slate-700 hover:bg-orange-50'}`}>{sugerencia.display_name}</button>
+                                      ))}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+
+                              {(errorGeocoding || errorRuta || errorUbicacion) && (
+                                <p role="alert" className="rounded-2xl border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+                                  {errorRuta || errorGeocoding || errorUbicacion}
+                                </p>
+                              )}
+
+                              <div className="flex items-center justify-between gap-2">
+                                <button type="button" onClick={() => setPasoSolicitud('tipo')} className={`shrink-0 rounded-2xl border px-3 py-2.5 text-xs font-bold ${darkMode ? 'border-slate-700 text-slate-200' : 'border-slate-200 text-slate-600'}`}><ArrowLeft size={15} className="mr-1 inline" /> Atrás</button>
+                                <span className="min-w-0 text-center text-[10px] font-semibold text-slate-500">{rutaCompletaLista ? `${distanciaKm} km · ~${tiempoEstimadoMin} min` : `Toca el mapa para elegir ${modoSeleccionMapa}`}</span>
+                                <button type="button" disabled={!rutaCompletaLista || esperandoNombreDireccion || distanciaKm <= 0 || tiempoEstimadoMin <= 0} onClick={() => { setPasoSolicitud('pago'); void cargarConfiguracionPago(); }} className="shrink-0 rounded-2xl bg-[#FF5722] px-3 py-2.5 text-xs font-black text-white shadow-md disabled:cursor-not-allowed disabled:opacity-50">Continuar <ArrowRight size={15} className="ml-1 inline" /></button>
                               </div>
                             </div>
                           )}
@@ -4081,7 +4055,6 @@ export default function App() {
                       ? { lat: pedidoActivoCliente.repartidor_lat, lng: pedidoActivoCliente.repartidor_lon }
                       : null)
                   }
-                  rumboUsuario={rumboUsuario}
                   modoSeleccion={modoSeleccionMapa}
                   onMapClick={manejarClicEnMapa}
                   onRutaCalculada={(km, min) => {
@@ -4380,7 +4353,6 @@ export default function App() {
                         : (pedidoAsignadoRepartidor?.estado === 'entregado_repartidor' ? { lat: pedidoAsignadoRepartidor.destino_lat, lng: pedidoAsignadoRepartidor.destino_lon } : null)
                     }
                     coordsUsuario={coordsUsuarioGPS}
-                    rumboUsuario={rumboUsuario}
                     mostrarRuta={Boolean(pedidoAsignadoRepartidor)}
                     mostrarPines={true}
                     navegacionActiva={Boolean(pedidoAsignadoRepartidor)}
@@ -4431,10 +4403,7 @@ export default function App() {
 
               {usuario.es_admin && (
                 <div className={`flex flex-col gap-3 border-b p-5 sm:flex-row sm:items-center sm:justify-between md:px-8 ${darkMode ? 'border-slate-800' : 'border-slate-100'}`}>
-                  <div>
-                    <h3 className="text-sm font-black">Herramientas de administración</h3>
-                    <p className="mt-1 text-xs text-slate-500">Revisa pagos, actividad y archivos de chat.</p>
-                  </div>
+                  <h3 className="text-sm font-black">Administración</h3>
                   <button type="button" onClick={() => { navegarA('admin'); void cargarPanelAdmin(); }} className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#FF5722] px-4 py-3 text-xs font-black text-white shadow-sm transition hover:bg-[#F4511E]">
                     <Activity size={16} /> Abrir administración
                   </button>
@@ -4445,12 +4414,9 @@ export default function App() {
                 <section className={`border-b p-5 md:px-8 ${darkMode ? 'border-slate-800' : 'border-slate-100'}`} aria-labelledby="rating-history-title">
                   <div className="mb-4">
                     <h3 id="rating-history-title" className={`text-base font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Calificaciones de pedidos</h3>
-                    <p className="mt-1 text-xs text-slate-500">Después de completar un pedido, ambas personas pueden dejar una calificación.</p>
                   </div>
                   {resumenCalificaciones.pedidos.length === 0 ? (
-                    <p className={`rounded-2xl border p-4 text-xs ${darkMode ? 'border-slate-700 bg-slate-900 text-slate-300' : 'border-slate-100 bg-slate-50 text-slate-600'}`}>
-                      Tus pedidos finalizados aparecerán aquí para que puedas calificar a la otra persona.
-                    </p>
+                    <p className="text-xs text-slate-500">Sin pedidos para calificar.</p>
                   ) : (
                     <div id="rating-history-list" className="space-y-3">
                       {resumenCalificaciones.pedidos
@@ -4527,7 +4493,6 @@ export default function App() {
                 <div className="space-y-4">
                   <div>
                     <h3 className={`text-base font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Datos de la cuenta</h3>
-                    <p className="mt-1 text-xs text-slate-500">Información asociada a tu inicio de sesión.</p>
                   </div>
                   <div className={`space-y-3 rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-950/60' : 'border-slate-100 bg-slate-50'}`}>
                     <div>
@@ -4541,7 +4506,6 @@ export default function App() {
                     <div>
                       <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Cédula de identidad</p>
                       <p className="mt-1 text-sm font-semibold">{usuario.cedula || 'No registrada en esta cuenta'}</p>
-                      <p className="mt-1 text-[10px] text-slate-500">La cédula no se puede modificar después del registro.</p>
                     </div>
                     {usuario.rol === 'repartidor' && (
                       <div>
@@ -4605,18 +4569,14 @@ export default function App() {
         )}
 
         {activeTab === 'admin' && usuario?.es_admin && (
-          <section className="mx-auto w-full max-w-5xl space-y-6 py-6 md:py-10">
-            <div className={`flex flex-col gap-4 rounded-3xl border p-6 shadow-sm sm:flex-row sm:items-center sm:justify-between ${darkMode ? 'border-slate-800 bg-slate-900 text-white' : 'border-orange-100 bg-white'}`}>
-              <div>
-                <p className="text-[11px] font-black uppercase tracking-[0.18em] text-[#FF5722]">Panel seguro</p>
-                <h2 className={`mt-1 text-2xl font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Panel de administración</h2>
-                <p className="mt-1 text-xs text-slate-500">Gestiona pedidos, tarifas, actividad y pagos de Llévalo.</p>
-              </div>
+          <section className="mx-auto w-full max-w-5xl space-y-4 py-4 md:space-y-5 md:py-8">
+            <div className={`flex flex-col gap-3 rounded-3xl border p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between ${darkMode ? 'border-slate-800 bg-slate-900 text-white' : 'border-orange-100 bg-white'}`}>
+              <h2 className={`text-xl font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Administración</h2>
               <div className="flex flex-wrap gap-2">
-                <button type="button" aria-pressed={usuario.rol === 'cliente'} onClick={() => void cambiarPerspectivaAdmin('cliente')} className={`rounded-xl border px-3 py-2.5 text-xs font-bold ${usuario.rol === 'cliente' ? 'border-[#FF5722] bg-orange-50 text-[#FF5722]' : 'border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-300'}`}>Usar como cliente</button>
-                <button type="button" aria-pressed={usuario.rol === 'repartidor'} onClick={() => void cambiarPerspectivaAdmin('repartidor')} className={`rounded-xl border px-3 py-2.5 text-xs font-bold ${usuario.rol === 'repartidor' ? 'border-[#FF5722] bg-orange-50 text-[#FF5722]' : 'border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-300'}`}>Usar como repartidor</button>
-                <button type="button" onClick={() => void cargarPanelAdmin()} disabled={cargandoAdmin} className="rounded-xl border border-orange-200 bg-orange-50 px-4 py-2.5 text-xs font-bold text-[#FF5722] disabled:opacity-50">
-                  {cargandoAdmin ? 'Actualizando…' : 'Actualizar panel'}
+                <button type="button" aria-pressed={usuario.rol === 'cliente'} onClick={() => void cambiarPerspectivaAdmin('cliente')} className={`rounded-xl border px-3 py-2 text-[11px] font-bold ${usuario.rol === 'cliente' ? 'border-[#FF5722] bg-orange-50 text-[#FF5722]' : 'border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-300'}`}>Usar como cliente</button>
+                <button type="button" aria-pressed={usuario.rol === 'repartidor'} onClick={() => void cambiarPerspectivaAdmin('repartidor')} className={`rounded-xl border px-3 py-2 text-[11px] font-bold ${usuario.rol === 'repartidor' ? 'border-[#FF5722] bg-orange-50 text-[#FF5722]' : 'border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-300'}`}>Usar como repartidor</button>
+                <button type="button" onClick={() => void cargarPanelAdmin()} disabled={cargandoAdmin} className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-[11px] font-bold text-[#FF5722] disabled:opacity-50">
+                  {cargandoAdmin ? 'Actualizando…' : 'Actualizar'}
                 </button>
               </div>
             </div>
@@ -4624,9 +4584,34 @@ export default function App() {
             {errorAdmin && <p role="alert" className={`rounded-xl border p-3 text-xs font-semibold ${darkMode ? 'border-red-900 bg-red-950/30 text-red-300' : 'border-red-200 bg-red-50 text-red-700'}`}>{errorAdmin}</p>}
             {mensajeAdmin && <p role="status" className={`rounded-xl border p-3 text-xs font-semibold ${darkMode ? 'border-emerald-900 bg-emerald-950/30 text-emerald-300' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>{mensajeAdmin}</p>}
 
+            <div role="tablist" aria-label="Secciones de administración" className={`admin-section-tabs flex gap-2 overflow-x-auto rounded-2xl border p-1.5 ${darkMode ? 'border-slate-800 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+              {([
+                ['actividad', 'Actividad'],
+                ['solicitudes', 'Solicitudes'],
+                ['pedidos', 'Pedidos'],
+                ['pagos', 'Pagos'],
+                ['tarifas', 'Tarifas'],
+                ['archivos', 'Chats']
+              ] as const).map(([id, label]) => (
+                <button
+                  key={id}
+                  id={`admin-tab-${id}`}
+                  type="button"
+                  role="tab"
+                  aria-selected={seccionAdmin === id}
+                  aria-controls="admin-section-panel"
+                  onClick={() => setSeccionAdmin(id)}
+                  className={`shrink-0 rounded-xl px-4 py-2.5 text-xs font-bold transition ${seccionAdmin === id ? 'bg-[#FF5722] text-white shadow-sm' : darkMode ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-600 hover:bg-orange-50'}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <div id="admin-section-panel" role="tabpanel" aria-labelledby={`admin-tab-${seccionAdmin}`} className="space-y-4">
+            {seccionAdmin === 'archivos' && (
             <AdminAccordion
               title="Archivos de chat y evidencia"
-              description="Las conversaciones se ocultan a sus participantes a los 7 días y se conservan aquí durante 15 días desde el cierre."
               darkMode={darkMode}
               badge={<span className="rounded-full bg-orange-50 px-2.5 py-1 text-[10px] font-bold text-[#FF5722]">{archivosChatAdmin.length}</span>}
             >
@@ -4651,10 +4636,11 @@ export default function App() {
                 </div>
               )}
             </AdminAccordion>
+            )}
 
+            {seccionAdmin === 'solicitudes' && (
             <AdminAccordion
               title="Postulaciones de repartidores"
-              description="Datos personales visibles solo en administración; revisa originales en persona."
               darkMode={darkMode}
               badge={<span className="rounded-full bg-orange-50 px-2.5 py-1 text-[10px] font-bold text-[#FF5722]">{postulacionesAdmin.length}</span>}
             >
@@ -4698,10 +4684,11 @@ export default function App() {
                 ))}
               </div>
             </AdminAccordion>
+            )}
 
+            {seccionAdmin === 'pedidos' && (
             <AdminAccordion
               title="Buscar pedido"
-              description="Por código numérico, fecha/hora o datos del pedido."
               darkMode={darkMode}
               badge={resultadosBusquedaAdmin.length > 0 ? <span className="rounded-full bg-orange-50 px-2.5 py-1 text-[10px] font-bold text-[#FF5722]">{resultadosBusquedaAdmin.length} resultados</span> : undefined}
             >
@@ -4859,9 +4846,10 @@ export default function App() {
               </div>
             </AdminAccordion>
 
+            )}
+            {seccionAdmin === 'tarifas' && (
             <AdminAccordion
               title="Tarifas de envíos y viajes"
-              description="Costos en USD; las cuentas ven su equivalente en bolívares según la tasa BCV."
               darkMode={darkMode}
               badge={tasasCambio ? <span className="text-xs font-bold text-[#FF5722]">Dólar BCV · {formatoMoneda(tasasCambio.bolivaresPorDolar)}</span> : undefined}
             >
@@ -4902,9 +4890,10 @@ export default function App() {
               </div>
             </AdminAccordion>
 
+            )}
+            {seccionAdmin === 'actividad' && (
             <AdminAccordion
               title="Monitor de actividad"
-              description="Cuentas activas y acciones recientes."
               darkMode={darkMode}
               badge={
                 <span className="inline-flex items-center gap-2 rounded-full bg-emerald-500/10 px-3 py-1.5 text-[10px] font-bold text-emerald-600 dark:text-emerald-400">
@@ -4974,9 +4963,10 @@ export default function App() {
               </div>
             </AdminAccordion>
 
+              )}
+              {seccionAdmin === 'pagos' && (
             <AdminAccordion
               title="Pagos y configuración"
-              description="Revisar pagos y editar los datos de Pago Móvil."
               darkMode={darkMode}
               badge={pagosPendientesAdmin.length > 0 ? <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-bold text-amber-800">{pagosPendientesAdmin.length} pendientes</span> : undefined}
             >
@@ -5048,11 +5038,13 @@ export default function App() {
             </div>
             </AdminAccordion>
 
+            )}
+            {seccionAdmin === 'pagos' && (
             <AdminAccordion
               title="Historial de pagos y acciones"
-              description="Últimos movimientos, con pedido, método, monto, referencia, actor y hora."
               darkMode={darkMode}
               badge={historialPagosAdmin.length > 0 ? <span className="text-xs font-semibold text-slate-500">{historialPagosAdmin.length} movimientos</span> : undefined}
+              defaultOpen={false}
             >
               <div className="space-y-4">
               {historialPagosAdmin.length === 0 ? (
@@ -5076,6 +5068,8 @@ export default function App() {
               )}
               </div>
             </AdminAccordion>
+            )}
+            </div>
           </section>
         )}
       </main>
