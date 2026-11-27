@@ -55,37 +55,6 @@ body {
   height: 1rem;
 }
 
-.maplibre-dark-theme .maplibregl-canvas {
-  filter: brightness(1.8) saturate(0.85);
-}
-
-.maplibre-dark-theme .maplibregl-ctrl-group {
-  overflow: hidden;
-  border: 1px solid #475569;
-  background: #334155;
-}
-
-.maplibre-dark-theme .maplibregl-ctrl-group button {
-  background-color: #334155;
-}
-
-.maplibre-dark-theme .maplibregl-ctrl-group button + button {
-  border-top-color: #475569;
-}
-
-.maplibre-dark-theme .maplibregl-ctrl-group .maplibregl-ctrl-icon {
-  filter: brightness(0) invert(1);
-}
-
-.maplibre-dark-theme .maplibregl-ctrl-attrib {
-  background-color: rgb(30 41 59 / 92%);
-  color: #cbd5e1;
-}
-
-.maplibre-dark-theme .maplibregl-ctrl-attrib.maplibregl-compact {
-  background-color: rgb(30 41 59 / 82%);
-}
-
 .maplibregl-ctrl-attrib.maplibregl-compact {
   background-color: rgb(255 255 255 / 82%);
   font-size: 9px;
@@ -94,10 +63,6 @@ body {
 .maplibregl-ctrl-attrib-button {
   width: 22px;
   height: 22px;
-}
-
-.maplibre-dark-theme .maplibregl-ctrl-attrib a {
-  color: #e2e8f0;
 }
 
 .app-shell input,
@@ -488,11 +453,9 @@ body {
 
 .app-shell.dark {
   color-scheme: dark;
-  color: #e7edf0;
-  background-color: #17212b;
-  background-image:
-    radial-gradient(ellipse at 4% 5%, rgb(244 91 53 / 9%), transparent 32rem),
-    radial-gradient(ellipse at 98% 16%, rgb(20 134 109 / 8%), transparent 28rem);
+  color: #f8fafc;
+  background-color: #020617;
+  background-image: none;
 }
 
 .app-header {
@@ -503,8 +466,25 @@ body {
 }
 
 .dark .app-header {
-  background-color: rgb(23 33 43 / 90%);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 14%);
+  background-color: rgb(2 6 23 / 94%);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 24%);
+}
+
+.dark .bg-slate-950,
+.dark.bg-slate-950 {
+  background-color: #020617;
+}
+
+.dark .bg-slate-900 {
+  background-color: #1e293b;
+}
+
+.dark .bg-slate-800 {
+  background-color: #293548;
+}
+
+.dark .border-slate-800 {
+  border-color: #334155;
 }
 
 .brand-mark {
@@ -917,8 +897,8 @@ body {
 }
 
 .dark .mobile-nav {
-  border-color: rgb(255 255 255 / 10%);
-  background: rgb(35 47 57 / 92%);
+  border-color: rgb(255 255 255 / 12%);
+  background: rgb(30 41 59 / 94%);
   box-shadow: 0 12px 36px rgb(0 0 0 / 35%), inset 0 1px 0 rgb(255 255 255 / 6%);
 }
 
@@ -927,8 +907,8 @@ body {
 }
 
 .dark .mobile-nav button[aria-pressed="true"] {
-  border-color: rgb(255 125 82 / 22%) !important;
-  background: linear-gradient(145deg, rgb(107 49 34 / 42%), rgb(74 42 39 / 52%));
+  border-color: rgb(255 87 34 / 70%) !important;
+  background: #16090f;
   color: #ff9a79;
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 8%);
 }

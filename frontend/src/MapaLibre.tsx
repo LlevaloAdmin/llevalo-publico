@@ -7,7 +7,6 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 setWorkerUrl(workerUrl);
 
 const estiloClaro = 'https://tiles.openfreemap.org/styles/liberty';
-const estiloOscuro = 'https://tiles.openfreemap.org/styles/dark';
 
 const crearElementoMarcador = (color: string, tamano: number, centro: number) => {
   const marcador = document.createElement('div');
@@ -140,12 +139,6 @@ export default function MapaLibre({
   }, [modoSeleccion]);
 
   useEffect(() => {
-    if (!mapInstance.current) return;
-    const estiloDeseado = darkMode ? estiloOscuro : estiloClaro;
-    mapInstance.current.setStyle(estiloDeseado);
-  }, [darkMode]);
-
-  useEffect(() => {
     const token = import.meta.env.VITE_MAPBOX_TOKEN || '';
 
     if (!mapContainer.current) return;
@@ -157,7 +150,7 @@ export default function MapaLibre({
     if (!mapInstance.current) {
       mapInstance.current = new maplibregl.Map({
         container: mapContainer.current,
-        style: darkMode ? estiloOscuro : estiloClaro,
+        style: estiloClaro,
         center: [centroInicial.lng, centroInicial.lat],
         zoom: mini ? 12 : 14,
         interactive: mini ? false : interactivoRef.current,
@@ -307,7 +300,7 @@ export default function MapaLibre({
     routeRequestRef.current = fetchRoute;
 
     if (mostrarRuta && coordsOrigen && coordsDestino) {
-      const routeKey = `${navegacionActiva ? 'navigation:' : ''}${coordsOrigen.lat},${coordsOrigen.lng};${coordsDestino.lat},${coordsDestino.lng};${darkMode}`;
+      const routeKey = `${navegacionActiva ? 'navigation:' : ''}${coordsOrigen.lat},${coordsOrigen.lng};${coordsDestino.lat},${coordsDestino.lng}`;
       if (routeRequestKeyRef.current !== routeKey) {
         routeRequestKeyRef.current = routeKey;
         routeCoordinatesRef.current = null;
@@ -321,7 +314,7 @@ export default function MapaLibre({
       limpiarRutaMapa();
     }
 
-  }, [coordsOrigen, coordsDestino, coordsUsuario, mini, mostrarRuta, mostrarPines, navegacionActiva, darkMode]);
+  }, [coordsOrigen, coordsDestino, coordsUsuario, mini, mostrarRuta, mostrarPines, navegacionActiva]);
 
   const latitudUsuario = coordsUsuario?.lat;
   const longitudUsuario = coordsUsuario?.lng;
@@ -378,7 +371,7 @@ export default function MapaLibre({
   }, []);
 
   return (
-    <div className={`w-full h-full rounded-3xl overflow-hidden relative ${darkMode ? 'maplibre-dark-theme' : ''} ${mini ? 'shadow-inner' : 'shadow-md border border-orange-100 dark:border-slate-800'}`}>
+    <div className={`w-full h-full rounded-3xl overflow-hidden relative ${mini ? 'shadow-inner' : `shadow-md border ${darkMode ? 'border-slate-700' : 'border-orange-100'}`}`}>
       <div ref={mapContainer} style={{ width: '100%', height: '100%' }} />
     </div>
   );
