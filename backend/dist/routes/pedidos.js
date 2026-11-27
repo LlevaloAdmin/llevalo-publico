@@ -51,6 +51,7 @@ const router = (0, express_1.Router)();
 const gzipAsync = (0, node_util_1.promisify)(node_zlib_1.gzip);
 const gunzipAsync = (0, node_util_1.promisify)(node_zlib_1.gunzip);
 const MAX_CHAT_MEDIA_BYTES = 10 * 1024 * 1024;
+const HISTORIAL_REPARTIDOR_PAGE_SIZE = 20;
 const chatMediaBodyParser = express_1.default.raw({ type: '*/*', limit: MAX_CHAT_MEDIA_BYTES });
 const parseChatMediaBody = (req, res, next) => {
     chatMediaBodyParser(req, res, error => {
@@ -627,6 +628,50 @@ router.post('/', (0, auth_1.requireRole)('cliente'), async (req, res) => {
     }
     finally {
         client?.release();
+    }
+});
+router.get('/historial/repartidor', (0, auth_1.requireRole)('repartidor'), async (req, res) => {
+    const authUser = req.authUser;
+    if (!authUser)
+        return res.status(401).json({ error: 'Sesión inválida.' });
+    let cursorTimestamp = null;
+    let cursorId = null;
+    if (req.query.cursor !== undefined) {
+        const cursor = req.query.cursor;
+        if (typeof cursor !== 'string') {
+            return res.status(400).json({ error: 'El cursor del historial no es válido.' });
+        }
+        const separator = cursor.lastIndexOf('|');
+        const timestamp = cursor.slice(0, separator);
+        const id = Number(cursor.slice(separator + 1));
+        if (separator <= 0 || !Number.isFinite(Date.parse(timestamp)) || !Number.isSafeInteger(id) || id <= 0 || id > 2_147_483_647) {
+            return res.status(400).json({ error: 'El cursor del historial no es válido.' });
+        }
+        cursorTimestamp = new Date(timestamp).toISOString();
+        cursorId = id;
+    }
+    try {
+        await exports.tablasPedidosListas;
+        const resultado = await db_1.pool.query(`SELECT id, tipo_servicio, origen_texto, destino_texto, tarifa::text AS tarifa,
+              creado_en, completado_en
+       FROM pedidos
+       WHERE repartidor_id = $1
+         AND estado = 'completado'
+         AND completado_en IS NOT NULL
+         AND ($2::timestamptz IS NULL OR (completado_en, id) < ($2::timestamptz, $3::integer))
+       ORDER BY completado_en DESC, id DESC
+       LIMIT $4`, [authUser.id, cursorTimestamp, cursorId, HISTORIAL_REPARTIDOR_PAGE_SIZE + 1]);
+        const hayMas = resultado.rows.length > HISTORIAL_REPARTIDOR_PAGE_SIZE;
+        const pedidos = resultado.rows.slice(0, HISTORIAL_REPARTIDOR_PAGE_SIZE);
+        const ultimoPedido = pedidos[pedidos.length - 1];
+        const nextCursor = hayMas && ultimoPedido
+            ? `${new Date(ultimoPedido.completado_en).toISOString()}|${ultimoPedido.id}`
+            : null;
+        return res.json({ pedidos, nextCursor });
+    }
+    catch (error) {
+        console.error('Error al consultar el historial del repartidor:', error);
+        return res.status(500).json({ error: 'No se pudo cargar el historial de trabajos.' });
     }
 });
 router.get('/', async (req, res) => {

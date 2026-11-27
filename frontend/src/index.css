@@ -984,6 +984,11 @@ body {
     scroll-snap-align: start;
   }
 
+  .mobile-service-carousel.dashboard-service-carousel {
+    margin-inline: 0;
+    padding-inline: 0;
+  }
+
   .mobile-service-carousel.landing-services {
     margin-inline: -1rem;
     padding-inline: 1rem;

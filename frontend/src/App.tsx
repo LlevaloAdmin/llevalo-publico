@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Activity, Bike, MapPin, ArrowLeft, ArrowRight, Camera, ImagePlus, Mic, MicOff, User, Eye, EyeOff, Clock, Send, Power, Star, Moon, Sun, DollarSign, XCircle, Navigation, CheckCircle2, Circle, Package, ShoppingBag, CarFront, LogOut, Users, UserRound, ChevronDown, Bell, BellOff } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { Activity, Bike, MapPin, ArrowLeft, ArrowRight, Camera, ImagePlus, Mic, MicOff, User, Eye, EyeOff, Clock, Send, Power, Star, Moon, Sun, DollarSign, XCircle, Navigation, CheckCircle2, Circle, Package, ShoppingBag, CarFront, LogOut, Users, UserRound, ChevronDown, BellOff } from 'lucide-react';
 import { App as CapacitorApp } from '@capacitor/app';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { PushNotifications } from '@capacitor/push-notifications';
@@ -57,6 +58,17 @@ interface PedidoReal {
   repartidor_lat?: number;
   repartidor_lon?: number;
   created_at?: string;
+}
+
+interface PedidoHistorialRepartidor {
+  id: number;
+  tipo_servicio: string;
+  origen_texto: string;
+  destino_texto: string;
+  distancia_km: number;
+  tarifa: string;
+  creado_en: string;
+  completado_en: string;
 }
 
 type TipoServicio = 'envios' | 'viajes';
@@ -647,6 +659,11 @@ export default function App() {
   };
 
   const [pedidosReales, setPedidosReales] = useState<PedidoReal[]>([]);
+  const [historialTrabajosRepartidor, setHistorialTrabajosRepartidor] = useState<PedidoHistorialRepartidor[]>([]);
+  const [cursorHistorialRepartidor, setCursorHistorialRepartidor] = useState<string | null>(null);
+  const [cargandoHistorialRepartidor, setCargandoHistorialRepartidor] = useState(false);
+  const [errorHistorialRepartidor, setErrorHistorialRepartidor] = useState('');
+  const [historialRepartidorExpandido, setHistorialRepartidorExpandido] = useState(false);
   const [postulacionesReales, setPostulacionesReales] = useState<Postulacion[]>([]);
   const [mensajesChat, setMensajesChat] = useState<MensajeChat[]>([]);
   const [resumenCalificaciones, setResumenCalificaciones] = useState<ResumenCalificaciones | null>(null);
@@ -2426,6 +2443,39 @@ export default function App() {
         && pedido.estado !== 'cancelado')
       .sort((primero, segundo) => Date.parse(segundo.creado_en || '') - Date.parse(primero.creado_en || ''))
     : [];
+  const cargarHistorialTrabajosRepartidor = useCallback(async (cursor: string | null = null, anexar = false) => {
+    if (usuario?.rol !== 'repartidor') return;
+    setCargandoHistorialRepartidor(true);
+    setErrorHistorialRepartidor('');
+    if (!anexar) setHistorialRepartidorExpandido(false);
+
+    try {
+      const parametros = new URLSearchParams();
+      if (cursor) parametros.set('cursor', cursor);
+      const respuesta = await authenticatedFetch(`${API_URL}/api/pedidos/historial/repartidor?${parametros}`);
+      if (!respuesta.ok) throw new Error(await mensajeErrorApi(respuesta, 'No se pudo cargar el historial.'));
+      const data = await respuesta.json() as {
+        pedidos: PedidoHistorialRepartidor[];
+        nextCursor: string | null;
+      };
+      if (!Array.isArray(data.pedidos) || (data.nextCursor !== null && typeof data.nextCursor !== 'string')) {
+        throw new Error('La respuesta del historial no es válida.');
+      }
+      setHistorialTrabajosRepartidor(actual => anexar ? [...actual, ...data.pedidos] : data.pedidos);
+      setCursorHistorialRepartidor(data.nextCursor);
+    } catch (error) {
+      console.error('No se pudo cargar el historial de trabajos:', error);
+      setErrorHistorialRepartidor(error instanceof Error ? error.message : 'No se pudo cargar el historial.');
+    } finally {
+      setCargandoHistorialRepartidor(false);
+    }
+  }, [usuario?.rol]);
+
+  useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect
+    if (usuario?.rol === 'repartidor') void cargarHistorialTrabajosRepartidor();
+  }, [cargarHistorialTrabajosRepartidor, usuario?.id, usuario?.rol]);
+
   const postulacionesPendientesRepartidor = usuario?.rol === 'repartidor'
     ? postulacionesReales.filter(p => p.repartidor_id === usuario.id && p.estado === 'pendiente')
     : [];
@@ -2461,15 +2511,28 @@ export default function App() {
 
   useEffect(() => {
     if (usuario?.rol !== 'repartidor') return;
+    const claveAvisos = `llevalo_driver_notifications_${usuario.id}`;
+    const preferenciaAvisos = localStorage.getItem(claveAvisos);
     Promise.resolve().then(() => {
-      setAvisosRepartidorActivos(localStorage.getItem(`llevalo_driver_notifications_${usuario.id}`) === 'true');
       setRepartidorOnline(localStorage.getItem(`llevalo_driver_online_${usuario.id}`) === 'true');
     });
     void getDriverNotificationPermission()
-      .then(setPermisoAvisosRepartidor)
+      .then(async permission => {
+        setPermisoAvisosRepartidor(permission);
+        if (permission === 'granted' && preferenciaAvisos === null) {
+          const permisoPreparado = await requestDriverNotificationPermission();
+          setPermisoAvisosRepartidor(permisoPreparado);
+          const activados = permisoPreparado === 'granted';
+          localStorage.setItem(claveAvisos, String(activados));
+          setAvisosRepartidorActivos(activados);
+          return;
+        }
+        setAvisosRepartidorActivos(permission === 'granted' && preferenciaAvisos === 'true');
+      })
       .catch(error => {
-        console.error('No se pudo consultar el permiso de notificaciones:', error);
+        console.error('No se pudo preparar el permiso de notificaciones:', error);
         setPermisoAvisosRepartidor('unsupported');
+        setAvisosRepartidorActivos(false);
       });
   }, [usuario?.id, usuario?.rol]);
 
@@ -3291,6 +3354,75 @@ export default function App() {
                 )}
               </section>
             )}
+            {usuario.rol === 'repartidor' && (
+              <section className="space-y-3" aria-labelledby="driver-work-history-title">
+                <div className="flex items-end justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] font-black uppercase tracking-[0.16em] text-[#FF5722]">Actividad de tu cuenta</p>
+                    <h2 id="driver-work-history-title" className={`mt-1 text-xl font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Trabajos realizados</h2>
+                  </div>
+                </div>
+                {cargandoHistorialRepartidor && historialTrabajosRepartidor.length === 0 && (
+                  <p role="status" className="rounded-3xl border border-orange-100 bg-white p-5 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900">
+                    Cargando historial…
+                  </p>
+                )}
+                {errorHistorialRepartidor && (
+                  <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-red-200 bg-red-50 p-4 text-xs text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
+                    <span>{errorHistorialRepartidor}</span>
+                    <button type="button" onClick={() => void cargarHistorialTrabajosRepartidor(cursorHistorialRepartidor, historialTrabajosRepartidor.length > 0)} className="font-bold underline">
+                      Reintentar
+                    </button>
+                  </div>
+                )}
+                {!cargandoHistorialRepartidor && !errorHistorialRepartidor && historialTrabajosRepartidor.length === 0 && (
+                  <p className={`rounded-3xl border p-5 text-sm text-slate-500 ${darkMode ? 'border-slate-800 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+                    Tus trabajos completados aparecerán aquí.
+                  </p>
+                )}
+                {historialTrabajosRepartidor.length > 0 && (
+                  <div className="space-y-3">
+                    {(historialRepartidorExpandido ? historialTrabajosRepartidor : historialTrabajosRepartidor.slice(0, 3)).map(pedido => (
+                      <article key={pedido.id} className={`rounded-3xl border p-4 shadow-sm sm:p-5 ${darkMode ? 'border-slate-800 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="flex min-w-0 items-start gap-3">
+                            <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl ${pedido.tipo_servicio === 'viajes' ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-[#FF5722]'}`}>
+                              {pedido.tipo_servicio === 'viajes' ? <CarFront size={19} /> : <Package size={19} />}
+                            </span>
+                            <div className="min-w-0">
+                              <h3 className="text-sm font-black">{etiquetaTipoServicio(pedido.tipo_servicio)} · {codigoPedido(pedido.id)}</h3>
+                              <p className="mt-1 break-words text-xs text-slate-500">{pedido.origen_texto} <ArrowRight size={12} className="mx-1 inline" /> {pedido.destino_texto}</p>
+                              <p className="mt-1 text-[10px] text-slate-400">{new Date(pedido.completado_en).toLocaleString('es-VE')}</p>
+                            </div>
+                          </div>
+                          <div className="flex shrink-0 flex-col items-start gap-2 sm:items-end">
+                            <span className="rounded-full bg-emerald-100 px-3 py-1 text-[10px] font-black text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300">Completado</span>
+                            <span className="text-sm font-black">{mostrarMontoPedido(pedido.tarifa)}</span>
+                          </div>
+                        </div>
+                      </article>
+                    ))}
+                    <div className="flex flex-wrap justify-center gap-2">
+                      {!historialRepartidorExpandido && historialTrabajosRepartidor.length > 3 && (
+                        <button type="button" onClick={() => setHistorialRepartidorExpandido(true)} className={`rounded-xl border px-4 py-2 text-xs font-bold ${darkMode ? 'border-slate-700 text-slate-200' : 'border-orange-200 text-[#D84315]'}`}>
+                          Ver historial
+                        </button>
+                      )}
+                      {historialRepartidorExpandido && cursorHistorialRepartidor && (
+                        <button type="button" disabled={cargandoHistorialRepartidor} onClick={() => void cargarHistorialTrabajosRepartidor(cursorHistorialRepartidor, true)} className="rounded-xl bg-[#FF5722] px-4 py-2 text-xs font-bold text-white disabled:opacity-50">
+                          {cargandoHistorialRepartidor ? 'Cargando…' : 'Cargar más trabajos'}
+                        </button>
+                      )}
+                      {historialRepartidorExpandido && historialTrabajosRepartidor.length > 3 && (
+                        <button type="button" onClick={() => setHistorialRepartidorExpandido(false)} className={`rounded-xl border px-4 py-2 text-xs font-bold ${darkMode ? 'border-slate-700 text-slate-200' : 'border-orange-200 text-[#D84315]'}`}>
+                          Ver menos
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </section>
+            )}
             {pedidosChatCompletados.length > 0 && (
               <section className="space-y-3" aria-labelledby="recent-chat-title">
                 <div>
@@ -3824,8 +3956,8 @@ export default function App() {
                       </div>
                       )}
 
-                      {!pedidoActivoCliente && pasoSolicitud && (
-                        <div className={`fixed inset-0 z-[120] flex flex-col px-3 pb-3 pt-[calc(env(safe-area-inset-top)+12px)] md:px-8 md:pb-6 ${darkMode ? 'bg-slate-950 text-white' : 'bg-[#FDFBF7] text-slate-800'}`} role="dialog" aria-modal="true" aria-labelledby="solicitud-title">
+                      {!pedidoActivoCliente && pasoSolicitud && createPortal(
+                        <div className={`fixed inset-0 z-[120] flex h-[100dvh] flex-col overflow-y-auto px-3 pb-3 pt-[calc(env(safe-area-inset-top)+12px)] md:px-8 md:pb-6 ${darkMode ? 'bg-slate-950 text-white' : 'bg-[#FDFBF7] text-slate-800'}`} role="dialog" aria-modal="true" aria-labelledby="solicitud-title">
                           <header className={`mx-auto flex w-full max-w-6xl items-center justify-between gap-3 border-b pb-3 ${darkMode ? 'border-slate-800' : 'border-orange-100'}`}>
                             <div>
                               <p className="text-[10px] font-black uppercase tracking-[0.18em] text-[#FF5722]">
@@ -3841,9 +3973,8 @@ export default function App() {
                           </header>
 
                           {pasoSolicitud === 'tipo' && (
-                            <div className="flex flex-1 items-center justify-center py-6">
+                            <div className="flex flex-1 -translate-y-6 items-center justify-center py-6">
                               <div className="w-full max-w-xl space-y-5">
-                                <p className={`text-center text-sm ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>Elige una opción para continuar con tu solicitud.</p>
                                 <div className="grid gap-4 sm:grid-cols-2">
                                   {([
                                     { tipo: 'envios' as const, etiqueta: 'Envío', detalle: 'Comida, mercado, paquetes y mandados', Icono: Package },
@@ -3983,6 +4114,8 @@ export default function App() {
                             </div>
                           )}
                         </div>
+                        ,
+                        document.body
                       )}
                     {errorTarifas && (
                       <p role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
@@ -4127,30 +4260,8 @@ export default function App() {
                 </div>
               </div>
 
-              <div className={`mt-4 flex flex-wrap items-center justify-between gap-3 border-t pt-3 ${darkMode ? 'border-slate-800' : 'border-slate-100'}`}>
-                <div className="flex items-center gap-2">
-                  <span className={`rounded-lg p-2 ${avisosRepartidorActivos ? 'bg-emerald-500/10 text-emerald-500' : 'bg-orange-500/10 text-[#FF5722]'}`}>
-                    {avisosRepartidorActivos ? <Bell size={16} /> : <BellOff size={16} />}
-                  </span>
-                  <div>
-                    <p className={`text-xs font-bold ${darkMode ? 'text-white' : 'text-slate-800'}`}>Notificaciones</p>
-                    <p className="text-[10px] text-slate-500">
-                      {avisosRepartidorActivos ? 'Avisos de trabajos activados' : 'Avisos desactivados'}
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => void cambiarAvisosRepartidor()}
-                  className={`rounded-xl px-3 py-2 text-[11px] font-bold transition ${
-                    avisosRepartidorActivos
-                      ? 'text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800'
-                      : 'bg-[#FF5722] text-white hover:bg-[#F4511E]'
-                  }`}
-                >
-                  {avisosRepartidorActivos ? 'Silenciar' : 'Activar avisos'}
-                </button>
-                <div className="ml-auto flex items-center gap-4 text-[11px]">
+              <div className={`mt-4 flex justify-end border-t pt-3 ${darkMode ? 'border-slate-800' : 'border-slate-100'}`}>
+                <div className="flex items-center gap-4 text-[11px]">
                   <span className="text-slate-500">En radar <strong className={darkMode ? 'text-white' : 'text-slate-900'}>{pedidosVisiblesRepartidor.filter(p => p.estado === 'pendiente' || p.estado === 'postulado').length}</strong></span>
                   <span className="text-slate-500">Postulaciones <strong className={darkMode ? 'text-white' : 'text-slate-900'}>{postulacionesPendientesRepartidor.length}</strong></span>
                 </div>
@@ -4515,6 +4626,26 @@ export default function App() {
                       </div>
                     )}
                   </div>
+                  {usuario.rol === 'repartidor'
+                    && (permisoAvisosRepartidor === 'denied'
+                      || (permisoAvisosRepartidor === 'granted' && !avisosRepartidorActivos)) && (
+                    <div className={`flex items-center justify-between gap-3 rounded-2xl border p-4 ${darkMode ? 'border-amber-900/60 bg-amber-950/20' : 'border-amber-200 bg-amber-50/70'}`}>
+                      <div className="flex min-w-0 items-center gap-3">
+                        <BellOff size={18} className="shrink-0 text-amber-600 dark:text-amber-400" />
+                        <div>
+                          <h3 className="text-sm font-bold">Notificaciones</h3>
+                          <p className="mt-1 text-[11px] text-slate-500">
+                            {permisoAvisosRepartidor === 'denied'
+                              ? 'Habilítalas en los ajustes de tu dispositivo o navegador para recibir trabajos.'
+                              : 'Los avisos de nuevos trabajos están silenciados.'}
+                          </p>
+                        </div>
+                      </div>
+                      <button type="button" onClick={() => void cambiarAvisosRepartidor()} className="shrink-0 rounded-xl bg-[#FF5722] px-3 py-2 text-[11px] font-bold text-white">
+                        {permisoAvisosRepartidor === 'denied' ? 'Reintentar' : 'Reactivar'}
+                      </button>
+                    </div>
+                  )}
                   <div className={`flex items-center justify-between gap-4 rounded-2xl border p-4 ${darkMode ? 'border-slate-800 bg-slate-950/60' : 'border-slate-100 bg-slate-50'}`}>
                     <div>
                       <h3 className={`text-sm font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Apariencia</h3>
@@ -4584,7 +4715,7 @@ export default function App() {
             {errorAdmin && <p role="alert" className={`rounded-xl border p-3 text-xs font-semibold ${darkMode ? 'border-red-900 bg-red-950/30 text-red-300' : 'border-red-200 bg-red-50 text-red-700'}`}>{errorAdmin}</p>}
             {mensajeAdmin && <p role="status" className={`rounded-xl border p-3 text-xs font-semibold ${darkMode ? 'border-emerald-900 bg-emerald-950/30 text-emerald-300' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>{mensajeAdmin}</p>}
 
-            <div role="tablist" aria-label="Secciones de administración" className={`admin-section-tabs flex gap-2 overflow-x-auto rounded-2xl border p-1.5 ${darkMode ? 'border-slate-800 bg-slate-900' : 'border-orange-100 bg-white'}`}>
+            <div role="tablist" aria-label="Secciones de administración" className={`admin-section-tabs flex gap-2 overflow-x-auto rounded-2xl border p-2.5 ${darkMode ? 'border-slate-800 bg-slate-900' : 'border-orange-100 bg-white'}`}>
               {([
                 ['actividad', 'Actividad'],
                 ['solicitudes', 'Solicitudes'],
