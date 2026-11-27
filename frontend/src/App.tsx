@@ -976,7 +976,6 @@ export default function App() {
       try {
         await StatusBar.setOverlaysWebView({ overlay: true });
         await StatusBar.setStyle({ style: darkMode ? Style.Light : Style.Dark });
-        await StatusBar.hide();
       } catch (error) {
         console.error('No se pudo configurar la barra de estado:', error);
       }
