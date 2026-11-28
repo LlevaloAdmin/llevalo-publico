@@ -4379,7 +4379,7 @@ export default function App() {
                       )}
 
                       {!pedidoActivoCliente && pasoSolicitud && createPortal(
-                        <div className={`${darkMode ? 'dark' : ''} fixed inset-0 z-[120] flex h-[100dvh] flex-col overflow-y-auto px-3 pb-[calc(6.5rem+env(safe-area-inset-bottom))] pt-[calc(env(safe-area-inset-top)+12px)] md:px-8 ${darkMode ? 'bg-slate-950 text-white' : 'bg-[#FDFBF7] text-slate-800'}`} role="dialog" aria-modal="true" aria-labelledby="solicitud-title">
+                        <div className={`${darkMode ? 'dark' : ''} fixed inset-0 z-[120] flex h-[100dvh] flex-col overflow-y-auto px-3 pb-[calc(6.5rem+env(safe-area-inset-bottom))] pt-[calc(env(safe-area-inset-top)+12px)] md:top-[70px] md:h-[calc(100dvh-70px)] md:px-8 md:pb-6 ${darkMode ? 'bg-slate-950 text-white' : 'bg-[#FDFBF7] text-slate-800'}`} role="dialog" aria-modal="true" aria-labelledby="solicitud-title">
                           <header className={`mx-auto flex w-full max-w-6xl items-center justify-between gap-3 border-b pb-3 ${darkMode ? 'border-slate-800' : 'border-orange-100'}`}>
                             <div>
                               <p className="text-[10px] font-black uppercase tracking-[0.18em] text-[#FF5722]">

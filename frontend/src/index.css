@@ -924,10 +924,6 @@ body {
     display: none;
   }
 
-  .app-shell.solicitud-open nav.mobile-nav {
-    display: flex;
-  }
-
   .app-page-authenticated {
     padding-bottom: 1.5rem;
   }
