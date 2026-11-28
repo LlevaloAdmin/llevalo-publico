@@ -4,6 +4,10 @@ on:
   push:
     branches: [ main ]
 
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -135,5 +139,61 @@ jobs:
               fields='id'
           ).execute()
           
-          print(f"¡ÉXITO! APK subido a Google Drive con cuenta normal como: {new_file_name} (ID: {uploaded_file.get('id')})")
+          print(f"¡ÉXITO! APK archivado en Google Drive como: {new_file_name} (ID: {uploaded_file.get('id')})")
+
+          latest_file_name = 'llevalo-beta.apk'
+          latest_query = f"'{folder_id}' in parents and name = '{latest_file_name}' and trashed = false"
+          latest_results = service.files().list(
+              q=latest_query,
+              spaces='drive',
+              pageSize=2,
+              fields='files(id, name)'
+          ).execute()
+          latest_files = latest_results.get('files', [])
+
+          if len(latest_files) > 1:
+              raise RuntimeError(f"Hay más de un archivo llamado {latest_file_name} en la carpeta de betas.")
+
+          latest_media = MediaFileUpload(
+              apk_path,
+              mimetype='application/vnd.android.package-archive',
+              resumable=True
+          )
+
+          if latest_files:
+              latest_file_id = latest_files[0]['id']
+              service.files().update(
+                  fileId=latest_file_id,
+                  media_body=latest_media,
+                  fields='id'
+              ).execute()
+          else:
+              latest_file = service.files().create(
+                  body={'name': latest_file_name, 'parents': [folder_id]},
+                  media_body=latest_media,
+                  fields='id'
+              ).execute()
+              latest_file_id = latest_file['id']
+
+          permissions = service.permissions().list(
+              fileId=latest_file_id,
+              fields='permissions(type, role)'
+          ).execute().get('permissions', [])
+
+          if not any(
+              permission.get('type') == 'anyone' and permission.get('role') == 'reader'
+              for permission in permissions
+          ):
+              service.permissions().create(
+                  fileId=latest_file_id,
+                  body={'type': 'anyone', 'role': 'reader', 'allowFileDiscovery': False}
+              ).execute()
+
+          download_url = f"https://drive.google.com/uc?export=download&id={latest_file_id}"
+          print(f"ENLACE PERMANENTE DE DESCARGA: {download_url}")
+
+          summary_path = os.environ.get('GITHUB_STEP_SUMMARY')
+          if summary_path:
+              with open(summary_path, 'a', encoding='utf-8') as summary:
+                  summary.write(f"## APK beta actualizada\n\n[Descargar Llévalo]({download_url})\n")
           EOF
