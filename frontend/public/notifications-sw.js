@@ -33,8 +33,8 @@ self.addEventListener('push', event => {
       typeof data.title === 'string' ? data.title : 'Aviso de Llévalo',
       {
         body,
-        icon: '/logo.svg',
-        badge: '/logo.svg',
+        icon: '/logo.png',
+        badge: '/logo.png',
         tag: `${data.kind}-${orderId}`,
         renotify: true,
         requireInteraction: isNewOrder || isAdminPayment,

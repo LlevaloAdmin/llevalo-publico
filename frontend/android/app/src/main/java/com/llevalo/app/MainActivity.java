@@ -165,6 +165,7 @@ public class MainActivity extends BridgeActivity {
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.setStatusBarContrastEnforced(false);
             window.setNavigationBarContrastEnforced(false);
         }
     }

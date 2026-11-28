@@ -133,8 +133,8 @@ export const showDriverOrderNotification = async (
   const registration = await navigator.serviceWorker.ready;
   const options: ActionableNotificationOptions = {
     body,
-    icon: '/logo.svg',
-    badge: '/logo.svg',
+    icon: '/logo.png',
+    badge: '/logo.png',
     tag: `driver_order-${order.id}`,
     silent: update,
     requireInteraction: !update,
@@ -170,8 +170,8 @@ export const showDriverUpdateNotification = async (
   const registration = await navigator.serviceWorker.ready;
   await registration.showNotification(title, {
     body,
-    icon: '/logo.svg',
-    badge: '/logo.svg',
+    icon: '/logo.png',
+    badge: '/logo.png',
     tag: `driver-update-${orderId}`,
     data: { orderId, kind: 'driver-update' }
   });

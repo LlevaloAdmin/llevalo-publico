@@ -4,8 +4,8 @@
     <meta charset="UTF-8" />
     
     <!-- Favicon físico real para que Google lo indexe en los resultados -->
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="apple-touch-icon" href="/logo.svg" />
+    <link rel="icon" type="image/png" href="/logo.png" />
+    <link rel="apple-touch-icon" href="/logo.png" />
     <link rel="canonical" href="https://llevalo.vercel.app/" />
     
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
@@ -63,14 +63,11 @@
         animation:startup-orbit-two 3.5s cubic-bezier(.2,.75,.25,1) both
       }
       .startup-wordmark {
-        position:relative; z-index:1; display:inline-flex; width:100vw; align-items:center;
-        justify-content:center; white-space:nowrap; font-family:system-ui,-apple-system,"Segoe UI",sans-serif;
-        font-size:clamp(3.75rem,21vw,7.5rem); font-weight:900; letter-spacing:-.075em;
-        line-height:1; opacity:0; will-change:transform,opacity;
+        position:relative; z-index:1; display:block; width:min(88vw,520px);
+        padding:10px; border-radius:14px; background:#fff; opacity:0; will-change:transform,opacity;
         animation:startup-wordmark-enter 3.5s cubic-bezier(.2,.75,.25,1) both
       }
-      .startup-initial { color:#ff5722 }
-      .startup-wordmark-rest { display:inline-block }
+      .startup-logo { display:block; width:100%; height:auto }
       @media(prefers-reduced-motion:reduce) {
         .startup-intro { transition:none }
         .startup-intro:before { animation:none; opacity:0 }
@@ -90,7 +87,7 @@
     <meta property="og:title" content="Llévalo | Delivery y Mandados en San Diego, Carabobo" />
     <meta property="og:description" content="La vuelta de hoy, más fácil. Comida, mercado, mandados y viajes por Carabobo con Llévalo." />
     <meta property="og:url" content="https://llevalo.vercel.app/" />
-    <meta property="og:image" content="https://llevalo.vercel.app/logo.svg" />
+    <meta property="og:image" content="https://llevalo.vercel.app/logo-horizontal.png" />
     <meta property="og:type" content="website" />
 
     <!-- Datos Estructurados (Schema.org): WebSite define el nombre "Llévalo" en lugar de "Vercel" -->
@@ -107,7 +104,7 @@
         "@context": "https://schema.org",
         "@type": "DeliveryService",
         "name": "Llévalo",
-        "image": "https://llevalo.vercel.app/logo.svg",
+        "image": "https://llevalo.vercel.app/logo-horizontal.png",
         "url": "https://llevalo.vercel.app/",
         "areaServed": {
           "@type": "City",
@@ -130,7 +127,7 @@
         splash.className = useDarkTheme ? 'startup-intro startup-intro-dark' : 'startup-intro';
         splash.setAttribute('role', 'status');
         splash.setAttribute('aria-label', 'Iniciando Llévalo');
-        splash.innerHTML = '<span class="startup-orbit startup-orbit-one" aria-hidden="true"></span><span class="startup-orbit startup-orbit-two" aria-hidden="true"></span><div class="startup-wordmark" aria-hidden="true"><span class="startup-initial">L</span><span class="startup-wordmark-rest">lévalo</span></div>';
+        splash.innerHTML = '<span class="startup-orbit startup-orbit-one" aria-hidden="true"></span><span class="startup-orbit startup-orbit-two" aria-hidden="true"></span><div class="startup-wordmark" aria-hidden="true"><img class="startup-logo" src="/logo-horizontal.png" alt="Llévalo"></div>';
         document.body.appendChild(splash);
       }
     </script>

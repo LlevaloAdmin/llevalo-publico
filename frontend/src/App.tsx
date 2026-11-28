@@ -860,6 +860,11 @@ export default function App() {
     window.history.pushState({ llevaloNavigation: true, tab }, '');
   };
 
+  const navegarDesdeMenu = (tab: Tab) => {
+    if (pasoSolicitud) setPasoSolicitud(null);
+    navegarA(tab);
+  };
+
   const volverMenu = useCallback(() => {
     if (activeTab === 'auth' && authMode !== 'choice') {
       setAuthMode('choice');
@@ -3425,13 +3430,11 @@ export default function App() {
       <header className={`app-header border-b backdrop-blur sticky top-0 z-50 px-4 md:px-10 py-3 flex flex-wrap justify-between items-center gap-y-2 shadow-sm transition-colors ${darkMode ? 'bg-slate-950/90 border-slate-800' : 'bg-[#FDFBF7]/90 border-orange-100'}`}>
         {usuario ? (
           <div className="flex items-center space-x-3" aria-label="Llévalo">
-            <div className="brand-mark" aria-hidden="true"><span>L</span></div>
-            <span className={`text-xl md:text-2xl font-black tracking-tight ${darkMode ? 'text-white' : 'text-slate-900'}`}>Llévalo</span>
+            <div className="brand-logo" aria-label="Llévalo"><img src="/logo-horizontal.png" alt="Llévalo" /></div>
           </div>
         ) : (
           <button type="button" onClick={() => navegarA('home')} className="flex items-center space-x-3" aria-label="Volver al inicio">
-            <div className="brand-mark" aria-hidden="true"><span>L</span></div>
-            <span className={`text-xl md:text-2xl font-black tracking-tight ${darkMode ? 'text-white' : 'text-slate-900'}`}>Llévalo</span>
+            <div className="brand-logo" aria-label="Llévalo"><img src="/logo-horizontal.png" alt="Llévalo" /></div>
           </button>
         )}
         
@@ -3478,10 +3481,10 @@ export default function App() {
                 <Bike size={17} /> Radar
               </button>
             )}
-            <button type="button" aria-pressed={activeTab === 'home'} onClick={() => navegarA('home')} className={`flex min-w-[5rem] flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold ${activeTab === 'home' ? 'border-orange-200 bg-orange-50 text-[#FF5722]' : 'border-transparent'}`}>
+            <button type="button" aria-pressed={activeTab === 'home'} onClick={() => navegarDesdeMenu('home')} className={`flex min-w-[5rem] flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold ${activeTab === 'home' ? 'border-orange-200 bg-orange-50 text-[#FF5722]' : 'border-transparent'}`}>
               <MapPin size={17} /> Inicio
             </button>
-            <button type="button" aria-pressed={activeTab === 'perfil'} onClick={() => navegarA('perfil')} className={`flex min-w-[5rem] flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold ${activeTab === 'perfil' ? 'border-orange-200 bg-orange-50 text-[#FF5722]' : 'border-transparent'}`}>
+            <button type="button" aria-pressed={activeTab === 'perfil'} onClick={() => navegarDesdeMenu('perfil')} className={`flex min-w-[5rem] flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold ${activeTab === 'perfil' ? 'border-orange-200 bg-orange-50 text-[#FF5722]' : 'border-transparent'}`}>
               <User size={17} /> Perfil
               </button>
         </nav>
@@ -4376,7 +4379,7 @@ export default function App() {
                       )}
 
                       {!pedidoActivoCliente && pasoSolicitud && createPortal(
-                        <div className={`${darkMode ? 'dark' : ''} fixed inset-0 z-[120] flex h-[100dvh] flex-col overflow-y-auto px-3 pb-3 pt-[calc(env(safe-area-inset-top)+12px)] md:px-8 md:pb-6 ${darkMode ? 'bg-slate-950 text-white' : 'bg-[#FDFBF7] text-slate-800'}`} role="dialog" aria-modal="true" aria-labelledby="solicitud-title">
+                        <div className={`${darkMode ? 'dark' : ''} fixed inset-0 z-[120] flex h-[100dvh] flex-col overflow-y-auto px-3 pb-[calc(6.5rem+env(safe-area-inset-bottom))] pt-[calc(env(safe-area-inset-top)+12px)] md:px-8 md:pb-6 ${darkMode ? 'bg-slate-950 text-white' : 'bg-[#FDFBF7] text-slate-800'}`} role="dialog" aria-modal="true" aria-labelledby="solicitud-title">
                           <header className={`mx-auto flex w-full max-w-6xl items-center justify-between gap-3 border-b pb-3 ${darkMode ? 'border-slate-800' : 'border-orange-100'}`}>
                             <div>
                               <p className="text-[10px] font-black uppercase tracking-[0.18em] text-[#FF5722]">
