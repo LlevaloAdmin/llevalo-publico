@@ -38,7 +38,10 @@
         100% { opacity:0; transform:translate(-50%,-50%) scale(1.1) rotate(-220deg) }
       }
       .startup-intro {
-        position:fixed; z-index:10000; inset:0; display:grid; place-items:center;
+        position:fixed; z-index:10000;
+        top:calc(0px - env(safe-area-inset-top,0px)); right:0;
+        bottom:calc(0px - env(safe-area-inset-bottom,0px)); left:0;
+        display:grid; place-items:center;
         overflow:hidden; isolation:isolate; background:#fdfbf7; color:#0f172a;
         pointer-events:none; opacity:1; transition:opacity 220ms ease
       }
@@ -47,7 +50,7 @@
       .startup-intro:before {
         position:absolute; top:50%; left:50%; width:min(86vw,460px); aspect-ratio:1;
         border-radius:50%; background:radial-gradient(circle,rgb(255 87 34 / 18%),rgb(255 87 34 / 5%) 42%,transparent 70%);
-        content:""; animation:startup-glow 3.5s cubic-bezier(.2,.75,.25,1) both
+        content:""; animation:startup-glow 4s cubic-bezier(.2,.75,.25,1) both
       }
       .startup-orbit {
         position:absolute; top:50%; left:50%; aspect-ratio:1; border:1px solid rgb(255 87 34 / 24%);
@@ -59,16 +62,16 @@
       }
       .startup-orbit-one {
         width:min(84vw,440px); border-top-color:#ff5722; border-left-color:transparent;
-        animation:startup-orbit-one 3.5s cubic-bezier(.2,.75,.25,1) both
+        animation:startup-orbit-one 4s cubic-bezier(.2,.75,.25,1) both
       }
       .startup-orbit-two {
         width:min(68vw,360px); border-style:dashed; border-color:rgb(255 87 34 / 32%);
-        animation:startup-orbit-two 3.5s cubic-bezier(.2,.75,.25,1) both
+        animation:startup-orbit-two 4s cubic-bezier(.2,.75,.25,1) both
       }
       .startup-wordmark {
         position:relative; z-index:1; display:block; width:min(88vw,520px);
         opacity:0; will-change:transform,opacity;
-        animation:startup-wordmark-enter 3.5s cubic-bezier(.2,.75,.25,1) both
+        animation:startup-wordmark-enter 4s cubic-bezier(.2,.75,.25,1) both
       }
       .startup-logo { display:block; width:100%; height:auto }
       @media(prefers-reduced-motion:reduce) {

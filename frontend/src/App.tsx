@@ -905,10 +905,10 @@ export default function App() {
     };
   }, [activeTab, volverMenu]);
 
-  const comprobarConexion = useCallback(async (manual = false): Promise<boolean> => {
+  const comprobarConexion = useCallback(async (manual = false, timeoutMs = 7000): Promise<boolean> => {
     if (manual) setProbandoConexion(true);
     const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 7000);
+    const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
     const inicio = performance.now();
 
     try {
@@ -961,7 +961,7 @@ export default function App() {
       if (!document.hidden) void comprobarConexion();
     };
 
-    const primerChequeo = window.setTimeout(() => void comprobarConexion(), 0);
+    const primerChequeo = window.setTimeout(() => void comprobarConexion(false, 4000), 0);
     const intervalo = window.setInterval(() => void comprobarConexion(), 15_000);
     window.addEventListener('offline', alDesconectar);
     window.addEventListener('online', alConectar);
@@ -2232,6 +2232,10 @@ export default function App() {
         (error) => {
           ubicacionPendiente = false;
           if (descartado) return;
+          if (!forzar && error.code === error.TIMEOUT) {
+            solicitarUbicacion(true);
+            return;
+          }
           coordsUsuarioGPSRef.current = null;
           setCoordsUsuarioGPS(null);
           setErrorUbicacion(error.code === error.PERMISSION_DENIED
@@ -2242,7 +2246,7 @@ export default function App() {
           setUbicacionCargando(false);
           pedirNotificaciones();
         },
-        { enableHighAccuracy: true, maximumAge: 60_000, timeout: 15_000 }
+        { enableHighAccuracy: true, maximumAge: forzar ? 10_000 : 60_000, timeout: forzar ? 8_000 : 4_000 }
       );
     };
     const retryAfterSettings = () => {

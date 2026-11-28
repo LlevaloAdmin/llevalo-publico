@@ -151,18 +151,27 @@ public class MainActivity extends BridgeActivity {
 
     private void aplicarColorBarraNavegacion(boolean darkMode) {
         Window window = getWindow();
-        window.setNavigationBarColor(Color.parseColor(darkMode ? "#17212b" : "#fdfbf7"));
+        int systemBarColor = Color.parseColor(darkMode ? "#17212b" : "#fdfbf7");
+        window.setStatusBarColor(systemBarColor);
+        window.setNavigationBarColor(systemBarColor);
 
+        View decorView = window.getDecorView();
+        int systemUiVisibility = decorView.getSystemUiVisibility();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (darkMode) {
+                systemUiVisibility &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            } else {
+                systemUiVisibility |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            }
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            View decorView = window.getDecorView();
-            int systemUiVisibility = decorView.getSystemUiVisibility();
             if (darkMode) {
                 systemUiVisibility &= ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
             } else {
                 systemUiVisibility |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
             }
-            decorView.setSystemUiVisibility(systemUiVisibility);
         }
+        decorView.setSystemUiVisibility(systemUiVisibility);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             window.setStatusBarContrastEnforced(false);
