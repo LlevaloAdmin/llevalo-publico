@@ -99,16 +99,25 @@
         margin: 0 auto 20px;
         display: grid;
         place-items: center;
-        border-radius: 19px;
-        background: #fff;
-        color: white;
-        box-shadow: 0 9px 22px rgb(255 87 34 / 25%);
+        border-radius: 0;
       }
 
       .brand-mark img {
         width: 88%;
         height: 88%;
         object-fit: contain;
+      }
+
+      .brand-mark .logo-dark {
+        display: none;
+      }
+
+      :root[data-theme="dark"] .brand-mark .logo-light {
+        display: none;
+      }
+
+      :root[data-theme="dark"] .brand-mark .logo-dark {
+        display: block;
       }
 
       .connection-icon {
@@ -210,7 +219,7 @@
   </head>
   <body>
     <main>
-      <div class="brand-mark" aria-hidden="true"><img src="logo-symbol.png" alt="" /></div>
+      <div class="brand-mark" aria-hidden="true"><img class="logo-light" src="logo-symbol.png" alt="" /><img class="logo-dark" src="logo-symbol-dark.png" alt="" /></div>
       <div class="connection-icon" aria-hidden="true">
         <svg viewBox="0 0 24 24">
           <path d="M2 8.8a15 15 0 0 1 17.4-2.1M5.5 12.5a9.5 9.5 0 0 1 6.8-2.7c1.1 0 2.2.2 3.2.6M9.2 16.2a4.5 4.5 0 0 1 4.8-.6M12 20h.01" />

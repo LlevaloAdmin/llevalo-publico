@@ -4,8 +4,11 @@
     <meta charset="UTF-8" />
     
     <!-- Favicon físico real para que Google lo indexe en los resultados -->
-    <link rel="icon" type="image/png" href="/logo.png" />
+    <link rel="icon" type="image/png" sizes="512x512" href="/favicon.png" />
+    <link rel="shortcut icon" href="/favicon.png" />
     <link rel="apple-touch-icon" href="/logo.png" />
+    <meta name="apple-mobile-web-app-title" content="Llévalo" />
+    <meta name="author" content="Llévalo" />
     <link rel="canonical" href="https://llevalo.vercel.app/" />
     
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
@@ -64,7 +67,7 @@
       }
       .startup-wordmark {
         position:relative; z-index:1; display:block; width:min(88vw,520px);
-        padding:10px; border-radius:14px; background:#fff; opacity:0; will-change:transform,opacity;
+        opacity:0; will-change:transform,opacity;
         animation:startup-wordmark-enter 3.5s cubic-bezier(.2,.75,.25,1) both
       }
       .startup-logo { display:block; width:100%; height:auto }
@@ -98,7 +101,18 @@
         "@type": "WebSite",
         "name": "Llévalo",
         "alternateName": ["Llevalo", "Llévalo Delivery"],
-        "url": "https://llevalo.vercel.app/"
+        "url": "https://llevalo.vercel.app/",
+        "publisher": {
+          "@id": "https://llevalo.vercel.app/#organization"
+        }
+      },
+      {
+        "@context": "https://schema.org",
+        "@type": "Organization",
+        "@id": "https://llevalo.vercel.app/#organization",
+        "name": "Llévalo",
+        "url": "https://llevalo.vercel.app/",
+        "logo": "https://llevalo.vercel.app/favicon.png"
       },
       {
         "@context": "https://schema.org",
@@ -127,7 +141,8 @@
         splash.className = useDarkTheme ? 'startup-intro startup-intro-dark' : 'startup-intro';
         splash.setAttribute('role', 'status');
         splash.setAttribute('aria-label', 'Iniciando Llévalo');
-        splash.innerHTML = '<span class="startup-orbit startup-orbit-one" aria-hidden="true"></span><span class="startup-orbit startup-orbit-two" aria-hidden="true"></span><div class="startup-wordmark" aria-hidden="true"><img class="startup-logo" src="/logo-horizontal.png" alt="Llévalo"></div>';
+        const startupLogo = useDarkTheme ? '/logo-horizontal-dark.png' : '/logo-horizontal.png';
+        splash.innerHTML = `<span class="startup-orbit startup-orbit-one" aria-hidden="true"></span><span class="startup-orbit startup-orbit-two" aria-hidden="true"></span><div class="startup-wordmark" aria-hidden="true"><img class="startup-logo" src="${startupLogo}" alt="Llévalo"></div>`;
         document.body.appendChild(splash);
       }
     </script>

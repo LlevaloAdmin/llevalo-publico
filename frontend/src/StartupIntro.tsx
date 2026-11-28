@@ -29,6 +29,10 @@ export function StartupIntro({ enabled, children }: StartupIntroProps) {
     const darkMode = preference === 'dark'
       || (preference !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
     splash.classList.toggle('startup-intro-dark', darkMode);
+    const startupLogo = splash.querySelector<HTMLImageElement>('.startup-logo');
+    if (startupLogo) {
+      startupLogo.src = darkMode ? '/logo-horizontal-dark.png' : '/logo-horizontal.png';
+    }
     window.location.href = `llevalo://theme/${preference}`;
     const startedAt = Number(document.documentElement.dataset.startupAt);
     const elapsed = Number.isFinite(startedAt) ? performance.now() - startedAt : 0;

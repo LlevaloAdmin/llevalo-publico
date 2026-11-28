@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://llevalo.vercel.app/sitemap.xml
